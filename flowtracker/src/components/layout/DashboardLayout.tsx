@@ -1,230 +1,132 @@
-import { ReactNode, useState } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
-import { cn } from "@/lib/utils";
+import { useState } from "react";
+import { Link, useNavigate, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { StatusBadge } from "@/components/ui/status-badge";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
-  ChevronLeft,
-  ChevronRight,
-  LogOut,
-  Moon,
-  Sun,
-  Settings,
-  User,
-  LucideIcon,
-} from "lucide-react";
-import { UserRole, PresenceStatus, WorkMode } from "@/types";
+import { Menu, X, LogOut, Home, Users, Briefcase, MessageSquare, AlertCircle, CheckSquare, Clock } from "lucide-react";
+import { authService } from "@/lib/auth";
 
-interface NavItem {
-  title: string;
-  href: string;
-  icon: LucideIcon;
-}
+// Define the correct sidebar items for each dynamic role
+const navItems: any = {
+  admin: [
+    { title: "Dashboard", href: "/admin", icon: Home },
+    { title: "Employees", href: "/admin/employees", icon: Users },
+    { title: "Team Leads", href: "/admin/team-leads", icon: Briefcase },
+    { title: "Projects", href: "/admin/projects", icon: CheckSquare },
+    { title: "Chat", href: "/admin/chat", icon: MessageSquare },
+    { title: "Complaints", href: "/admin/complaints", icon: AlertCircle },
+  ],
+  team_lead: [
+    { title: "Dashboard", href: "/team-lead", icon: Home },
+    { title: "My Team", href: "/team-lead/team", icon: Users },
+    { title: "Projects", href: "/team-lead/projects", icon: Briefcase },
+    { title: "Tasks", href: "/team-lead/tasks", icon: CheckSquare },
+    { title: "Chat", href: "/team-lead/chat", icon: MessageSquare },
+  ],
+  employee: [
+    { title: "Dashboard", href: "/employee", icon: Home },
+    { title: "Projects", href: "/employee/projects", icon: Briefcase },
+    { title: "Tasks", href: "/employee/tasks", icon: CheckSquare },
+    { title: "Work Logs", href: "/employee/worklogs", icon: Clock },
+    { title: "Chat", href: "/employee/chat", icon: MessageSquare },
+  ]
+};
 
-interface DashboardLayoutProps {
-  children: ReactNode;
-  role: UserRole;
-  navItems: NavItem[];
-  userName: string;
-  userEmail: string;
-  presenceStatus: PresenceStatus;
-  workMode?: WorkMode;
-  onPresenceChange: (status: PresenceStatus, mode?: WorkMode) => void;
-}
-
-export function DashboardLayout({
-  children,
-  role,
-  navItems,
-  userName,
-  userEmail,
-  presenceStatus,
-  workMode,
-  onPresenceChange,
-}: DashboardLayoutProps) {
-  const [collapsed, setCollapsed] = useState(false);
-  const [darkMode, setDarkMode] = useState(false);
-  const location = useLocation();
+// We now ACCEPT the role prop directly!
+export function DashboardLayout({ children, role }: { children: React.ReactNode; role?: string }) {
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
 
-  const toggleDarkMode = () => {
-    setDarkMode(!darkMode);
-    document.documentElement.classList.toggle('dark');
-  };
+  // THE PROTECTIVE SHIELD: If role is missing, default safely so it NEVER crashes
+  const currentRole = role || "employee";
+  const items = navItems[currentRole] || navItems.employee;
 
-  const handleLogout = () => {
-    navigate('/login');
-  };
-
-  const handleGoOnline = (mode: WorkMode) => {
-    onPresenceChange('online', mode);
-  };
-
-  const handleGoOffline = () => {
-    onPresenceChange('offline');
-  };
-
-  const roleLabels: Record<UserRole, string> = {
-    admin: 'Admin',
-    team_lead: 'Team Lead',
-    employee: 'Employee',
+  const handleLogout = async () => {
+    try {
+      await authService.signOut();
+      navigate("/login");
+    } catch (error) {
+      navigate("/login"); // Force navigation even if network fails
+    }
   };
 
   return (
-    <div className="flex min-h-screen w-full bg-background">
+    <div className="min-h-screen bg-gray-50 flex">
+      {/* Mobile sidebar overlay */}
+      {sidebarOpen && (
+        <div 
+          className="fixed inset-0 z-40 bg-black/50 md:hidden animate-in fade-in duration-200" 
+          onClick={() => setSidebarOpen(false)} 
+        />
+      )}
+
       {/* Sidebar */}
-      <aside
-        className={cn(
-          "fixed left-0 top-0 z-40 h-screen bg-sidebar transition-all duration-300",
-          collapsed ? "w-16" : "w-64"
-        )}
+      <aside 
+        className={`fixed inset-y-0 left-0 z-50 w-64 bg-white border-r border-gray-200 transform transition-transform duration-300 ease-in-out md:translate-x-0 flex flex-col shadow-sm ${
+          sidebarOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
       >
-        {/* Logo */}
-        <div className="flex h-16 items-center justify-between px-4 border-b border-sidebar-border">
-          {!collapsed && (
-            <Link to="/" className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-lg gradient-primary flex items-center justify-center">
-                <span className="text-sm font-bold text-white">WM</span>
-              </div>
-              <span className="font-semibold text-sidebar-foreground">WorkFlow</span>
-            </Link>
-          )}
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setCollapsed(!collapsed)}
-            className="text-sidebar-foreground hover:bg-sidebar-accent"
-          >
-            {collapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
-          </Button>
+        <div className="h-16 flex items-center justify-between px-6 border-b border-gray-100 bg-white">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center shadow-md">
+               <span className="text-white font-bold text-sm">WM</span>
+            </div>
+            <span className="text-xl font-bold text-gray-900 tracking-tight">WorkFlow</span>
+          </div>
+          <button className="md:hidden p-1 rounded-md hover:bg-gray-100 text-gray-500" onClick={() => setSidebarOpen(false)}>
+            <X className="w-5 h-5" />
+          </button>
         </div>
 
-        {/* Navigation */}
-        <nav className="flex-1 p-3 space-y-1">
-          {navItems.map((item) => {
-            const isActive = location.pathname === item.href;
+        <nav className="flex-1 overflow-y-auto py-6 px-4 space-y-1.5">
+          {items.map((item: any) => {
+            const Icon = item.icon;
+            const isActive = location.pathname === item.href || location.pathname.startsWith(item.href + "/");
+            
             return (
               <Link
                 key={item.href}
                 to={item.href}
-                className={cn(
-                  "flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors",
-                  isActive
-                    ? "bg-sidebar-primary text-sidebar-primary-foreground"
-                    : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-                )}
+                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 group ${
+                  isActive 
+                    ? "bg-blue-50 text-blue-700 shadow-sm" 
+                    : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                }`}
               >
-                <item.icon className="w-5 h-5 flex-shrink-0" />
-                {!collapsed && <span className="text-sm font-medium">{item.title}</span>}
+                <Icon className={`w-5 h-5 transition-colors ${
+                  isActive ? "text-blue-600" : "text-gray-400 group-hover:text-gray-600"
+                }`} />
+                {item.title}
               </Link>
             );
           })}
         </nav>
 
-        {/* User Section */}
-        <div className="p-3 border-t border-sidebar-border">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button className={cn(
-                "w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors",
-                "hover:bg-sidebar-accent text-sidebar-foreground"
-              )}>
-                <Avatar className="w-8 h-8">
-                  <AvatarFallback className="bg-sidebar-primary text-sidebar-primary-foreground text-xs">
-                    {userName.split(' ').map(n => n[0]).join('')}
-                  </AvatarFallback>
-                </Avatar>
-                {!collapsed && (
-                  <div className="flex-1 text-left">
-                    <p className="text-sm font-medium truncate">{userName}</p>
-                    <p className="text-xs text-sidebar-foreground/60">{roleLabels[role]}</p>
-                  </div>
-                )}
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuLabel>
-                <div className="flex flex-col">
-                  <span>{userName}</span>
-                  <span className="text-xs font-normal text-muted-foreground">{userEmail}</span>
-                </div>
-              </DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => navigate(`/${role}/settings`)}>
-                <Settings className="w-4 h-4 mr-2" />
-                Settings
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={toggleDarkMode}>
-                {darkMode ? <Sun className="w-4 h-4 mr-2" /> : <Moon className="w-4 h-4 mr-2" />}
-                {darkMode ? 'Light Mode' : 'Dark Mode'}
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={handleLogout} className="text-destructive">
-                <LogOut className="w-4 h-4 mr-2" />
-                Logout
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+        <div className="p-4 border-t border-gray-100 bg-gray-50/50">
+          <Button 
+            variant="ghost" 
+            className="w-full justify-start gap-3 text-red-600 hover:text-red-700 hover:bg-red-50/80 transition-colors" 
+            onClick={handleLogout}
+          >
+            <LogOut className="w-4 h-4" />
+            Sign Out
+          </Button>
         </div>
       </aside>
 
-      {/* Main Content */}
-      <main className={cn(
-        "flex-1 transition-all duration-300",
-        collapsed ? "ml-16" : "ml-64"
-      )}>
-        {/* Top Bar */}
-        <header className="sticky top-0 z-30 h-16 bg-background/95 backdrop-blur border-b flex items-center justify-between px-6">
-          <div className="flex items-center gap-4">
-            <h1 className="text-lg font-semibold">
-              {navItems.find(item => item.href === location.pathname)?.title || 'Dashboard'}
-            </h1>
-          </div>
-
-          <div className="flex items-center gap-4">
-            {/* Presence Toggle */}
-            {role !== 'admin' && (
-              <div className="flex items-center gap-2">
-                <StatusBadge status={presenceStatus} showDot />
-                {workMode && <StatusBadge status={workMode} />}
-                
-                {presenceStatus === 'offline' ? (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button size="sm" className="gradient-primary text-white">
-                        Go Online
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent>
-                      <DropdownMenuItem onClick={() => handleGoOnline('wfo')}>
-                        Work From Office (WFO)
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => handleGoOnline('wfh')}>
-                        Work From Home (WFH)
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                ) : (
-                  <Button size="sm" variant="outline" onClick={handleGoOffline}>
-                    Go Offline
-                  </Button>
-                )}
-              </div>
-            )}
-          </div>
+      {/* Main Content Area */}
+      <main className="flex-1 md:pl-64 flex flex-col min-h-screen bg-slate-50/50">
+        {/* Mobile top header */}
+        <header className="h-16 bg-white border-b border-gray-200 flex items-center px-4 md:hidden sticky top-0 z-30 shadow-sm">
+          <button 
+            onClick={() => setSidebarOpen(true)} 
+            className="p-2 -ml-2 mr-2 rounded-md hover:bg-gray-100 text-gray-600 transition-colors"
+          >
+            <Menu className="w-6 h-6" />
+          </button>
+          <span className="text-lg font-bold text-gray-900">WorkFlow</span>
         </header>
 
-        {/* Page Content */}
-        <div className="p-6 animate-fade-in">
+        <div className="flex-1 p-4 md:p-6 lg:p-8 overflow-y-auto">
           {children}
         </div>
       </main>

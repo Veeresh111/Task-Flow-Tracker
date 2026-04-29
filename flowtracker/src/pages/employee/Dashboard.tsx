@@ -1,115 +1,67 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
-import { StatCard } from "@/components/ui/stat-card";
-import { StatusBadge } from "@/components/ui/status-badge";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
-import {
-  LayoutDashboard,
-  ListTodo,
-  FolderKanban,
-  FileText,
-  AlertTriangle,
-  Bell,
-  MessageSquare,
-  Settings,
-  Clock,
-  CheckCircle2,
-} from "lucide-react";
-import { PresenceStatus, WorkMode } from "@/types";
-
-const navItems = [
-  { title: "Dashboard", href: "/employee", icon: LayoutDashboard },
-  { title: "My Tasks", href: "/employee/tasks", icon: ListTodo },
-  { title: "Projects", href: "/employee/projects", icon: FolderKanban },
-  { title: "Work Logs", href: "/employee/work-logs", icon: FileText },
-  { title: "Complaints", href: "/employee/complaints", icon: AlertTriangle },
-  { title: "Notifications", href: "/employee/notifications", icon: Bell },
-  { title: "Chat", href: "/employee/chat", icon: MessageSquare },
-  { title: "Settings", href: "/employee/settings", icon: Settings },
-];
-
-const mockTasks = [
-  { id: "1", title: "Complete API Documentation", project: "API Integration", status: "in_progress" as const, progress: 60, deadline: "2024-02-18" },
-  { id: "2", title: "Fix Login Bug", project: "Mobile App", status: "completed" as const, progress: 100, deadline: "2024-02-15" },
-  { id: "3", title: "Database Optimization", project: "Performance", status: "not_started" as const, progress: 0, deadline: "2024-02-20" },
-];
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { supabase } from "@/lib/supabase";
+import { CheckSquare } from "lucide-react";
 
 export default function EmployeeDashboard() {
-  const [presenceStatus, setPresenceStatus] = useState<PresenceStatus>("offline");
-  const [workMode, setWorkMode] = useState<WorkMode | undefined>(undefined);
+  const [tasks, setTasks] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const handlePresenceChange = (status: PresenceStatus, mode?: WorkMode) => {
-    setPresenceStatus(status);
-    setWorkMode(mode);
-  };
+  useEffect(() => {
+    const fetchAssignedTasks = async () => {
+      setLoading(true);
+      const { data: { user } } = await supabase.auth.getUser();
+      
+      if (user) {
+        const { data } = await supabase
+          .from('tasks')
+          .select('*')
+          .eq('assigned_to', user.id)
+          .order('created_at', { ascending: false });
+          
+        if (data) setTasks(data);
+      }
+      setLoading(false);
+    };
+    fetchAssignedTasks();
+  }, []);
 
   return (
-    <DashboardLayout
-      role="employee"
-      navItems={navItems}
-      userName="Alice Brown"
-      userEmail="alice.b@company.com"
-      presenceStatus={presenceStatus}
-      workMode={workMode}
-      onPresenceChange={handlePresenceChange}
-    >
-      <div className="page-header">
-        <h1 className="page-title">Employee Dashboard</h1>
-        <p className="page-description">Track your tasks and work progress</p>
-      </div>
+    <DashboardLayout role="employee">
+      <div className="space-y-6 animate-fade-in">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Employee Dashboard</h1>
+          <p className="text-muted-foreground">View operational queue and assigned workloads.</p>
+        </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <StatCard title="Active Tasks" value={5} icon={ListTodo} description="2 due today" />
-        <StatCard title="Completed" value={12} icon={CheckCircle2} trend={{ value: 8, isPositive: true }} />
-        <StatCard title="Hours Today" value="5h 30m" icon={Clock} />
-        <StatCard title="Weekly Hours" value="32h" icon={Clock} description="Target: 40h" />
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">My Tasks</CardTitle>
-            <CardDescription>Current task assignments</CardDescription>
+        <Card className="border-0 shadow-lg">
+          <CardHeader className="flex flex-row items-center gap-2">
+            <CheckSquare className="w-5 h-5 text-blue-600" />
+            <CardTitle>My Active Tasks</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="space-y-4">
-              {mockTasks.map((task) => (
-                <div key={task.id} className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="font-medium">{task.title}</p>
-                      <p className="text-sm text-muted-foreground">{task.project}</p>
-                    </div>
-                    <StatusBadge status={task.status} />
-                  </div>
-                  <Progress value={task.progress} className="h-2" />
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">Today's Summary</CardTitle>
-            <CardDescription>Your work activity for today</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              <div className="p-4 rounded-lg bg-muted/50">
-                <p className="text-sm text-muted-foreground">Online Time</p>
-                <p className="text-2xl font-bold">5h 30m</p>
+            {loading ? (
+              <p className="text-muted-foreground p-4">Connecting to PostgreSQL instance...</p>
+            ) : tasks.length === 0 ? (
+              <div className="p-8 text-center bg-gray-50 rounded-lg border border-dashed">
+                <p className="text-gray-500 font-medium">Task queue is empty.</p>
               </div>
-              <div className="p-4 rounded-lg bg-muted/50">
-                <p className="text-sm text-muted-foreground">Tasks Completed</p>
-                <p className="text-2xl font-bold">2</p>
-              </div>
-              <div className="p-4 rounded-lg bg-muted/50">
-                <p className="text-sm text-muted-foreground">Work Logs Added</p>
-                <p className="text-2xl font-bold">3</p>
-              </div>
-            </div>
+            ) : (
+               <div className="space-y-3">
+                 {tasks.map(task => (
+                   <div key={task.id} className="p-4 border rounded-lg bg-white shadow-sm flex justify-between items-center">
+                     <div>
+                       <p className="font-bold text-gray-900">{task.title}</p>
+                       <p className="text-sm text-gray-500 mt-1">{task.description}</p>
+                     </div>
+                     <span className="px-3 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-700">
+                       {task.status.toUpperCase()}
+                     </span>
+                   </div>
+                 ))}
+               </div>
+            )}
           </CardContent>
         </Card>
       </div>
