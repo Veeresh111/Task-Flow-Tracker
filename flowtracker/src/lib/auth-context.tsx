@@ -28,14 +28,13 @@ type AuthContextValue = {
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 async function fetchProfile(userId: string): Promise<ProfileRow | null> {
-  const { data, error } = await supabase
-    .from("profiles")
-    .select("*")
-    .eq("id", userId)
-    .single();
-
-  if (error) return null;
-  return data as ProfileRow;
+  try {
+    const { data, error } = await supabase.from("profiles").select("*").eq("id", userId).single();
+    if (error) return null;
+    return data as ProfileRow;
+  } catch {
+    return null;
+  }
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -43,6 +42,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<SupabaseUser | null>(null);
   const [profile, setProfile] = useState<ProfileRow | null>(null);
   const [loading, setLoading] = useState(true);
+  const [profileVersion, setProfileVersion] = useState(0);
 
   const refreshProfile = async () => {
     if (!user) {
@@ -57,22 +57,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let mounted = true;
 
     const init = async () => {
-      const { data } = await supabase.auth.getSession();
-      if (!mounted) return;
-
-      setSession(data.session);
-      setUser(data.session?.user ?? null);
-      setProfile(data.session?.user ? await fetchProfile(data.session.user.id) : null);
-      setLoading(false);
+      // Avoid calling Supabase auth APIs here to prevent lock races.
+      // We rely on the INITIAL_SESSION event from onAuthStateChange.
     };
 
     init();
 
-    const { data: sub } = supabase.auth.onAuthStateChange(async (_event, nextSession) => {
+    // IMPORTANT: do not call async Supabase APIs inside onAuthStateChange.
+    // Supabase has a known deadlock bug when async calls happen here.
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       if (!mounted) return;
       setSession(nextSession);
       setUser(nextSession?.user ?? null);
-      setProfile(nextSession?.user ? await fetchProfile(nextSession.user.id) : null);
+      setProfile(null);
+      setProfileVersion((v) => v + 1);
       setLoading(false);
     });
 
@@ -81,6 +79,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       sub.subscription.unsubscribe();
     };
   }, []);
+
+  // Fetch profile outside of auth callbacks (avoids auth-js deadlocks).
+  useEffect(() => {
+    let cancelled = false;
+
+    const run = async () => {
+      if (!user) {
+        setProfile(null);
+        return;
+      }
+
+      const next = await fetchProfile(user.id);
+      if (!cancelled) setProfile(next);
+    };
+
+    run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id, profileVersion]);
 
   const signOut = async () => {
     await supabase.auth.signOut();
@@ -99,4 +118,3 @@ export function useAuth() {
   if (!ctx) throw new Error("useAuth must be used within <AuthProvider />");
   return ctx;
 }
-

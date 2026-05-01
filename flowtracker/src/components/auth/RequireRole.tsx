@@ -25,7 +25,8 @@ export default function RequireRole({
 
   if (!user) return <Navigate to="/login" replace state={{ from: location }} />;
 
-  if (!profile) return <div className="p-8">Profile not found for this user.</div>;
+  // Profile is fetched asynchronously outside of auth callbacks to avoid Supabase auth-js deadlocks.
+  if (!profile) return <div className="p-8 text-sm text-muted-foreground">Loading profile...</div>;
 
   if (profile.approval_status !== "approved" && profile.role !== "admin") {
     return <Navigate to="/pending-approval" replace />;
