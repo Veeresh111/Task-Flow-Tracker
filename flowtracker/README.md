@@ -60,6 +60,21 @@ This project is built with:
 - shadcn-ui
 - Tailwind CSS
 
+## Supabase setup (Required)
+
+1. Create a Supabase project (or use an existing one).
+2. In Supabase Dashboard -> SQL Editor, run the schema file: `supabase/schema.sql`.
+3. Set env vars in `flowtracker/.env`:
+
+```sh
+VITE_SUPABASE_URL=...
+VITE_SUPABASE_ANON_KEY=...
+```
+
+Notes:
+- The first user who registers becomes the `admin` automatically (handled in the database trigger).
+- Any later user who selects a team lead during registration is created as `pending` until approved by that team lead.
+
 ## How can I deploy this project?
 
 Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.

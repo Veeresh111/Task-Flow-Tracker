@@ -2,31 +2,21 @@ import { supabase } from './supabase';
 
 export const authService = {
   signUp: async (formData: any) => {
-    // 1. Create the secure login
+    // Create the auth user. The DB trigger (`handle_new_user`) creates the `profiles` row.
     const { data: authData, error: authError } = await supabase.auth.signUp({
       email: formData.email,
       password: formData.password,
+      options: {
+        data: {
+          name: formData.name || "",
+          phone: formData.phone || "",
+          department: formData.department || "",
+          team_lead_id: formData.teamLeadId || "",
+        },
+      },
     });
     if (authError) throw authError;
     if (!authData.user) throw new Error("Sign up failed.");
-
-    // 2. Check if this is the very first user (The Founder)
-    const { count } = await supabase.from('profiles').select('*', { count: 'exact', head: true });
-    const isFirstUser = count === 0;
-
-    // 3. Insert the profile directly from React!
-    const { error: profileError } = await supabase.from('profiles').insert([
-      {
-        id: authData.user.id,
-        email: formData.email,
-        name: formData.name || "Unknown",
-        phone: formData.phone || "Unknown",
-        department: formData.department || "Unknown",
-        team_lead_id: formData.teamLeadId || null,
-        role: isFirstUser ? 'admin' : 'employee'
-      }
-    ]);
-    if (profileError) throw profileError;
 
     return authData;
   },
@@ -37,13 +27,18 @@ export const authService = {
 
     const { data: profileData, error: profileError } = await supabase
       .from('profiles')
-      .select('role')
+      .select('role, approval_status')
       .eq('id', authData.user.id)
       .single();
 
     if (profileError || !profileData) throw new Error("Profile not found in database.");
 
-    return { user: authData.user, role: profileData.role };
+    if (profileData.approval_status !== 'approved' && profileData.role !== 'admin') {
+      await supabase.auth.signOut();
+      throw new Error("Your account is pending approval by your team lead/admin.");
+    }
+
+    return { user: authData.user, role: profileData.role, approvalStatus: profileData.approval_status };
   },
 
   signOut: async () => {

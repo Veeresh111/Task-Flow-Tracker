@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
@@ -46,6 +46,10 @@ import {
   Search,
 } from "lucide-react";
 import { PresenceStatus, WorkMode } from "@/types";
+import { useAuth } from "@/lib/auth-context";
+import { listProjectsForTeamLead } from "@/lib/db/projects";
+import { createTask, listTasksForTeamLead, type TaskWithRefs } from "@/lib/db/tasks";
+import { supabase } from "@/lib/supabase";
 
 const navItems = [
   { title: "Dashboard", href: "/team_lead", icon: LayoutDashboard },
@@ -60,30 +64,69 @@ const navItems = [
   { title: "Settings", href: "/team_lead/settings", icon: Settings },
 ];
 
-const mockTasks = [
-  { id: "1", title: "Complete API Documentation", project: "API Integration", assignee: "Alice Brown", status: "in_progress" as const, priority: "high", deadline: "2024-02-18", hoursSpent: 8 },
-  { id: "2", title: "Fix Login Bug", project: "Mobile App Redesign", assignee: "Bob Martin", status: "completed" as const, priority: "high", deadline: "2024-02-15", hoursSpent: 4 },
-  { id: "3", title: "Database Optimization", project: "Performance Optimization", assignee: "Carol White", status: "blocked" as const, priority: "medium", deadline: "2024-02-20", hoursSpent: 12 },
-  { id: "4", title: "UI Component Library", project: "Mobile App Redesign", assignee: "David Lee", status: "not_started" as const, priority: "low", deadline: "2024-02-25", hoursSpent: 0 },
-  { id: "5", title: "Payment Integration", project: "API Integration", assignee: "Eva Garcia", status: "in_progress" as const, priority: "high", deadline: "2024-02-22", hoursSpent: 6 },
-];
-
 export default function Tasks() {
+  const { profile } = useAuth();
   const [presenceStatus, setPresenceStatus] = useState<PresenceStatus>("offline");
   const [workMode, setWorkMode] = useState<WorkMode | undefined>(undefined);
   const [searchQuery, setSearchQuery] = useState("");
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
+
+  const [tasks, setTasks] = useState<TaskWithRefs[]>([]);
+  const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
+  const [teamMembers, setTeamMembers] = useState<{ id: string; name: string; email: string }[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const [newTask, setNewTask] = useState({
+    title: "",
+    description: "",
+    projectId: "",
+    assigneeId: "",
+    priority: "medium" as const,
+    deadline: "",
+  });
 
   const handlePresenceChange = (status: PresenceStatus, mode?: WorkMode) => {
     setPresenceStatus(status);
     setWorkMode(mode);
   };
 
-  const filteredTasks = mockTasks.filter(
-    (task) =>
-      task.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      task.assignee.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const fetchAll = async () => {
+    if (!profile) return;
+    setLoading(true);
+
+    const [tRes, pRes] = await Promise.all([
+      listTasksForTeamLead(profile.id),
+      listProjectsForTeamLead(profile.id),
+    ]);
+
+    setTasks(tRes.data ?? []);
+    setProjects((pRes.data ?? []).map((p) => ({ id: p.id, name: p.name })));
+
+    const { data: members } = await supabase
+      .from("profiles")
+      .select("id,name,email")
+      .eq("role", "employee")
+      .eq("team_lead_id", profile.id)
+      .eq("approval_status", "approved")
+      .order("created_at", { ascending: false });
+
+    setTeamMembers((members ?? []).map((m) => ({ id: m.id, name: m.name || m.email, email: m.email })));
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    fetchAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile?.id]);
+
+  const filteredTasks = useMemo(() => {
+    const q = searchQuery.toLowerCase();
+    return tasks.filter((task) => {
+      const title = task.title.toLowerCase();
+      const assignee = (task.assignee?.name ?? "").toLowerCase();
+      return title.includes(q) || assignee.includes(q);
+    });
+  }, [tasks, searchQuery]);
 
   const getPriorityBadge = (priority: string) => {
     switch (priority) {
@@ -98,12 +141,33 @@ export default function Tasks() {
     }
   };
 
+  const handleCreateTask = async () => {
+    if (!profile) return;
+    if (!newTask.title.trim() || !newTask.projectId || !newTask.assigneeId) return;
+
+    const created = await createTask({
+      projectId: newTask.projectId,
+      title: newTask.title.trim(),
+      description: newTask.description.trim(),
+      assigneeId: newTask.assigneeId,
+      priority: newTask.priority,
+      deadline: newTask.deadline ? newTask.deadline : null,
+      createdBy: profile.id,
+    });
+
+    if (created.error) return;
+
+    setIsAddDialogOpen(false);
+    setNewTask({ title: "", description: "", projectId: "", assigneeId: "", priority: "medium", deadline: "" });
+    fetchAll();
+  };
+
   return (
     <DashboardLayout
       role="team_lead"
       navItems={navItems}
-      userName="John Smith"
-      userEmail="john.smith@company.com"
+      userName={profile?.name || "Team Lead"}
+      userEmail={profile?.email || ""}
       presenceStatus={presenceStatus}
       workMode={workMode}
       onPresenceChange={handlePresenceChange}
@@ -117,14 +181,14 @@ export default function Tasks() {
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
         <Card>
           <CardContent className="pt-6">
-            <div className="text-2xl font-bold">{mockTasks.length}</div>
+            <div className="text-2xl font-bold">{tasks.length}</div>
             <p className="text-sm text-muted-foreground">Total Tasks</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-6">
             <div className="text-2xl font-bold text-status-in-progress">
-              {mockTasks.filter((t) => t.status === "in_progress").length}
+              {tasks.filter((t) => t.status === "in_progress").length}
             </div>
             <p className="text-sm text-muted-foreground">In Progress</p>
           </CardContent>
@@ -132,7 +196,7 @@ export default function Tasks() {
         <Card>
           <CardContent className="pt-6">
             <div className="text-2xl font-bold text-status-completed">
-              {mockTasks.filter((t) => t.status === "completed").length}
+              {tasks.filter((t) => t.status === "completed").length}
             </div>
             <p className="text-sm text-muted-foreground">Completed</p>
           </CardContent>
@@ -140,7 +204,7 @@ export default function Tasks() {
         <Card>
           <CardContent className="pt-6">
             <div className="text-2xl font-bold text-status-blocked">
-              {mockTasks.filter((t) => t.status === "blocked").length}
+              {tasks.filter((t) => t.status === "blocked").length}
             </div>
             <p className="text-sm text-muted-foreground">Blocked</p>
           </CardContent>
@@ -176,29 +240,58 @@ export default function Tasks() {
             <div className="space-y-4 py-4">
               <div className="space-y-2">
                 <Label htmlFor="taskTitle">Task Title</Label>
-                <Input id="taskTitle" placeholder="Enter task title" />
+                <Input
+                  id="taskTitle"
+                  placeholder="Enter task title"
+                  value={newTask.title}
+                  onChange={(e) => setNewTask((p) => ({ ...p, title: e.target.value }))}
+                />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="description">Description</Label>
-                <Textarea id="description" placeholder="Describe the task" />
+                <Textarea
+                  id="description"
+                  placeholder="Describe the task"
+                  value={newTask.description}
+                  onChange={(e) => setNewTask((p) => ({ ...p, description: e.target.value }))}
+                />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label>Assignee</Label>
-                  <Select>
+                  <Label>Project</Label>
+                  <Select value={newTask.projectId} onValueChange={(v) => setNewTask((p) => ({ ...p, projectId: v }))}>
                     <SelectTrigger>
-                      <SelectValue placeholder="Select member" />
+                      <SelectValue placeholder="Select project" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="alice">Alice Brown</SelectItem>
-                      <SelectItem value="bob">Bob Martin</SelectItem>
-                      <SelectItem value="carol">Carol White</SelectItem>
+                      {projects.map((p) => (
+                        <SelectItem key={p.id} value={p.id}>
+                          {p.name}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
                 <div className="space-y-2">
+                  <Label>Assignee</Label>
+                  <Select value={newTask.assigneeId} onValueChange={(v) => setNewTask((p) => ({ ...p, assigneeId: v }))}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select member" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {teamMembers.map((m) => (
+                        <SelectItem key={m.id} value={m.id}>
+                          {m.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
                   <Label>Priority</Label>
-                  <Select>
+                  <Select value={newTask.priority} onValueChange={(v) => setNewTask((p) => ({ ...p, priority: v as any }))}>
                     <SelectTrigger>
                       <SelectValue placeholder="Select priority" />
                     </SelectTrigger>
@@ -209,17 +302,22 @@ export default function Tasks() {
                     </SelectContent>
                   </Select>
                 </div>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="deadline">Deadline</Label>
-                <Input id="deadline" type="date" />
+                <div className="space-y-2">
+                  <Label htmlFor="deadline">Deadline</Label>
+                  <Input
+                    id="deadline"
+                    type="date"
+                    value={newTask.deadline}
+                    onChange={(e) => setNewTask((p) => ({ ...p, deadline: e.target.value }))}
+                  />
+                </div>
               </div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsAddDialogOpen(false)}>
                 Cancel
               </Button>
-              <Button className="gradient-primary text-white" onClick={() => setIsAddDialogOpen(false)}>
+              <Button className="gradient-primary text-white" onClick={handleCreateTask}>
                 Create Task
               </Button>
             </DialogFooter>
@@ -243,21 +341,35 @@ export default function Tasks() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredTasks.map((task) => (
-                <TableRow key={task.id} className="data-table-row">
-                  <TableCell className="font-medium">{task.title}</TableCell>
-                  <TableCell className="text-muted-foreground">{task.project}</TableCell>
-                  <TableCell>{task.assignee}</TableCell>
-                  <TableCell>
-                    <StatusBadge status={task.status} />
+              {loading ? (
+                <TableRow>
+                  <TableCell colSpan={7} className="text-sm text-muted-foreground p-6">
+                    Loading tasks...
                   </TableCell>
-                  <TableCell>{getPriorityBadge(task.priority)}</TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {new Date(task.deadline).toLocaleDateString()}
-                  </TableCell>
-                  <TableCell>{task.hoursSpent}h</TableCell>
                 </TableRow>
-              ))}
+              ) : filteredTasks.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={7} className="text-sm text-muted-foreground p-6">
+                    No tasks yet.
+                  </TableCell>
+                </TableRow>
+              ) : (
+                filteredTasks.map((task) => (
+                  <TableRow key={task.id} className="data-table-row">
+                    <TableCell className="font-medium">{task.title}</TableCell>
+                    <TableCell className="text-muted-foreground">{task.projects?.name ?? "-"}</TableCell>
+                    <TableCell>{task.assignee?.name ?? "-"}</TableCell>
+                    <TableCell>
+                      <StatusBadge status={task.status} />
+                    </TableCell>
+                    <TableCell>{getPriorityBadge(task.priority)}</TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {task.deadline ? new Date(task.deadline).toLocaleDateString() : "-"}
+                    </TableCell>
+                    <TableCell>{task.hours_spent}h</TableCell>
+                  </TableRow>
+                ))
+              )}
             </TableBody>
           </Table>
         </CardContent>

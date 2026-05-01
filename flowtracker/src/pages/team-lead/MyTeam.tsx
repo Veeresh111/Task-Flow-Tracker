@@ -3,23 +3,32 @@ import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/lib/auth-context";
 
 export default function MyTeam() {
+  const { profile } = useAuth();
   const [team, setTeam] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const fetchTeam = async () => {
+      if (!profile) return;
       setLoading(true);
-      const { data } = await supabase.from('profiles').select('*').eq('role', 'employee');
+      const { data } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('role', 'employee')
+        .eq('team_lead_id', profile.id)
+        .eq('approval_status', 'approved')
+        .order('created_at', { ascending: false });
       if (data) setTeam(data);
       setLoading(false);
     };
     fetchTeam();
-  }, []);
+  }, [profile?.id]);
 
   return (
-    <DashboardLayout role="team_lead">
+    <DashboardLayout role="team_lead" userName={profile?.name || "Team Lead"} userEmail={profile?.email || ""}>
       <div className="space-y-6 animate-fade-in">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">My Team</h1>

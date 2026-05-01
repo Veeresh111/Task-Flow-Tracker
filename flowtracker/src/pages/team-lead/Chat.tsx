@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,6 +21,9 @@ import {
   Search,
 } from "lucide-react";
 import { PresenceStatus, WorkMode } from "@/types";
+import { useAuth } from "@/lib/auth-context";
+import { listConversation, sendMessage, type ChatMessageRow } from "@/lib/db/chat";
+import { supabase } from "@/lib/supabase";
 
 const navItems = [
   { title: "Dashboard", href: "/team_lead", icon: LayoutDashboard },
@@ -35,26 +38,15 @@ const navItems = [
   { title: "Settings", href: "/team_lead/settings", icon: Settings },
 ];
 
-const mockContacts = [
-  { id: "admin", name: "Admin User", status: "online" as const, role: "Admin", lastMessage: "Updates noted", time: "5m ago" },
-  { id: "1", name: "Alice Brown", status: "online" as const, role: "Employee", lastMessage: "Working on the API", time: "10m ago" },
-  { id: "2", name: "Bob Martin", status: "offline" as const, role: "Employee", lastMessage: "Task completed", time: "1h ago" },
-  { id: "3", name: "Carol White", status: "online" as const, role: "Employee", lastMessage: "Need help with DB", time: "2h ago" },
-];
-
-const mockMessages = [
-  { id: "1", senderId: "1", content: "Hi, I wanted to discuss the API task", time: "10:30 AM", isSent: false },
-  { id: "2", senderId: "tl", content: "Sure, what's the issue?", time: "10:32 AM", isSent: true },
-  { id: "3", senderId: "1", content: "The third-party API documentation is unclear", time: "10:35 AM", isSent: false },
-  { id: "4", senderId: "tl", content: "Let me check and get back to you", time: "10:36 AM", isSent: true },
-  { id: "5", senderId: "1", content: "Thanks, I'll continue with other parts meanwhile", time: "10:38 AM", isSent: false },
-  { id: "6", senderId: "tl", content: "Good plan. Keep me posted.", time: "10:40 AM", isSent: true },
-];
-
 export default function Chat() {
+  const { profile } = useAuth();
   const [presenceStatus, setPresenceStatus] = useState<PresenceStatus>("offline");
   const [workMode, setWorkMode] = useState<WorkMode | undefined>(undefined);
-  const [selectedContact, setSelectedContact] = useState(mockContacts[1]);
+  const [contacts, setContacts] = useState<{ id: string; name: string; email: string; status: "online" | "offline" }[]>([]);
+  const [selectedContactId, setSelectedContactId] = useState<string>("");
+  const [messages, setMessages] = useState<ChatMessageRow[]>([]);
+  const [loadingContacts, setLoadingContacts] = useState(true);
+  const [loadingMessages, setLoadingMessages] = useState(true);
   const [message, setMessage] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -63,22 +55,67 @@ export default function Chat() {
     setWorkMode(mode);
   };
 
-  const handleSend = () => {
-    if (message.trim()) {
-      setMessage("");
-    }
+  const fetchContacts = async () => {
+    if (!profile) return;
+    setLoadingContacts(true);
+
+    const { data } = await supabase
+      .from("profiles")
+      .select("id,name,email")
+      .eq("role", "employee")
+      .eq("team_lead_id", profile.id)
+      .eq("approval_status", "approved")
+      .order("created_at", { ascending: false });
+
+    const list = (data ?? []).map((c) => ({ id: c.id, name: c.name || c.email, email: c.email, status: "offline" as const }));
+    setContacts(list);
+    setSelectedContactId((prev) => prev || list[0]?.id || "");
+    setLoadingContacts(false);
   };
 
-  const filteredContacts = mockContacts.filter((contact) =>
-    contact.name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const fetchMessages = async () => {
+    if (!profile || !selectedContactId) {
+      setMessages([]);
+      return;
+    }
+    setLoadingMessages(true);
+    const res = await listConversation(profile.id, selectedContactId);
+    setMessages(res.data ?? []);
+    setLoadingMessages(false);
+  };
+
+  useEffect(() => {
+    fetchContacts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile?.id]);
+
+  useEffect(() => {
+    fetchMessages();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile?.id, selectedContactId]);
+
+  const handleSend = async () => {
+    if (!profile || !selectedContactId) return;
+    if (!message.trim()) return;
+    const res = await sendMessage({ senderId: profile.id, recipientId: selectedContactId, content: message.trim() });
+    if (res.error) return;
+    setMessage("");
+    fetchMessages();
+  };
+
+  const filteredContacts = useMemo(() => {
+    const q = searchQuery.toLowerCase();
+    return contacts.filter((c) => c.name.toLowerCase().includes(q));
+  }, [contacts, searchQuery]);
+
+  const selectedContact = contacts.find((c) => c.id === selectedContactId) || null;
 
   return (
     <DashboardLayout
       role="team_lead"
       navItems={navItems}
-      userName="John Smith"
-      userEmail="john.smith@company.com"
+      userName={profile?.name || "Team Lead"}
+      userEmail={profile?.email || ""}
       presenceStatus={presenceStatus}
       workMode={workMode}
       onPresenceChange={handlePresenceChange}
@@ -105,31 +142,36 @@ export default function Chat() {
           </CardHeader>
           <CardContent className="p-0">
             <ScrollArea className="h-[calc(100vh-380px)]">
-              {filteredContacts.map((contact) => (
-                <button
-                  key={contact.id}
-                  onClick={() => setSelectedContact(contact)}
-                  className={`w-full p-4 flex items-center gap-3 hover:bg-muted/50 transition-colors border-b ${
-                    selectedContact.id === contact.id ? "bg-muted" : ""
-                  }`}
-                >
-                  <div className="relative">
-                    <Avatar className="w-10 h-10">
-                      <AvatarFallback className="bg-primary text-primary-foreground text-sm">
-                        {contact.name.split(" ").map((n) => n[0]).join("")}
-                      </AvatarFallback>
-                    </Avatar>
-                    <div className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-card ${
-                      contact.status === "online" ? "bg-status-online" : "bg-status-offline"
-                    }`} />
-                  </div>
-                  <div className="flex-1 text-left">
-                    <p className="font-medium text-sm">{contact.name}</p>
-                    <p className="text-xs text-muted-foreground">{contact.role}</p>
-                  </div>
-                  <span className="text-xs text-muted-foreground">{contact.time}</span>
-                </button>
-              ))}
+              {loadingContacts ? (
+                <div className="p-4 text-sm text-muted-foreground">Loading contacts...</div>
+              ) : filteredContacts.length === 0 ? (
+                <div className="p-4 text-sm text-muted-foreground">No employees in your team yet.</div>
+              ) : (
+                filteredContacts.map((contact) => (
+                  <button
+                    key={contact.id}
+                    onClick={() => setSelectedContactId(contact.id)}
+                    className={`w-full p-4 flex items-center gap-3 hover:bg-muted/50 transition-colors border-b ${
+                      selectedContactId === contact.id ? "bg-muted" : ""
+                    }`}
+                  >
+                    <div className="relative">
+                      <Avatar className="w-10 h-10">
+                        <AvatarFallback className="bg-primary text-primary-foreground text-sm">
+                          {contact.name.split(" ").map((n) => n[0]).join("")}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-card ${
+                        contact.status === "online" ? "bg-status-online" : "bg-status-offline"
+                      }`} />
+                    </div>
+                    <div className="flex-1 text-left">
+                      <p className="font-medium text-sm">{contact.name}</p>
+                      <p className="text-xs text-muted-foreground">{contact.email}</p>
+                    </div>
+                  </button>
+                ))
+              )}
             </ScrollArea>
           </CardContent>
         </Card>
@@ -140,12 +182,12 @@ export default function Chat() {
             <div className="flex items-center gap-3">
               <Avatar className="w-10 h-10">
                 <AvatarFallback className="bg-primary text-primary-foreground">
-                  {selectedContact.name.split(" ").map((n) => n[0]).join("")}
+                  {(selectedContact?.name || "User").split(" ").map((n) => n[0]).join("")}
                 </AvatarFallback>
               </Avatar>
               <div>
-                <CardTitle className="text-lg">{selectedContact.name}</CardTitle>
-                <StatusBadge status={selectedContact.status} showDot />
+                <CardTitle className="text-lg">{selectedContact?.name || "Select a contact"}</CardTitle>
+                {selectedContact ? <StatusBadge status={selectedContact.status} showDot /> : null}
               </div>
             </div>
           </CardHeader>
@@ -153,25 +195,31 @@ export default function Chat() {
           <CardContent className="flex-1 p-0 flex flex-col">
             <ScrollArea className="flex-1 p-4">
               <div className="space-y-4">
-                {mockMessages.map((msg) => (
-                  <div
-                    key={msg.id}
-                    className={`flex ${msg.isSent ? "justify-end" : "justify-start"}`}
-                  >
-                    <div
-                      className={`max-w-[70%] px-4 py-2 rounded-2xl ${
-                        msg.isSent
-                          ? "bg-primary text-primary-foreground rounded-br-md"
-                          : "bg-muted rounded-bl-md"
-                      }`}
-                    >
-                      <p className="text-sm">{msg.content}</p>
-                      <p className={`text-xs mt-1 ${msg.isSent ? "text-primary-foreground/70" : "text-muted-foreground"}`}>
-                        {msg.time}
-                      </p>
-                    </div>
-                  </div>
-                ))}
+                {loadingMessages ? (
+                  <div className="text-sm text-muted-foreground">Loading messages...</div>
+                ) : !selectedContactId ? (
+                  <div className="text-sm text-muted-foreground">Select a contact to start chatting.</div>
+                ) : messages.length === 0 ? (
+                  <div className="text-sm text-muted-foreground">No messages yet.</div>
+                ) : (
+                  messages.map((msg) => {
+                    const isSent = msg.sender_id === profile?.id;
+                    return (
+                      <div key={msg.id} className={`flex ${isSent ? "justify-end" : "justify-start"}`}>
+                        <div
+                          className={`max-w-[70%] px-4 py-2 rounded-2xl ${
+                            isSent ? "bg-primary text-primary-foreground rounded-br-md" : "bg-muted rounded-bl-md"
+                          }`}
+                        >
+                          <p className="text-sm">{msg.content}</p>
+                          <p className={`text-xs mt-1 ${isSent ? "text-primary-foreground/70" : "text-muted-foreground"}`}>
+                            {new Date(msg.created_at).toLocaleTimeString()}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
               </div>
             </ScrollArea>
 
@@ -181,10 +229,11 @@ export default function Chat() {
                   placeholder="Type a message..."
                   value={message}
                   onChange={(e) => setMessage(e.target.value)}
-                  onKeyPress={(e) => e.key === "Enter" && handleSend()}
+                  onKeyDown={(e) => e.key === "Enter" && handleSend()}
                   className="flex-1"
+                  disabled={!selectedContactId}
                 />
-                <Button onClick={handleSend} className="gradient-primary text-white">
+                <Button onClick={handleSend} className="gradient-primary text-white" disabled={!selectedContactId}>
                   <Send className="w-4 h-4" />
                 </Button>
               </div>

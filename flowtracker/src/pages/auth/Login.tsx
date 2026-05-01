@@ -38,7 +38,7 @@ export default function Login() {
 
       // 2. Route automatically based on the DATABASE's absolute truth
       if (role === 'admin') navigate('/admin');
-      else if (role === 'team_lead') navigate('/team-lead');
+      else if (role === 'team_lead') navigate('/team_lead');
       else navigate('/employee');
 
     } catch (error: any) {

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -26,6 +26,8 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { PresenceStatus, WorkMode } from "@/types";
+import { useAuth } from "@/lib/auth-context";
+import { supabase } from "@/lib/supabase";
 
 const navItems = [
   { title: "Dashboard", href: "/admin", icon: LayoutDashboard },
@@ -40,44 +42,85 @@ const navItems = [
   { title: "Settings", href: "/admin/settings", icon: Settings },
 ];
 
-const mockPresenceData = [
-  { id: "1", name: "John Smith", role: "Team Lead", status: "online" as const, workMode: "wfo" as const, onlineSince: "09:00 AM", todayHours: "6h 30m" },
-  { id: "2", name: "Sarah Johnson", role: "Team Lead", status: "online" as const, workMode: "wfh" as const, onlineSince: "08:45 AM", todayHours: "6h 45m" },
-  { id: "3", name: "Alice Brown", role: "Employee", status: "online" as const, workMode: "wfo" as const, onlineSince: "09:15 AM", todayHours: "6h 15m" },
-  { id: "4", name: "Bob Martin", role: "Employee", status: "offline" as const, onlineSince: "-", todayHours: "4h 00m" },
-  { id: "5", name: "Carol White", role: "Employee", status: "online" as const, workMode: "wfh" as const, onlineSince: "10:00 AM", todayHours: "5h 30m" },
-  { id: "6", name: "Michael Chen", role: "Team Lead", status: "offline" as const, onlineSince: "-", todayHours: "7h 15m" },
-];
-
 export default function Presence() {
+  const { profile } = useAuth();
   const [presenceStatus, setPresenceStatus] = useState<PresenceStatus>("online");
   const [workMode, setWorkMode] = useState<WorkMode | undefined>(undefined);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [modeFilter, setModeFilter] = useState("all");
+  const [loading, setLoading] = useState(true);
+  const [people, setPeople] = useState<any[]>([]);
 
   const handlePresenceChange = (status: PresenceStatus, mode?: WorkMode) => {
     setPresenceStatus(status);
     setWorkMode(mode);
   };
 
-  const filteredData = mockPresenceData.filter((person) => {
-    const matchesSearch = person.name.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesStatus = statusFilter === "all" || person.status === statusFilter;
-    const matchesMode = modeFilter === "all" || person.workMode === modeFilter;
-    return matchesSearch && matchesStatus && matchesMode;
-  });
+  const fetchAll = async () => {
+    setLoading(true);
 
-  const onlineCount = mockPresenceData.filter((p) => p.status === "online").length;
-  const wfoCount = mockPresenceData.filter((p) => p.workMode === "wfo").length;
-  const wfhCount = mockPresenceData.filter((p) => p.workMode === "wfh").length;
+    const { data: profiles } = await supabase
+      .from("profiles")
+      .select("id,name,email,role")
+      .neq("role", "admin")
+      .order("created_at", { ascending: false });
+
+    const { data: sessions } = await supabase
+      .from("presence_sessions")
+      .select("user_id,status,work_mode,start_time,end_time")
+      .order("start_time", { ascending: false });
+
+    const latestByUser: Record<string, any> = {};
+    for (const s of sessions ?? []) {
+      if (!latestByUser[s.user_id]) latestByUser[s.user_id] = s;
+    }
+
+    setPeople(
+      (profiles ?? []).map((p) => {
+        const latest = latestByUser[p.id];
+        const online = latest && latest.status === "online" && !latest.end_time;
+        const mode = latest?.work_mode ?? null;
+        const since = latest?.start_time ? new Date(latest.start_time).toLocaleTimeString() : "-";
+        return {
+          id: p.id,
+          name: p.name || p.email,
+          role: p.role === "team_lead" ? "Team Lead" : "Employee",
+          status: online ? "online" : "offline",
+          workMode: mode,
+          onlineSince: online ? since : "-",
+          todayHours: "-",
+        };
+      })
+    );
+
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    fetchAll();
+  }, []);
+
+  const filteredData = useMemo(() => {
+    const q = searchQuery.toLowerCase();
+    return people.filter((person) => {
+      const matchesSearch = person.name.toLowerCase().includes(q);
+      const matchesStatus = statusFilter === "all" || person.status === statusFilter;
+      const matchesMode = modeFilter === "all" || person.workMode === modeFilter;
+      return matchesSearch && matchesStatus && matchesMode;
+    });
+  }, [people, searchQuery, statusFilter, modeFilter]);
+
+  const onlineCount = people.filter((p) => p.status === "online").length;
+  const wfoCount = people.filter((p) => p.workMode === "wfo").length;
+  const wfhCount = people.filter((p) => p.workMode === "wfh").length;
 
   return (
     <DashboardLayout
       role="admin"
       navItems={navItems}
-      userName="Admin User"
-      userEmail="admin@company.com"
+      userName={profile?.name || "Admin"}
+      userEmail={profile?.email || ""}
       presenceStatus={presenceStatus}
       workMode={workMode}
       onPresenceChange={handlePresenceChange}
@@ -115,7 +158,7 @@ export default function Presence() {
         <Card>
           <CardContent className="pt-6">
             <div className="text-2xl font-bold text-muted-foreground">
-              {mockPresenceData.length - onlineCount}
+              {people.length - onlineCount}
             </div>
             <p className="text-sm text-muted-foreground">Currently Offline</p>
           </CardContent>
@@ -158,48 +201,54 @@ export default function Presence() {
       </div>
 
       {/* Presence Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {filteredData.map((person) => (
-          <Card key={person.id}>
-            <CardContent className="pt-6">
-              <div className="flex items-start gap-4">
-                <div className="relative">
-                  <Avatar className="w-12 h-12">
-                    <AvatarFallback className="bg-primary text-primary-foreground">
-                      {person.name.split(" ").map((n) => n[0]).join("")}
-                    </AvatarFallback>
-                  </Avatar>
-                  <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-card ${
-                    person.status === "online" ? "bg-status-online" : "bg-status-offline"
-                  }`} />
-                </div>
-                <div className="flex-1">
-                  <h3 className="font-semibold">{person.name}</h3>
-                  <p className="text-sm text-muted-foreground">{person.role}</p>
-                  <div className="flex items-center gap-2 mt-2">
-                    <StatusBadge status={person.status} />
-                    {person.workMode && <StatusBadge status={person.workMode} />}
+      {loading ? (
+        <div className="text-sm text-muted-foreground">Loading presence...</div>
+      ) : filteredData.length === 0 ? (
+        <div className="text-sm text-muted-foreground">No users yet.</div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {filteredData.map((person) => (
+            <Card key={person.id}>
+              <CardContent className="pt-6">
+                <div className="flex items-start gap-4">
+                  <div className="relative">
+                    <Avatar className="w-12 h-12">
+                      <AvatarFallback className="bg-primary text-primary-foreground">
+                        {person.name.split(" ").map((n) => n[0]).join("")}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-card ${
+                      person.status === "online" ? "bg-status-online" : "bg-status-offline"
+                    }`} />
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="font-semibold">{person.name}</h3>
+                    <p className="text-sm text-muted-foreground">{person.role}</p>
+                    <div className="flex items-center gap-2 mt-2">
+                      <StatusBadge status={person.status} />
+                      {person.workMode && <StatusBadge status={person.workMode} />}
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              <div className="grid grid-cols-2 gap-4 mt-4 pt-4 border-t">
-                <div>
-                  <p className="text-xs text-muted-foreground">Online Since</p>
-                  <p className="font-medium flex items-center gap-1">
-                    <Clock className="w-3 h-3" />
-                    {person.onlineSince}
-                  </p>
+                <div className="grid grid-cols-2 gap-4 mt-4 pt-4 border-t">
+                  <div>
+                    <p className="text-xs text-muted-foreground">Online Since</p>
+                    <p className="font-medium flex items-center gap-1">
+                      <Clock className="w-3 h-3" />
+                      {person.onlineSince}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Today's Hours</p>
+                    <p className="font-medium">{person.todayHours}</p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Today's Hours</p>
-                  <p className="font-medium">{person.todayHours}</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
     </DashboardLayout>
   );
 }

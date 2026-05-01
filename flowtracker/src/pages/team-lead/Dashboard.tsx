@@ -1,77 +1,41 @@
-import { useState, useEffect } from "react";
-import { DashboardLayout } from "@/components/layout/DashboardLayout";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Users, Briefcase, CheckSquare } from "lucide-react";
-import { supabase } from "@/lib/supabase";
-import { useToast } from "@/hooks/use-toast";
+import { useEffect, useState } from "react";
+import DashboardLayout from "@/components/layout/DashboardLayout";
+import { useAuth } from "@/lib/auth-context";
+import { listTasksForTeamLead, type TaskWithRefs } from "@/lib/db/tasks";
 
 export default function TeamLeadDashboard() {
-  const { toast } = useToast();
-  const [stats, setStats] = useState({ team: 0, projects: 0, tasks: 0 });
+  const { profile } = useAuth();
+  const [tasks, setTasks] = useState<TaskWithRefs[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const fetchSystemState = async () => {
-      try {
-        setLoading(true);
-        // Execute parallel concurrent asynchronous queries 
-        const [teamRes, projectsRes, tasksRes] = await Promise.all([
-          supabase.from('profiles').select('id', { count: 'exact' }).eq('role', 'employee'),
-          supabase.from('projects').select('id', { count: 'exact' }),
-          supabase.from('tasks').select('id', { count: 'exact' })
-        ]);
-
-        setStats({
-          team: teamRes.count || 0,
-          projects: projectsRes.count || 0,
-          tasks: tasksRes.count || 0
-        });
-      } catch (error: any) {
-        toast({ title: "Query Error", description: error.message, variant: "destructive" });
-      } finally {
-        setLoading(false);
-      }
-    };
-    
-    fetchSystemState();
-  }, [toast]);
+    async function fetchTasks() {
+      if (!profile) return;
+      const { data, error } = await listTasksForTeamLead(profile.id);
+      if (!error && data) setTasks(data);
+      setLoading(false);
+    }
+    fetchTasks();
+  }, [profile?.id]);
 
   return (
-    <DashboardLayout role="team_lead">
-      <div className="space-y-6 animate-fade-in">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Team Lead Dashboard</h1>
-          <p className="text-muted-foreground">Operational metrics overview.</p>
-        </div>
-
+    <DashboardLayout role="team_lead" userName={profile?.name || "Team Lead"} userEmail={profile?.email || ""}>
+      <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
+        <h1 className="text-2xl font-bold mb-6 text-gray-800">Team Lead Overview</h1>
         {loading ? (
-          <p className="text-muted-foreground">Executing data fetch...</p>
+          <p>Syncing with database...</p>
+        ) : tasks.length === 0 ? (
+          <p className="text-gray-500">No active tasks. Awaiting project creation.</p>
         ) : (
-          <div className="grid gap-4 md:grid-cols-3">
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-sm font-medium">Department Employees</CardTitle>
-                <Users className="h-4 w-4 text-blue-500" />
-              </CardHeader>
-              <CardContent><div className="text-2xl font-bold">{stats.team}</div></CardContent>
-            </Card>
-            
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-sm font-medium">Active Projects</CardTitle>
-                <Briefcase className="h-4 w-4 text-purple-500" />
-              </CardHeader>
-              <CardContent><div className="text-2xl font-bold">{stats.projects}</div></CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-sm font-medium">Total Tasks</CardTitle>
-                <CheckSquare className="h-4 w-4 text-green-500" />
-              </CardHeader>
-              <CardContent><div className="text-2xl font-bold">{stats.tasks}</div></CardContent>
-            </Card>
-          </div>
+          <ul className="space-y-4">
+            {tasks.map(task => (
+              <li key={task.id} className="p-4 border border-gray-100 rounded-lg shadow-sm">
+                <h3 className="font-bold text-gray-900">{task.title}</h3>
+                <p className="text-sm text-gray-500 mt-1">Status: <span className="font-medium text-blue-600">{task.status}</span></p>
+                <p className="text-sm text-gray-500">Assigned To: {task.assignee?.name || 'Unassigned'}</p>
+              </li>
+            ))}
+          </ul>
         )}
       </div>
     </DashboardLayout>
