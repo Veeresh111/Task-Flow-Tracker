@@ -1,210 +1,108 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
-import { StatusBadge } from "@/components/ui/status-badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Card, CardContent } from "@/components/ui/card";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
-  LayoutDashboard,
-  Users,
-  UserCheck,
-  FolderKanban,
-  Activity,
-  BarChart3,
-  Bell,
-  MessageSquare,
-  Settings,
-  Search,
-  MoreHorizontal,
-  CheckCircle2,
-  XCircle,
-  AlertTriangle,
-} from "lucide-react";
-import { PresenceStatus, WorkMode } from "@/types";
-
-const navItems = [
-  { title: "Dashboard", href: "/admin", icon: LayoutDashboard },
-  { title: "Team Leads", href: "/admin/team-leads", icon: UserCheck },
-  { title: "Employees", href: "/admin/employees", icon: Users },
-  { title: "Projects", href: "/admin/projects", icon: FolderKanban },
-  { title: "Presence", href: "/admin/presence", icon: Activity },
-  { title: "Analytics", href: "/admin/analytics", icon: BarChart3 },
-  { title: "Complaints", href: "/admin/complaints", icon: AlertTriangle },
-  { title: "Notifications", href: "/admin/notifications", icon: Bell },
-  { title: "Chat", href: "/admin/chat", icon: MessageSquare },
-  { title: "Settings", href: "/admin/settings", icon: Settings },
-];
-
-const mockComplaints = [
-  { id: "1", title: "VPN Connection Issues", description: "Unable to connect to VPN from home", raisedBy: "John Doe", role: "Employee", status: "pending" as const, createdAt: "2024-02-15 10:30 AM" },
-  { id: "2", title: "Access Permission Request", description: "Need access to production database", raisedBy: "Jane Smith", role: "Employee", status: "pending" as const, createdAt: "2024-02-15 09:15 AM" },
-  { id: "3", title: "Hardware Upgrade Needed", description: "Current laptop is too slow for development", raisedBy: "Mike Ross", role: "Employee", status: "resolved" as const, createdAt: "2024-02-14 03:45 PM" },
-  { id: "4", title: "Team Resource Shortage", description: "Need more team members for project deadline", raisedBy: "Sarah Johnson", role: "Team Lead", status: "pending" as const, createdAt: "2024-02-14 11:00 AM" },
-  { id: "5", title: "Software License Expired", description: "Adobe Creative Suite license has expired", raisedBy: "Carol White", role: "Employee", status: "closed" as const, createdAt: "2024-02-13 02:30 PM" },
-];
+import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/lib/supabase";
+import { Loader2, AlertCircle, CheckCircle } from "lucide-react";
 
 export default function Complaints() {
-  const [presenceStatus, setPresenceStatus] = useState<PresenceStatus>("online");
-  const [workMode, setWorkMode] = useState<WorkMode | undefined>(undefined);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
+  const { toast } = useToast();
+  const [complaints, setComplaints] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const handlePresenceChange = (status: PresenceStatus, mode?: WorkMode) => {
-    setPresenceStatus(status);
-    setWorkMode(mode);
+  const fetchComplaints = async () => {
+    setLoading(true);
+    // Fetch complaints and the names of the users who submitted them
+    const { data } = await supabase
+      .from('complaints')
+      .select('*, profiles(name, role)')
+      .order('created_at', { ascending: false });
+    
+    if (data) setComplaints(data);
+    setLoading(false);
   };
 
-  const filteredComplaints = mockComplaints.filter((complaint) => {
-    const matchesSearch =
-      complaint.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      complaint.raisedBy.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesStatus = statusFilter === "all" || complaint.status === statusFilter;
-    return matchesSearch && matchesStatus;
-  });
+  useEffect(() => { fetchComplaints(); }, []);
 
-  const pendingCount = mockComplaints.filter((c) => c.status === "pending").length;
-  const resolvedCount = mockComplaints.filter((c) => c.status === "resolved").length;
+  // REAL CONNECTION: Admin can resolve complaints
+  const resolveComplaint = async (id: string) => {
+    try {
+      const { error } = await supabase.from('complaints').update({ status: 'Resolved' }).eq('id', id);
+      if (error) throw error;
+      
+      toast({ title: "Complaint Resolved!" });
+      setComplaints(complaints.map(c => c.id === id ? { ...c, status: 'Resolved' } : c));
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    }
+  };
 
   return (
-    <DashboardLayout
-      role="admin"
-      navItems={navItems}
-      userName="Admin User"
-      userEmail="admin@company.com"
-      presenceStatus={presenceStatus}
-      workMode={workMode}
-      onPresenceChange={handlePresenceChange}
-    >
-      <div className="page-header">
-        <h1 className="page-title">Complaints</h1>
-        <p className="page-description">Manage and resolve issues raised by employees and team leads</p>
-      </div>
-
-      {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-        <Card>
-          <CardContent className="pt-6">
-            <div className="text-2xl font-bold">{mockComplaints.length}</div>
-            <p className="text-sm text-muted-foreground">Total Complaints</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <div className="text-2xl font-bold text-status-pending">{pendingCount}</div>
-            <p className="text-sm text-muted-foreground">Pending Resolution</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <div className="text-2xl font-bold text-status-completed">{resolvedCount}</div>
-            <p className="text-sm text-muted-foreground">Resolved</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Filters */}
-      <div className="flex items-center gap-4 mb-6">
-        <div className="relative flex-1 max-w-sm">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <Input
-            placeholder="Search complaints..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-10"
-          />
+    <DashboardLayout role="admin">
+      <div className="space-y-6 animate-fade-in">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">System Complaints</h1>
+          <p className="text-muted-foreground">Manage and resolve issues submitted by your team.</p>
         </div>
 
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="w-40">
-            <SelectValue placeholder="Status" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Status</SelectItem>
-            <SelectItem value="pending">Pending</SelectItem>
-            <SelectItem value="resolved">Resolved</SelectItem>
-            <SelectItem value="closed">Closed</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
+        <div className="grid gap-4 md:grid-cols-3 mb-6">
+          <Card className="border-0 shadow-sm bg-red-50 text-red-900 border-l-4 border-l-red-500">
+            <CardHeader className="pb-2"><CardTitle className="text-sm font-bold">Total Pending</CardTitle></CardHeader>
+            <CardContent className="text-3xl font-black">{complaints.filter(c => c.status === 'Pending').length}</CardContent>
+          </Card>
+          <Card className="border-0 shadow-sm bg-green-50 text-green-900 border-l-4 border-l-green-500">
+            <CardHeader className="pb-2"><CardTitle className="text-sm font-bold">Total Resolved</CardTitle></CardHeader>
+            <CardContent className="text-3xl font-black">{complaints.filter(c => c.status === 'Resolved').length}</CardContent>
+          </Card>
+        </div>
 
-      {/* Table */}
-      <Card>
-        <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Complaint</TableHead>
-                <TableHead>Raised By</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Date</TableHead>
-                <TableHead className="w-[50px]"></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filteredComplaints.map((complaint) => (
-                <TableRow key={complaint.id} className="data-table-row">
-                  <TableCell>
-                    <div>
-                      <p className="font-medium">{complaint.title}</p>
-                      <p className="text-sm text-muted-foreground">{complaint.description}</p>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <div>
-                      <p className="font-medium">{complaint.raisedBy}</p>
-                      <p className="text-sm text-muted-foreground">{complaint.role}</p>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <StatusBadge status={complaint.status} />
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">{complaint.createdAt}</TableCell>
-                  <TableCell>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon">
-                          <MoreHorizontal className="w-4 h-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem>
-                          <CheckCircle2 className="w-4 h-4 mr-2" />
-                          Mark as Resolved
-                        </DropdownMenuItem>
-                        <DropdownMenuItem>
-                          <XCircle className="w-4 h-4 mr-2" />
-                          Close Complaint
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+        <Card className="shadow-lg border-0">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2"><AlertCircle className="w-5 h-5 text-red-500"/> Complaints Inbox</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {loading ? <div className="p-8 flex justify-center"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div> : complaints.length === 0 ? <p className="text-center text-gray-500 p-8">No complaints in the system. Great job!</p> : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Submitted By</TableHead>
+                    <TableHead>Subject</TableHead>
+                    <TableHead>Message</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Action</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {complaints.map(complaint => (
+                    <TableRow key={complaint.id}>
+                      <TableCell className="font-medium">
+                        {complaint.profiles?.name || "Unknown"} <br/>
+                        <span className="text-[10px] uppercase text-gray-400">{complaint.profiles?.role}</span>
+                      </TableCell>
+                      <TableCell className="font-bold text-gray-900">{complaint.subject}</TableCell>
+                      <TableCell className="text-gray-600 max-w-xs truncate">{complaint.message}</TableCell>
+                      <TableCell>
+                        <span className={`px-3 py-1 rounded-full text-xs font-bold ${complaint.status === 'Resolved' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                          {complaint.status}
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        {complaint.status !== 'Resolved' && (
+                          <Button onClick={() => resolveComplaint(complaint.id)} size="sm" className="bg-emerald-500 hover:bg-emerald-600 text-white">
+                            <CheckCircle className="w-4 h-4 mr-2" /> Mark Resolved
+                          </Button>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+      </div>
     </DashboardLayout>
   );
 }

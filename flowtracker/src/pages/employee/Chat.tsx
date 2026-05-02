@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase";
 import { Send, User } from "lucide-react";
 
-export default function TeamLeadChat() {
+export default function EmployeeChat() {
   const [messages, setMessages] = useState<any[]>([]);
   const [newMessage, setNewMessage] = useState("");
   const [userProfile, setUserProfile] = useState<any>(null);
@@ -51,7 +51,7 @@ export default function TeamLeadChat() {
   };
 
   return (
-    <DashboardLayout role="team_lead">
+    <DashboardLayout role="employee">
       <div className="space-y-6 h-[calc(100vh-100px)] flex flex-col">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Company Chat</h1>

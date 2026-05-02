@@ -1,49 +1,47 @@
 import { supabase } from './supabase';
+import { createClient } from '@supabase/supabase-js';
+
+// Secret Admin connection that prevents login bugs
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+const adminSupabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: { persistSession: false, autoRefreshToken: false }
+});
 
 export const authService = {
   signUp: async (formData: any) => {
-    // 1. Create the secure login
-    const { data: authData, error: authError } = await supabase.auth.signUp({
+    await supabase.auth.signOut(); // Wipes stuck sessions so it never crashes
+    const { data, error } = await supabase.auth.signUp({
       email: formData.email,
       password: formData.password,
+      options: { data: { name: formData.name, phone: formData.phone || "N/A", department: formData.department || "Unassigned" } }
     });
-    if (authError) throw authError;
-    if (!authData.user) throw new Error("Sign up failed.");
-
-    // 2. Check if this is the very first user (The Founder)
-    const { count } = await supabase.from('profiles').select('*', { count: 'exact', head: true });
-    const isFirstUser = count === 0;
-
-    // 3. Insert the profile directly from React!
-    const { error: profileError } = await supabase.from('profiles').insert([
-      {
-        id: authData.user.id,
-        email: formData.email,
-        name: formData.name || "Unknown",
-        phone: formData.phone || "Unknown",
-        department: formData.department || "Unknown",
-        team_lead_id: formData.teamLeadId || null,
-        role: isFirstUser ? 'admin' : 'employee'
-      }
-    ]);
-    if (profileError) throw profileError;
-
-    return authData;
+    if (error) throw error;
+    return data;
   },
 
   signIn: async (email: string, password: string) => {
+    await supabase.auth.signOut(); // Wipes stuck sessions so switching accounts works
     const { data: authData, error: authError } = await supabase.auth.signInWithPassword({ email, password });
     if (authError) throw authError;
 
-    const { data: profileData, error: profileError } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', authData.user.id)
-      .single();
-
-    if (profileError || !profileData) throw new Error("Profile not found in database.");
-
+    const { data: profileData, error: profileError } = await supabase.from('profiles').select('role').eq('id', authData.user.id).single();
+    if (profileError || !profileData) return { user: authData.user, role: 'employee' };
     return { user: authData.user, role: profileData.role };
+  },
+
+  adminCreateUser: async (formData: any) => {
+    // Admin creates users without logging themselves out
+    const { data, error } = await adminSupabase.auth.signUp({
+      email: formData.email,
+      password: formData.password,
+      options: { data: { name: formData.name, phone: formData.phone || "N/A", department: formData.department || "Unassigned" } }
+    });
+    if (error) throw error;
+    if (data.user && formData.role) {
+      await supabase.from('profiles').update({ role: formData.role }).eq('id', data.user.id);
+    }
+    return data;
   },
 
   signOut: async () => {

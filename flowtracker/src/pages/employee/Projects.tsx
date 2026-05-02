@@ -1,55 +1,72 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
-import { LayoutDashboard, ListTodo, FolderKanban, FileText, AlertTriangle, Bell, MessageSquare, Settings, Calendar } from "lucide-react";
-import { PresenceStatus, WorkMode } from "@/types";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { supabase } from "@/lib/supabase";
+import { Loader2, Briefcase, FileText } from "lucide-react";
 
-const navItems = [
-  { title: "Dashboard", href: "/employee", icon: LayoutDashboard },
-  { title: "My Tasks", href: "/employee/tasks", icon: ListTodo },
-  { title: "Projects", href: "/employee/projects", icon: FolderKanban },
-  { title: "Work Logs", href: "/employee/work-logs", icon: FileText },
-  { title: "Complaints", href: "/employee/complaints", icon: AlertTriangle },
-  { title: "Notifications", href: "/employee/notifications", icon: Bell },
-  { title: "Chat", href: "/employee/chat", icon: MessageSquare },
-  { title: "Settings", href: "/employee/settings", icon: Settings },
-];
+export default function EmployeeProjects() {
+  const [projects, setProjects] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
 
-const mockProjects = [
-  { id: "1", name: "API Integration", description: "Third-party payment gateway", progress: 45, deadline: "2024-04-01", myTasks: 3 },
-  { id: "2", name: "Mobile App Redesign", description: "UI/UX improvements", progress: 75, deadline: "2024-03-15", myTasks: 2 },
-];
-
-export default function Projects() {
-  const [presenceStatus, setPresenceStatus] = useState<PresenceStatus>("offline");
-  const [workMode, setWorkMode] = useState<WorkMode | undefined>(undefined);
-
-  const handlePresenceChange = (status: PresenceStatus, mode?: WorkMode) => { setPresenceStatus(status); setWorkMode(mode); };
+  useEffect(() => {
+    const fetchProjects = async () => {
+      setLoading(true);
+      const { data } = await supabase.from('projects').select('*').order('created_at', { ascending: false });
+      if (data) setProjects(data);
+      setLoading(false);
+    };
+    fetchProjects();
+  }, []);
 
   return (
-    <DashboardLayout role="employee" navItems={navItems} userName="Alice Brown" userEmail="alice.b@company.com" presenceStatus={presenceStatus} workMode={workMode} onPresenceChange={handlePresenceChange}>
-      <div className="page-header">
-        <h1 className="page-title">Projects</h1>
-        <p className="page-description">View projects you're assigned to</p>
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {mockProjects.map((project) => (
-          <Card key={project.id}>
-            <CardHeader>
-              <div className="flex justify-between"><CardTitle>{project.name}</CardTitle><Badge className="bg-status-online/20 text-status-online border-0">Active</Badge></div>
-              <CardDescription>{project.description}</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div><div className="flex justify-between text-sm mb-2"><span>Progress</span><span>{project.progress}%</span></div><Progress value={project.progress} className="h-2" /></div>
-              <div className="flex justify-between text-sm text-muted-foreground">
-                <span className="flex items-center gap-1"><Calendar className="w-4 h-4" />{project.deadline}</span>
-                <span>My Tasks: {project.myTasks}</span>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
+    <DashboardLayout role="employee">
+      <div className="space-y-6 animate-fade-in">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Active Projects</h1>
+          <p className="text-muted-foreground">Read the full project descriptions assigned by the Administrator.</p>
+        </div>
+
+        {loading ? (
+          <div className="flex justify-center p-12"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div>
+        ) : projects.length === 0 ? (
+          <div className="p-12 text-center bg-white border border-dashed rounded-lg shadow-sm">
+            <p className="text-gray-500 font-medium">No active projects found in the database.</p>
+          </div>
+        ) : (
+          <div className="grid gap-6 md:grid-cols-2">
+            {projects.map(project => (
+              <Card key={project.id} className="border-0 shadow-lg bg-white overflow-hidden flex flex-col">
+                <CardHeader className="border-b bg-gradient-to-r from-blue-50 to-white pb-4">
+                  <div className="flex justify-between items-start gap-4">
+                    <CardTitle className="text-xl font-bold text-gray-900">
+                      {project.name}
+                    </CardTitle>
+                    <div className="p-2 bg-blue-100 rounded-lg shrink-0 shadow-sm">
+                      <Briefcase className="w-5 h-5 text-blue-600" />
+                    </div>
+                  </div>
+                  <span className={`inline-block px-3 py-1 text-xs font-black rounded-full w-fit mt-2 uppercase tracking-wider ${
+                    project.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700'
+                  }`}>
+                    {project.status}
+                  </span>
+                </CardHeader>
+                <CardContent className="pt-6 flex-1 bg-slate-50/30">
+                  <div className="flex items-center gap-2 mb-3">
+                    <FileText className="w-5 h-5 text-blue-500" />
+                    <h4 className="text-sm font-bold text-gray-800 uppercase tracking-wider">Complete Project Description</h4>
+                  </div>
+                  <div className="p-4 bg-white border border-gray-100 rounded-lg shadow-sm">
+                    {/* FLAW 4 FIXED: Displays the full, exact description written by the Admin */}
+                    <p className="text-gray-700 leading-relaxed whitespace-pre-wrap">
+                      {project.description || "The administrator has not provided a description for this project yet."}
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
       </div>
     </DashboardLayout>
   );

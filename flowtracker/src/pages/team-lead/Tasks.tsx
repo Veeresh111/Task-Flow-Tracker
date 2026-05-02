@@ -1,267 +1,140 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
-import { StatusBadge } from "@/components/ui/status-badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  LayoutDashboard,
-  Users,
-  CheckCircle2,
-  FolderKanban,
-  ListTodo,
-  AlertTriangle,
-  BarChart3,
-  Bell,
-  MessageSquare,
-  Settings,
-  Plus,
-  Search,
-} from "lucide-react";
-import { PresenceStatus, WorkMode } from "@/types";
-
-const navItems = [
-  { title: "Dashboard", href: "/team_lead", icon: LayoutDashboard },
-  { title: "My Team", href: "/team_lead/my-team", icon: Users },
-  { title: "Approvals", href: "/team_lead/approvals", icon: CheckCircle2 },
-  { title: "Projects", href: "/team_lead/projects", icon: FolderKanban },
-  { title: "Tasks", href: "/team_lead/tasks", icon: ListTodo },
-  { title: "Complaints", href: "/team_lead/complaints", icon: AlertTriangle },
-  { title: "Analytics", href: "/team_lead/analytics", icon: BarChart3 },
-  { title: "Notifications", href: "/team_lead/notifications", icon: Bell },
-  { title: "Chat", href: "/team_lead/chat", icon: MessageSquare },
-  { title: "Settings", href: "/team_lead/settings", icon: Settings },
-];
-
-const mockTasks = [
-  { id: "1", title: "Complete API Documentation", project: "API Integration", assignee: "Alice Brown", status: "in_progress" as const, priority: "high", deadline: "2024-02-18", hoursSpent: 8 },
-  { id: "2", title: "Fix Login Bug", project: "Mobile App Redesign", assignee: "Bob Martin", status: "completed" as const, priority: "high", deadline: "2024-02-15", hoursSpent: 4 },
-  { id: "3", title: "Database Optimization", project: "Performance Optimization", assignee: "Carol White", status: "blocked" as const, priority: "medium", deadline: "2024-02-20", hoursSpent: 12 },
-  { id: "4", title: "UI Component Library", project: "Mobile App Redesign", assignee: "David Lee", status: "not_started" as const, priority: "low", deadline: "2024-02-25", hoursSpent: 0 },
-  { id: "5", title: "Payment Integration", project: "API Integration", assignee: "Eva Garcia", status: "in_progress" as const, priority: "high", deadline: "2024-02-22", hoursSpent: 6 },
-];
+import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/lib/supabase";
+import { Loader2, Plus, CheckSquare } from "lucide-react";
 
 export default function Tasks() {
-  const [presenceStatus, setPresenceStatus] = useState<PresenceStatus>("offline");
-  const [workMode, setWorkMode] = useState<WorkMode | undefined>(undefined);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
+  const { toast } = useToast();
+  const [tasks, setTasks] = useState<any[]>([]);
+  const [projects, setProjects] = useState<any[]>([]);
+  const [employees, setEmployees] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showAdd, setShowAdd] = useState(false);
+  const [formData, setFormData] = useState({ title: '', description: '', project_id: '', assigned_to: '', status: 'pending' });
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handlePresenceChange = (status: PresenceStatus, mode?: WorkMode) => {
-    setPresenceStatus(status);
-    setWorkMode(mode);
+  const fetchEverything = async () => {
+    setLoading(true);
+    // Fetch real data simultaneously
+    const [taskRes, projRes, empRes] = await Promise.all([
+      supabase.from('tasks').select('*, profiles(name), projects(name)').order('created_at', { ascending: false }),
+      supabase.from('projects').select('id, name'),
+      supabase.from('profiles').select('id, name').eq('role', 'employee')
+    ]);
+    
+    if (taskRes.data) setTasks(taskRes.data);
+    if (projRes.data) setProjects(projRes.data);
+    if (empRes.data) setEmployees(empRes.data);
+    setLoading(false);
   };
 
-  const filteredTasks = mockTasks.filter(
-    (task) =>
-      task.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      task.assignee.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  useEffect(() => { fetchEverything(); }, []);
 
-  const getPriorityBadge = (priority: string) => {
-    switch (priority) {
-      case "high":
-        return <Badge variant="destructive">High</Badge>;
-      case "medium":
-        return <Badge className="bg-status-pending/20 text-status-pending border-0">Medium</Badge>;
-      case "low":
-        return <Badge variant="secondary">Low</Badge>;
-      default:
-        return null;
+  // REAL BUTTON CONNECTION: Creates task and assigns it to employee in DB
+  const handleAddTask = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSubmitting(true);
+    try {
+      const { error } = await supabase.from('tasks').insert([{
+        title: formData.title,
+        description: formData.description,
+        project_id: formData.project_id || null,
+        assigned_to: formData.assigned_to || null,
+        status: 'pending'
+      }]);
+      if (error) throw error;
+      toast({ title: "Task Assigned Successfully!" });
+      setShowAdd(false);
+      setFormData({ title: '', description: '', project_id: '', assigned_to: '', status: 'pending' });
+      fetchEverything();
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   return (
-    <DashboardLayout
-      role="team_lead"
-      navItems={navItems}
-      userName="John Smith"
-      userEmail="john.smith@company.com"
-      presenceStatus={presenceStatus}
-      workMode={workMode}
-      onPresenceChange={handlePresenceChange}
-    >
-      <div className="page-header">
-        <h1 className="page-title">Tasks</h1>
-        <p className="page-description">Create and manage tasks for your team</p>
-      </div>
-
-      {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-        <Card>
-          <CardContent className="pt-6">
-            <div className="text-2xl font-bold">{mockTasks.length}</div>
-            <p className="text-sm text-muted-foreground">Total Tasks</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <div className="text-2xl font-bold text-status-in-progress">
-              {mockTasks.filter((t) => t.status === "in_progress").length}
-            </div>
-            <p className="text-sm text-muted-foreground">In Progress</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <div className="text-2xl font-bold text-status-completed">
-              {mockTasks.filter((t) => t.status === "completed").length}
-            </div>
-            <p className="text-sm text-muted-foreground">Completed</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <div className="text-2xl font-bold text-status-blocked">
-              {mockTasks.filter((t) => t.status === "blocked").length}
-            </div>
-            <p className="text-sm text-muted-foreground">Blocked</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Actions */}
-      <div className="flex items-center justify-between mb-6">
-        <div className="relative w-80">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <Input
-            placeholder="Search tasks..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-10"
-          />
+    <DashboardLayout role="team_lead">
+      <div className="space-y-6">
+        <div className="flex justify-between items-center">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">Task Delegation</h1>
+            <p className="text-muted-foreground">Assign tasks to your team members.</p>
+          </div>
+          <Button onClick={() => setShowAdd(!showAdd)} className="bg-blue-600 text-white">
+            <Plus className="w-4 h-4 mr-2" /> {showAdd ? "Cancel" : "Assign Task"}
+          </Button>
         </div>
 
-        <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
-          <DialogTrigger asChild>
-            <Button className="gradient-primary text-white">
-              <Plus className="w-4 h-4 mr-2" />
-              Create Task
-            </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Create New Task</DialogTitle>
-              <DialogDescription>
-                Assign a new task to a team member.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4 py-4">
-              <div className="space-y-2">
-                <Label htmlFor="taskTitle">Task Title</Label>
-                <Input id="taskTitle" placeholder="Enter task title" />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="description">Description</Label>
-                <Textarea id="description" placeholder="Describe the task" />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
+        {showAdd && (
+          <Card className="bg-blue-50/30 border-blue-200">
+            <CardHeader><CardTitle>Create & Assign Task</CardTitle></CardHeader>
+            <CardContent>
+              <form onSubmit={handleAddTask} className="grid grid-cols-2 gap-4">
+                <div className="space-y-2 col-span-2">
+                  <Label>Task Title</Label>
+                  <Input required placeholder="e.g. Design Login Screen" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})} />
+                </div>
+                <div className="space-y-2 col-span-2">
+                  <Label>Instructions</Label>
+                  <Input placeholder="Details..." value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})} />
+                </div>
                 <div className="space-y-2">
-                  <Label>Assignee</Label>
-                  <Select>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select member" />
-                    </SelectTrigger>
+                  <Label>Link to Project</Label>
+                  <Select onValueChange={val => setFormData({...formData, project_id: val})}>
+                    <SelectTrigger><SelectValue placeholder="Select Project" /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="alice">Alice Brown</SelectItem>
-                      <SelectItem value="bob">Bob Martin</SelectItem>
-                      <SelectItem value="carol">Carol White</SelectItem>
+                      {projects.map(p => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <Label>Priority</Label>
-                  <Select>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select priority" />
-                    </SelectTrigger>
+                  <Label>Assign To Employee</Label>
+                  <Select onValueChange={val => setFormData({...formData, assigned_to: val})}>
+                    <SelectTrigger><SelectValue placeholder="Select Employee" /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="high">High</SelectItem>
-                      <SelectItem value="medium">Medium</SelectItem>
-                      <SelectItem value="low">Low</SelectItem>
+                      {employees.map(e => <SelectItem key={e.id} value={e.id}>{e.name}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="deadline">Deadline</Label>
-                <Input id="deadline" type="date" />
-              </div>
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setIsAddDialogOpen(false)}>
-                Cancel
-              </Button>
-              <Button className="gradient-primary text-white" onClick={() => setIsAddDialogOpen(false)}>
-                Create Task
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      </div>
+                <Button type="submit" disabled={isSubmitting} className="col-span-2 bg-blue-600 text-white mt-2">
+                  {isSubmitting ? <Loader2 className="animate-spin w-4 h-4 mr-2" /> : <CheckSquare className="w-4 h-4 mr-2" />}
+                  Assign Task Now
+                </Button>
+              </form>
+            </CardContent>
+          </Card>
+        )}
 
-      {/* Table */}
-      <Card>
-        <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Task</TableHead>
-                <TableHead>Project</TableHead>
-                <TableHead>Assignee</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Priority</TableHead>
-                <TableHead>Deadline</TableHead>
-                <TableHead>Hours</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filteredTasks.map((task) => (
-                <TableRow key={task.id} className="data-table-row">
-                  <TableCell className="font-medium">{task.title}</TableCell>
-                  <TableCell className="text-muted-foreground">{task.project}</TableCell>
-                  <TableCell>{task.assignee}</TableCell>
-                  <TableCell>
-                    <StatusBadge status={task.status} />
-                  </TableCell>
-                  <TableCell>{getPriorityBadge(task.priority)}</TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {new Date(task.deadline).toLocaleDateString()}
-                  </TableCell>
-                  <TableCell>{task.hoursSpent}h</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+        <Card>
+          <CardHeader><CardTitle>All Team Tasks</CardTitle></CardHeader>
+          <CardContent>
+            {loading ? <div className="p-8 text-center"><Loader2 className="animate-spin w-6 h-6 mx-auto text-blue-600" /></div> : tasks.length === 0 ? <p className="text-center text-gray-500 p-8">No tasks assigned yet.</p> : (
+              <Table>
+                <TableHeader><TableRow><TableHead>Task</TableHead><TableHead>Project</TableHead><TableHead>Assigned To</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
+                <TableBody>
+                  {tasks.map(t => (
+                    <TableRow key={t.id}>
+                      <TableCell className="font-bold">{t.title}</TableCell>
+                      <TableCell>{t.projects?.name || "Unlinked"}</TableCell>
+                      <TableCell className="text-blue-600 font-medium">{t.profiles?.name || "Unassigned"}</TableCell>
+                      <TableCell><span className="px-3 py-1 bg-yellow-100 text-yellow-800 rounded-full text-xs font-bold uppercase">{t.status}</span></TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+      </div>
     </DashboardLayout>
   );
 }

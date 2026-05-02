@@ -1,74 +1,104 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
-import { StatusBadge } from "@/components/ui/status-badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
-import { LayoutDashboard, ListTodo, FolderKanban, FileText, AlertTriangle, Bell, MessageSquare, Settings } from "lucide-react";
-import { PresenceStatus, WorkMode } from "@/types";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/lib/supabase";
+import { Loader2, CheckSquare } from "lucide-react";
 
-const navItems = [
-  { title: "Dashboard", href: "/employee", icon: LayoutDashboard },
-  { title: "My Tasks", href: "/employee/tasks", icon: ListTodo },
-  { title: "Projects", href: "/employee/projects", icon: FolderKanban },
-  { title: "Work Logs", href: "/employee/work-logs", icon: FileText },
-  { title: "Complaints", href: "/employee/complaints", icon: AlertTriangle },
-  { title: "Notifications", href: "/employee/notifications", icon: Bell },
-  { title: "Chat", href: "/employee/chat", icon: MessageSquare },
-  { title: "Settings", href: "/employee/settings", icon: Settings },
-];
+export default function EmployeeTasks() {
+  const { toast } = useToast();
+  const [tasks, setTasks] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
 
-const mockTasks = [
-  { id: "1", title: "Complete API Documentation", project: "API Integration", status: "in_progress" as const, progress: 60, deadline: "2024-02-18", hoursSpent: 8 },
-  { id: "2", title: "Fix Login Bug", project: "Mobile App", status: "completed" as const, progress: 100, deadline: "2024-02-15", hoursSpent: 4 },
-  { id: "3", title: "Database Optimization", project: "Performance", status: "not_started" as const, progress: 0, deadline: "2024-02-20", hoursSpent: 0 },
-];
+  const fetchMyTasks = async () => {
+    setLoading(true);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      // REAL DATA: Fetch only tasks assigned to this specific employee
+      const { data, error } = await supabase
+        .from('tasks')
+        .select('*, projects(name)')
+        .eq('assigned_to', user.id)
+        .order('created_at', { ascending: false });
+        
+      if (!error && data) setTasks(data);
+    }
+    setLoading(false);
+  };
 
-export default function Tasks() {
-  const [presenceStatus, setPresenceStatus] = useState<PresenceStatus>("offline");
-  const [workMode, setWorkMode] = useState<WorkMode | undefined>(undefined);
+  useEffect(() => { fetchMyTasks(); }, []);
 
-  const handlePresenceChange = (status: PresenceStatus, mode?: WorkMode) => {
-    setPresenceStatus(status);
-    setWorkMode(mode);
+  // REAL CONNECTION: Updates the task status in the database instantly
+  const updateTaskStatus = async (taskId: string, newStatus: string) => {
+    try {
+      const { error } = await supabase.from('tasks').update({ status: newStatus }).eq('id', taskId);
+      if (error) throw error;
+      
+      setTasks(tasks.map(t => t.id === taskId ? { ...t, status: newStatus } : t));
+      toast({ title: "Status Updated", description: "Your progress has been saved." });
+    } catch (err: any) {
+      toast({ title: "Update Failed", description: err.message, variant: "destructive" });
+    }
   };
 
   return (
-    <DashboardLayout role="employee" navItems={navItems} userName="Alice Brown" userEmail="alice.b@company.com" presenceStatus={presenceStatus} workMode={workMode} onPresenceChange={handlePresenceChange}>
-      <div className="page-header">
-        <h1 className="page-title">My Tasks</h1>
-        <p className="page-description">View and update your assigned tasks</p>
-      </div>
+    <DashboardLayout role="employee">
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">My Assignments</h1>
+          <p className="text-muted-foreground">Manage and update the tasks assigned to you by your Team Lead.</p>
+        </div>
 
-      <div className="space-y-4">
-        {mockTasks.map((task) => (
-          <Card key={task.id}>
-            <CardContent className="p-6">
-              <div className="flex items-start justify-between mb-4">
-                <div>
-                  <h3 className="font-semibold text-lg">{task.title}</h3>
-                  <p className="text-sm text-muted-foreground">Project: {task.project}</p>
-                </div>
-                <StatusBadge status={task.status} />
+        <Card className="border-0 shadow-lg">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <CheckSquare className="w-5 h-5 text-blue-600" /> Task List
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {loading ? (
+              <div className="p-8 flex justify-center"><Loader2 className="w-6 h-6 animate-spin text-blue-600" /></div>
+            ) : tasks.length === 0 ? (
+              <div className="p-12 text-center bg-gray-50 border-2 border-dashed rounded-lg">
+                <p className="text-gray-500 font-medium">You have no tasks assigned yet.</p>
               </div>
-              <div className="mb-4">
-                <div className="flex justify-between text-sm mb-2">
-                  <span>Progress</span>
-                  <span>{task.progress}%</span>
-                </div>
-                <Progress value={task.progress} className="h-2" />
-              </div>
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Deadline: {task.deadline}</span>
-                <span className="text-muted-foreground">Hours: {task.hoursSpent}h</span>
-              </div>
-              <div className="flex gap-2 mt-4">
-                <Button size="sm" variant="outline">Add Work Log</Button>
-                <Button size="sm" className="gradient-primary text-white">Update Status</Button>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Task Title</TableHead>
+                    <TableHead>Description</TableHead>
+                    <TableHead>Project</TableHead>
+                    <TableHead>Update Status</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {tasks.map(task => (
+                    <TableRow key={task.id}>
+                      <TableCell className="font-bold">{task.title}</TableCell>
+                      <TableCell className="text-gray-500">{task.description || "N/A"}</TableCell>
+                      <TableCell>{task.projects?.name || "Unlinked"}</TableCell>
+                      <TableCell>
+                        <Select value={task.status} onValueChange={(val) => updateTaskStatus(task.id, val)}>
+                          <SelectTrigger className="w-[140px]">
+                            <SelectValue placeholder="Status" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="pending">Pending</SelectItem>
+                            <SelectItem value="in_progress">In Progress</SelectItem>
+                            <SelectItem value="completed">Completed</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
       </div>
     </DashboardLayout>
   );
