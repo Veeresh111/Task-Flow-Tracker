@@ -32,19 +32,21 @@ import EmployeeDashboard from "./pages/employee/Dashboard";
 import EmployeeProjects from "./pages/employee/Projects";
 import EmployeeTasks from "./pages/employee/Tasks";
 import EmployeeWorkLogs from "./pages/employee/WorkLogs";
+import EmployeeAnalytics from "./pages/employee/Analytics";
+import EmployeeChat from "./pages/employee/Chat";
 import EmployeeComplaints from "./pages/employee/Complaints";
+import EmployeeNotifications from "./pages/employee/Notifications";
+import EmployeeSettings from "./pages/employee/SettingsPage";
 
 export default function App() {
   return (
     <Router>
       <Routes>
         <Route path="/" element={<Navigate to="/login" replace />} />
-        
-        {/* Auth */}
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
 
-        {/* ADMIN ROUTES - Fully Connected */}
+        {/* ADMIN ROUTES */}
         <Route path="/admin" element={<AdminDashboard />} />
         <Route path="/admin/presence" element={<AdminPresence />} />
         <Route path="/admin/employees" element={<AdminEmployees />} />
@@ -56,7 +58,7 @@ export default function App() {
         <Route path="/admin/notifications" element={<AdminNotifications />} />
         <Route path="/admin/settings" element={<AdminSettings />} />
 
-        {/* TEAM LEAD ROUTES - Fully Connected */}
+        {/* TEAM LEAD ROUTES */}
         <Route path="/team-lead" element={<TeamLeadDashboard />} />
         <Route path="/team-lead/team" element={<TeamLeadMyTeam />} />
         <Route path="/team-lead/projects" element={<TeamLeadProjects />} />
@@ -68,15 +70,18 @@ export default function App() {
         <Route path="/team-lead/notifications" element={<TeamLeadNotifications />} />
         <Route path="/team-lead/settings" element={<TeamLeadSettings />} />
 
-        {/* EMPLOYEE ROUTES - Fully Connected */}
+        {/* EMPLOYEE ROUTES */}
         <Route path="/employee" element={<EmployeeDashboard />} />
+        <Route path="/employee/presence" element={<EmployeeWorkLogs />} /> {/* Employee Presence = Worklogs */}
         <Route path="/employee/projects" element={<EmployeeProjects />} />
         <Route path="/employee/tasks" element={<EmployeeTasks />} />
         <Route path="/employee/worklogs" element={<EmployeeWorkLogs />} />
+        <Route path="/employee/analytics" element={<EmployeeAnalytics />} />
+        <Route path="/employee/chat" element={<EmployeeChat />} />
         <Route path="/employee/complaints" element={<EmployeeComplaints />} />
+        <Route path="/employee/notifications" element={<EmployeeNotifications />} />
+        <Route path="/employee/settings" element={<EmployeeSettings />} />
         
-        {/* If employee clicks missing pages, safely redirect to dashboard */}
-        <Route path="/employee/*" element={<Navigate to="/employee" replace />} />
         <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
       <Toaster />

@@ -1,73 +1,69 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { Label } from "@/components/ui/label";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
-import { LayoutDashboard, ListTodo, FolderKanban, FileText, AlertTriangle, Bell, MessageSquare, Settings, Plus, Clock } from "lucide-react";
-import { PresenceStatus, WorkMode } from "@/types";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { supabase } from "@/lib/supabase";
+import { Clock, Loader2 } from "lucide-react";
 
-const navItems = [
-  { title: "Dashboard", href: "/employee", icon: LayoutDashboard },
-  { title: "My Tasks", href: "/employee/tasks", icon: ListTodo },
-  { title: "Projects", href: "/employee/projects", icon: FolderKanban },
-  { title: "Work Logs", href: "/employee/work-logs", icon: FileText },
-  { title: "Complaints", href: "/employee/complaints", icon: AlertTriangle },
-  { title: "Notifications", href: "/employee/notifications", icon: Bell },
-  { title: "Chat", href: "/employee/chat", icon: MessageSquare },
-  { title: "Settings", href: "/employee/settings", icon: Settings },
-];
+export default function EmployeeWorkLogs() {
+  const [logs, setLogs] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
 
-const mockWorkLogs = [
-  { id: "1", task: "API Documentation", summary: "Completed endpoints section", hours: 3, date: "2024-02-15" },
-  { id: "2", task: "API Documentation", summary: "Added authentication docs", hours: 2, date: "2024-02-14" },
-  { id: "3", task: "Fix Login Bug", summary: "Investigated and fixed token issue", hours: 4, date: "2024-02-14" },
-];
-
-export default function WorkLogs() {
-  const [presenceStatus, setPresenceStatus] = useState<PresenceStatus>("offline");
-  const [workMode, setWorkMode] = useState<WorkMode | undefined>(undefined);
-
-  const handlePresenceChange = (status: PresenceStatus, mode?: WorkMode) => { setPresenceStatus(status); setWorkMode(mode); };
+  useEffect(() => {
+    const fetchLogs = async () => {
+      setLoading(true);
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        // Fetch ONLY this employee's private work logs
+        const { data } = await supabase.from('work_logs').select('*').eq('user_id', user.id).order('clock_in', { ascending: false });
+        if (data) setLogs(data);
+      }
+      setLoading(false);
+    };
+    fetchLogs();
+  }, []);
 
   return (
-    <DashboardLayout role="employee" navItems={navItems} userName="Alice Brown" userEmail="alice.b@company.com" presenceStatus={presenceStatus} workMode={workMode} onPresenceChange={handlePresenceChange}>
-      <div className="flex justify-between items-start mb-6">
-        <div className="page-header mb-0"><h1 className="page-title">Work Logs</h1><p className="page-description">Track your daily work activities</p></div>
-        <Dialog>
-          <DialogTrigger asChild><Button className="gradient-primary text-white"><Plus className="w-4 h-4 mr-2" />Add Work Log</Button></DialogTrigger>
-          <DialogContent>
-            <DialogHeader><DialogTitle>Add Work Log</DialogTitle></DialogHeader>
-            <div className="space-y-4 py-4">
-              <div className="space-y-2"><Label>Task</Label><Input placeholder="Select task" /></div>
-              <div className="space-y-2"><Label>Summary</Label><Textarea placeholder="What did you work on?" /></div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2"><Label>Hours</Label><Input type="number" placeholder="0" /></div>
-                <div className="space-y-2"><Label>Date</Label><Input type="date" /></div>
-              </div>
-            </div>
-            <DialogFooter><Button className="gradient-primary text-white">Save Log</Button></DialogFooter>
-          </DialogContent>
-        </Dialog>
-      </div>
+    <DashboardLayout role="employee">
+      <div className="space-y-6 animate-fade-in">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">My Work Logs</h1>
+          <p className="text-muted-foreground">View your historical presence and exact clocked hours.</p>
+        </div>
 
-      <Card>
-        <CardHeader><CardTitle>Recent Work Logs</CardTitle></CardHeader>
-        <CardContent>
-          <div className="space-y-4">
-            {mockWorkLogs.map((log) => (
-              <div key={log.id} className="p-4 rounded-lg border">
-                <div className="flex justify-between items-start mb-2">
-                  <div><p className="font-medium">{log.task}</p><p className="text-sm text-muted-foreground">{log.summary}</p></div>
-                  <div className="text-right"><p className="font-semibold flex items-center gap-1"><Clock className="w-4 h-4" />{log.hours}h</p><p className="text-xs text-muted-foreground">{log.date}</p></div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
+        <Card className="border-0 shadow-lg">
+          <CardHeader className="flex flex-row items-center gap-2 border-b bg-slate-50 pb-4">
+            <Clock className="w-5 h-5 text-emerald-600" />
+            <CardTitle>Presence History</CardTitle>
+          </CardHeader>
+          <CardContent className="pt-4">
+            {loading ? <div className="flex justify-center p-8"><Loader2 className="w-6 h-6 animate-spin text-emerald-600" /></div> : logs.length === 0 ? <p className="text-center text-gray-500 p-8">You haven't clocked in yet.</p> : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Clock In Timestamp</TableHead>
+                    <TableHead>Clock Out Timestamp</TableHead>
+                    <TableHead>Status</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {logs.map(log => (
+                    <TableRow key={log.id}>
+                      <TableCell className="font-medium text-gray-900">{new Date(log.clock_in).toLocaleString()}</TableCell>
+                      <TableCell className="text-gray-500">{log.clock_out ? new Date(log.clock_out).toLocaleString() : '--'}</TableCell>
+                      <TableCell>
+                        <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase ${log.status === 'Active' ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600'}`}>
+                          {log.status === 'Active' ? 'Clocked In' : 'Clocked Out'}
+                        </span>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+      </div>
     </DashboardLayout>
   );
 }

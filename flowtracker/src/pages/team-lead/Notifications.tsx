@@ -1,117 +1,70 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  LayoutDashboard,
-  Users,
-  CheckCircle2,
-  FolderKanban,
-  ListTodo,
-  AlertTriangle,
-  BarChart3,
-  Bell,
-  MessageSquare,
-  Settings,
-  Clock,
-  CheckCheck,
-} from "lucide-react";
-import { PresenceStatus, WorkMode } from "@/types";
-
-const navItems = [
-  { title: "Dashboard", href: "/team_lead", icon: LayoutDashboard },
-  { title: "My Team", href: "/team_lead/my-team", icon: Users },
-  { title: "Approvals", href: "/team_lead/approvals", icon: CheckCircle2 },
-  { title: "Projects", href: "/team_lead/projects", icon: FolderKanban },
-  { title: "Tasks", href: "/team_lead/tasks", icon: ListTodo },
-  { title: "Complaints", href: "/team_lead/complaints", icon: AlertTriangle },
-  { title: "Analytics", href: "/team_lead/analytics", icon: BarChart3 },
-  { title: "Notifications", href: "/team_lead/notifications", icon: Bell },
-  { title: "Chat", href: "/team_lead/chat", icon: MessageSquare },
-  { title: "Settings", href: "/team_lead/settings", icon: Settings },
-];
-
-const mockNotifications = [
-  { id: "1", title: "New Approval Request", message: "David Lee has requested to join your team", read: false, time: "10m ago" },
-  { id: "2", title: "Task Completed", message: "Bob Martin completed 'Fix Login Bug'", read: false, time: "1h ago" },
-  { id: "3", title: "Project Update", message: "Admin updated the deadline for API Integration", read: true, time: "3h ago" },
-  { id: "4", title: "Complaint Raised", message: "Alice Brown raised a complaint about network issues", read: true, time: "5h ago" },
-];
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { supabase } from "@/lib/supabase";
+import { Bell, Loader2 } from "lucide-react";
 
 export default function Notifications() {
-  const [presenceStatus, setPresenceStatus] = useState<PresenceStatus>("offline");
-  const [workMode, setWorkMode] = useState<WorkMode | undefined>(undefined);
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const handlePresenceChange = (status: PresenceStatus, mode?: WorkMode) => {
-    setPresenceStatus(status);
-    setWorkMode(mode);
-  };
+  const role = window.location.pathname.includes('/admin') ? 'admin' : window.location.pathname.includes('/team-lead') ? 'team_lead' : 'employee';
 
-  const unreadCount = mockNotifications.filter((n) => !n.read).length;
+  useEffect(() => {
+    const fetchNotifications = async () => {
+      setLoading(true);
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const { data } = await supabase.from('notifications').select('*').eq('user_id', user.id).order('created_at', { ascending: false });
+        if (data) setNotifications(data);
+      }
+      setLoading(false);
+    };
+    fetchNotifications();
+  }, []);
 
   return (
-    <DashboardLayout
-      role="team_lead"
-      navItems={navItems}
-      userName="John Smith"
-      userEmail="john.smith@company.com"
-      presenceStatus={presenceStatus}
-      workMode={workMode}
-      onPresenceChange={handlePresenceChange}
-    >
-      <div className="page-header">
-        <h1 className="page-title">Notifications</h1>
-        <p className="page-description">Stay updated with team activities and alerts</p>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-        <Card>
-          <CardContent className="pt-6">
-            <div className="text-2xl font-bold">{mockNotifications.length}</div>
-            <p className="text-sm text-muted-foreground">Total Notifications</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <div className="text-2xl font-bold text-primary">{unreadCount}</div>
-            <p className="text-sm text-muted-foreground">Unread</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Recent Notifications</CardTitle>
-          <CardDescription>Latest updates and alerts</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-4">
-            {mockNotifications.map((notification) => (
-              <div
-                key={notification.id}
-                className={`p-4 rounded-lg border transition-colors ${
-                  notification.read ? "bg-background" : "bg-primary/5 border-primary/20"
-                }`}
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <p className="font-medium">{notification.title}</p>
-                      {!notification.read && (
-                        <span className="w-2 h-2 rounded-full bg-primary" />
-                      )}
-                    </div>
-                    <p className="text-sm text-muted-foreground mt-1">{notification.message}</p>
-                  </div>
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <Clock className="w-3 h-3" />
-                    {notification.time}
-                  </div>
-                </div>
-              </div>
-            ))}
+    <DashboardLayout role={role}>
+      <div className="space-y-6 max-w-4xl mx-auto animate-fade-in">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">Notifications</h1>
+            <p className="text-muted-foreground">Stay updated on your workflow and alerts.</p>
           </div>
-        </CardContent>
-      </Card>
+          <Bell className="w-8 h-8 text-blue-500 opacity-20" />
+        </div>
+
+        <Card className="border-0 shadow-lg">
+          <CardHeader className="bg-slate-50 border-b pb-4">
+            <CardTitle className="text-lg">Recent Alerts</CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            {loading ? (
+              <div className="flex justify-center p-12"><Loader2 className="w-6 h-6 animate-spin text-blue-600" /></div>
+            ) : notifications.length === 0 ? (
+              <div className="p-16 text-center">
+                <div className="w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <Bell className="w-8 h-8 text-blue-300" />
+                </div>
+                <h3 className="text-lg font-semibold text-slate-800">You're all caught up!</h3>
+                <p className="text-slate-500 mt-1">No new notifications in your inbox.</p>
+              </div>
+            ) : (
+              <div className="divide-y">
+                {notifications.map(n => (
+                  <div key={n.id} className="p-4 hover:bg-slate-50 transition-colors flex items-start gap-4">
+                    <div className="mt-1"><div className={`w-2 h-2 rounded-full ${n.is_read ? 'bg-gray-300' : 'bg-blue-600'}`} /></div>
+                    <div>
+                      <p className={`text-sm ${n.is_read ? 'text-gray-600' : 'font-semibold text-gray-900'}`}>{n.message}</p>
+                      <span className="text-xs text-gray-400">{new Date(n.created_at).toLocaleString()}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
     </DashboardLayout>
   );
 }

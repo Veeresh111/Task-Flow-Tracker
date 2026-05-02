@@ -1,160 +1,134 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
-import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
-import { Separator } from "@/components/ui/separator";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import {
-  LayoutDashboard,
-  Users,
-  CheckCircle2,
-  FolderKanban,
-  ListTodo,
-  AlertTriangle,
-  BarChart3,
-  Bell,
-  MessageSquare,
-  Settings,
-  Camera,
-} from "lucide-react";
-import { PresenceStatus, WorkMode } from "@/types";
-
-const navItems = [
-  { title: "Dashboard", href: "/team_lead", icon: LayoutDashboard },
-  { title: "My Team", href: "/team_lead/my-team", icon: Users },
-  { title: "Approvals", href: "/team_lead/approvals", icon: CheckCircle2 },
-  { title: "Projects", href: "/team_lead/projects", icon: FolderKanban },
-  { title: "Tasks", href: "/team_lead/tasks", icon: ListTodo },
-  { title: "Complaints", href: "/team_lead/complaints", icon: AlertTriangle },
-  { title: "Analytics", href: "/team_lead/analytics", icon: BarChart3 },
-  { title: "Notifications", href: "/team_lead/notifications", icon: Bell },
-  { title: "Chat", href: "/team_lead/chat", icon: MessageSquare },
-  { title: "Settings", href: "/team_lead/settings", icon: Settings },
-];
+import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/lib/supabase";
+import { Loader2, Upload, User, Save } from "lucide-react";
 
 export default function SettingsPage() {
-  const [presenceStatus, setPresenceStatus] = useState<PresenceStatus>("offline");
-  const [workMode, setWorkMode] = useState<WorkMode | undefined>(undefined);
-  const [emailNotifications, setEmailNotifications] = useState(true);
-  const [pushNotifications, setPushNotifications] = useState(true);
+  const { toast } = useToast();
+  const [loading, setLoading] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [profile, setProfile] = useState<any>(null);
+  const [formData, setFormData] = useState({ name: '', phone: '' });
 
-  const handlePresenceChange = (status: PresenceStatus, mode?: WorkMode) => {
-    setPresenceStatus(status);
-    setWorkMode(mode);
+  // Magic Universal Role Detector
+  const role = window.location.pathname.includes('/admin') ? 'admin' : window.location.pathname.includes('/team-lead') ? 'team_lead' : 'employee';
+
+  useEffect(() => {
+    const fetchProfile = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const { data } = await supabase.from('profiles').select('*').eq('id', user.id).single();
+        if (data) {
+          setProfile(data);
+          setFormData({ name: data.name || '', phone: data.phone || '' });
+        }
+      }
+    };
+    fetchProfile();
+  }, []);
+
+  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    try {
+      setUploading(true);
+      if (!e.target.files || e.target.files.length === 0 || !profile) return;
+      
+      const file = e.target.files[0];
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${profile.id}-${Math.random()}.${fileExt}`;
+
+      // Upload to Supabase Storage
+      const { error: uploadError } = await supabase.storage.from('avatars').upload(fileName, file);
+      if (uploadError) throw uploadError;
+
+      // Get public URL and save to database
+      const { data } = supabase.storage.from('avatars').getPublicUrl(fileName);
+      await supabase.from('profiles').update({ avatar_url: data.publicUrl }).eq('id', profile.id);
+
+      setProfile({ ...profile, avatar_url: data.publicUrl });
+      toast({ title: "Profile Photo Updated!" });
+    } catch (err: any) {
+      toast({ title: "Upload Failed", description: err.message, variant: "destructive" });
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleSaveDetails = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      const { error } = await supabase.from('profiles').update({ name: formData.name, phone: formData.phone }).eq('id', profile.id);
+      if (error) throw error;
+      toast({ title: "Settings Saved", description: "Your profile has been successfully updated." });
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
-    <DashboardLayout
-      role="team_lead"
-      navItems={navItems}
-      userName="John Smith"
-      userEmail="john.smith@company.com"
-      presenceStatus={presenceStatus}
-      workMode={workMode}
-      onPresenceChange={handlePresenceChange}
-    >
-      <div className="page-header">
-        <h1 className="page-title">Settings</h1>
-        <p className="page-description">Manage your account and preferences</p>
-      </div>
+    <DashboardLayout role={role}>
+      <div className="space-y-6 max-w-3xl mx-auto animate-fade-in">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Account Settings</h1>
+          <p className="text-muted-foreground">Manage your personal information and profile picture.</p>
+        </div>
 
-      <div className="max-w-2xl space-y-6">
-        {/* Profile Settings */}
-        <Card>
+        <Card className="shadow-lg border-0">
           <CardHeader>
-            <CardTitle>Profile</CardTitle>
-            <CardDescription>Update your personal information</CardDescription>
+            <CardTitle>Profile Picture</CardTitle>
+            <CardDescription>Upload a professional photo to be recognized by your team.</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="flex items-center gap-6">
-              <div className="relative">
-                <Avatar className="w-20 h-20">
-                  <AvatarFallback className="bg-primary text-primary-foreground text-xl">
-                    JS
-                  </AvatarFallback>
-                </Avatar>
-                <button className="absolute bottom-0 right-0 p-1.5 rounded-full bg-primary text-primary-foreground">
-                  <Camera className="w-3 h-3" />
-                </button>
-              </div>
-              <div>
-                <p className="font-medium">John Smith</p>
-                <p className="text-sm text-muted-foreground">john.smith@company.com</p>
-              </div>
+          <CardContent className="flex items-center gap-6">
+            <div className="w-24 h-24 rounded-full bg-slate-100 overflow-hidden border-4 border-white shadow-md flex shrink-0">
+              {profile?.avatar_url ? (
+                <img src={profile.avatar_url} alt="Profile" className="w-full h-full object-cover" />
+              ) : (
+                <User className="w-12 h-12 m-auto text-slate-300" />
+              )}
             </div>
-
-            <Separator />
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="firstName">First Name</Label>
-                <Input id="firstName" defaultValue="John" />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="lastName">Last Name</Label>
-                <Input id="lastName" defaultValue="Smith" />
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <Input id="email" type="email" defaultValue="john.smith@company.com" />
-            </div>
-
-            <Button className="gradient-primary text-white">Save Changes</Button>
-          </CardContent>
-        </Card>
-
-        {/* Notification Settings */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Notifications</CardTitle>
-            <CardDescription>Configure your notification preferences</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="font-medium">Email Notifications</p>
-                <p className="text-sm text-muted-foreground">Receive email updates about activity</p>
-              </div>
-              <Switch checked={emailNotifications} onCheckedChange={setEmailNotifications} />
-            </div>
-
-            <Separator />
-
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="font-medium">Push Notifications</p>
-                <p className="text-sm text-muted-foreground">Receive push notifications in browser</p>
-              </div>
-              <Switch checked={pushNotifications} onCheckedChange={setPushNotifications} />
+            <div>
+              <Label htmlFor="photo-upload" className="cursor-pointer inline-flex items-center gap-2 bg-white border border-slate-200 px-4 py-2 rounded-md hover:bg-slate-50 transition-colors shadow-sm font-medium text-sm">
+                {uploading ? <Loader2 className="w-4 h-4 animate-spin text-blue-600" /> : <Upload className="w-4 h-4 text-blue-600" />}
+                {uploading ? "Uploading Image..." : "Upload New Photo"}
+              </Label>
+              <Input id="photo-upload" type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} disabled={uploading} />
+              <p className="text-xs text-muted-foreground mt-2">JPG, PNG or GIF. Max size 2MB.</p>
             </div>
           </CardContent>
         </Card>
 
-        {/* Security */}
-        <Card>
+        <Card className="shadow-lg border-0">
           <CardHeader>
-            <CardTitle>Security</CardTitle>
-            <CardDescription>Manage your password</CardDescription>
+            <CardTitle>Personal Information</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="currentPassword">Current Password</Label>
-              <Input id="currentPassword" type="password" />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="newPassword">New Password</Label>
-              <Input id="newPassword" type="password" />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="confirmPassword">Confirm New Password</Label>
-              <Input id="confirmPassword" type="password" />
-            </div>
-            <Button variant="outline">Update Password</Button>
+          <CardContent>
+            <form onSubmit={handleSaveDetails} className="space-y-4">
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label>Full Name</Label>
+                  <Input required value={formData.name} onChange={(e) => setFormData({...formData, name: e.target.value})} />
+                </div>
+                <div className="space-y-2">
+                  <Label>Phone Number</Label>
+                  <Input value={formData.phone} onChange={(e) => setFormData({...formData, phone: e.target.value})} />
+                </div>
+                <div className="space-y-2 md:col-span-2">
+                  <Label>Email Address (Read Only)</Label>
+                  <Input disabled value={profile?.email || ""} className="bg-slate-50" />
+                </div>
+              </div>
+              <Button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white mt-4" disabled={loading}>
+                {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
+                Save Changes
+              </Button>
+            </form>
           </CardContent>
         </Card>
       </div>

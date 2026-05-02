@@ -7,7 +7,7 @@ import { Loader2, TrendingUp, Users, CheckSquare } from "lucide-react";
 
 const COLORS = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444'];
 
-export default function TeamLeadAnalytics() {
+export default function EmployeeAnalytics() {
   const [loading, setLoading] = useState(true);
   const [taskData, setTaskData] = useState<any[]>([]);
   const [roleData, setRoleData] = useState<any[]>([]);
@@ -60,7 +60,7 @@ export default function TeamLeadAnalytics() {
   }, []);
 
   return (
-    <DashboardLayout role="team_lead">
+    <DashboardLayout role="employee">
       <div className="space-y-6 animate-fade-in">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Real-Time Analytics</h1>
