@@ -14,7 +14,7 @@ import AdminComplaints from "./pages/admin/Complaints";
 import AdminPresence from "./pages/admin/Presence";
 import AdminNotifications from "./pages/admin/Notifications";
 import AdminSettings from "./pages/admin/SettingsPage";
-import AdminApprovals from "./pages/admin/approvals"; // FIXED: Exact lowercase match
+import AdminApprovals from "./pages/admin/Approvals"; // FIXED: Restored to Capital A
 
 // Team Lead Pages
 import TeamLeadDashboard from "./pages/team-lead/Dashboard";
@@ -24,7 +24,7 @@ import TeamLeadTasks from "./pages/team-lead/Tasks";
 import TeamLeadAnalytics from "./pages/team-lead/Analytics";
 import TeamLeadChat from "./pages/team-lead/Chat";
 import TeamLeadComplaints from "./pages/team-lead/Complaints";
-import TeamLeadApprovals from "./pages/team-lead/approvals"; // FIXED: Exact lowercase match
+import TeamLeadApprovals from "./pages/team-lead/Approvals"; // FIXED: Restored to Capital A
 import TeamLeadNotifications from "./pages/team-lead/Notifications";
 import TeamLeadSettings from "./pages/team-lead/SettingsPage";
 import TeamLeadLeaves from "./pages/team-lead/leaves"; 
