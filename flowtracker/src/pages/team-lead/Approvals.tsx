@@ -5,29 +5,35 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabase";
-import { CheckCircle, Loader2 } from "lucide-react";
+import { Loader2, CheckCircle, XCircle, Calendar, User } from "lucide-react";
 
-export default function Approvals() {
+export default function TeamLeadApprovals() {
   const { toast } = useToast();
-  const [tasks, setTasks] = useState<any[]>([]);
+  const [leaves, setLeaves] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-
-  const fetchApprovals = async () => {
-    setLoading(true);
-    // Find tasks that employees have marked as "Completed" awaiting final approval
-    const { data } = await supabase.from('tasks').select('*, profiles(name), projects(name)').eq('status', 'completed').order('created_at', { ascending: false });
-    if (data) setTasks(data);
-    setLoading(false);
-  };
 
   useEffect(() => { fetchApprovals(); }, []);
 
-  const handleApprove = async (id: string) => {
+  const fetchApprovals = async () => {
+    setLoading(true);
+    // LOGIC FIX: Inner join explicitly asking for ONLY 'EMPLOYEE' roles!
+    const { data, error } = await supabase
+      .from('leaves')
+      .select('*, profiles!inner(name, email, role)')
+      .eq('status', 'Pending')
+      .eq('profiles.role', 'EMPLOYEE') // The Magic Line that prevents TLs seeing their own leaves
+      .order('created_at', { ascending: false });
+
+    if (!error && data) setLeaves(data);
+    setLoading(false);
+  };
+
+  const handleDecision = async (id: string, decision: 'Approved' | 'Rejected') => {
     try {
-      const { error } = await supabase.from('tasks').update({ status: 'approved_by_lead' }).eq('id', id);
+      const { error } = await supabase.from('leaves').update({ status: decision }).eq('id', id);
       if (error) throw error;
-      toast({ title: "Task Approved!" });
-      setTasks(tasks.filter(t => t.id !== id));
+      toast({ title: `Leave ${decision}`, variant: decision === 'Approved' ? "default" : "destructive" });
+      setLeaves(leaves.filter(l => l.id !== id));
     } catch (err: any) {
       toast({ title: "Error", description: err.message, variant: "destructive" });
     }
@@ -35,37 +41,23 @@ export default function Approvals() {
 
   return (
     <DashboardLayout role="team_lead">
-      <div className="space-y-6 animate-fade-in">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Task Approvals</h1>
-          <p className="text-muted-foreground">Review and approve tasks marked as Completed by your team.</p>
-        </div>
-
-        <Card className="border-0 shadow-lg">
-          <CardHeader className="bg-amber-50 border-b pb-4">
-            <CardTitle className="text-lg text-amber-900">Awaiting Lead Approval</CardTitle>
-          </CardHeader>
-          <CardContent className="pt-4">
-            {loading ? <div className="flex justify-center p-8"><Loader2 className="w-6 h-6 animate-spin text-amber-600" /></div> : tasks.length === 0 ? <p className="text-center text-gray-500 p-8">No completed tasks are pending approval right now.</p> : (
-              <Table>
-                <TableHeader>
-                  <TableRow><TableHead>Task</TableHead><TableHead>Employee</TableHead><TableHead>Project</TableHead><TableHead>Action</TableHead></TableRow>
-                </TableHeader>
-                <TableBody>
-                  {tasks.map(task => (
-                    <TableRow key={task.id}>
-                      <TableCell className="font-bold">{task.title}</TableCell>
-                      <TableCell className="text-blue-600 font-medium">{task.profiles?.name || 'Unknown'}</TableCell>
-                      <TableCell className="text-gray-500">{task.projects?.name || 'N/A'}</TableCell>
-                      <TableCell>
-                        <Button onClick={() => handleApprove(task.id)} size="sm" className="bg-emerald-500 hover:bg-emerald-600 text-white">
-                          <CheckCircle className="w-4 h-4 mr-2" /> Approve Task
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+      <div className="max-w-6xl mx-auto space-y-6 animate-fade-in pb-12">
+        <div><h1 className="text-3xl font-bold tracking-tight text-slate-900">Team Approvals Inbox</h1><p className="text-slate-500 mt-1">Review pending leave requests from your employees.</p></div>
+        <Card className="shadow-sm border-slate-200">
+          <CardHeader className="border-b bg-amber-50/50"><CardTitle className="text-lg text-amber-800 flex items-center gap-2"><Calendar className="w-5 h-5" /> Pending Employee Leaves ({leaves.length})</CardTitle></CardHeader>
+          <CardContent className="p-0">
+            {loading ? <div className="flex justify-center p-12"><Loader2 className="w-8 h-8 animate-spin text-amber-600" /></div> : leaves.length === 0 ? <div className="p-12 text-center text-slate-500 font-medium">You are all caught up!</div> : (
+              <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Employee</TableHead><TableHead>Leave Type</TableHead><TableHead>Dates</TableHead><TableHead>Reason</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader><TableBody>
+                {leaves.map(l => (
+                  <TableRow key={l.id}>
+                    <TableCell className="font-medium"><div className="flex items-center gap-2"><User className="w-4 h-4 text-slate-400" />{l.profiles?.name}</div></TableCell>
+                    <TableCell><span className="bg-slate-100 px-2 py-1 rounded text-xs font-bold text-slate-600">{l.leave_type}</span></TableCell>
+                    <TableCell className="text-sm text-slate-600 font-medium">{l.start_date} to {l.end_date}</TableCell>
+                    <TableCell className="text-sm text-slate-500 max-w-[200px] truncate" title={l.reason}>{l.reason}</TableCell>
+                    <TableCell className="text-right"><div className="flex justify-end gap-2"><Button onClick={() => handleDecision(l.id, 'Approved')} className="bg-green-600 hover:bg-green-700 text-white h-8 text-xs"><CheckCircle className="w-3 h-3 mr-1" /> Approve</Button><Button onClick={() => handleDecision(l.id, 'Rejected')} variant="destructive" className="h-8 text-xs"><XCircle className="w-3 h-3 mr-1" /> Reject</Button></div></TableCell>
+                  </TableRow>
+                ))}
+              </TableBody></Table></div>
             )}
           </CardContent>
         </Card>

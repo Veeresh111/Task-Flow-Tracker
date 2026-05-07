@@ -1,82 +1,104 @@
 import { useState, useEffect } from "react";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabase";
+import { Loader2, UserCircle, UserX, ShieldAlert } from "lucide-react";
 
-export default function TeamLeads() {
+export default function AdminTeamLeads() {
   const { toast } = useToast();
   const [teamLeads, setTeamLeads] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const fetchTeamLeads = async () => {
-      try {
-        setIsLoading(true);
-        // ONLY fetch users who have been promoted to team_lead
-        const { data, error } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('role', 'team_lead')
-          .order('created_at', { ascending: false });
-          
-        if (error) throw error;
-        setTeamLeads(data || []);
-      } catch (error: any) {
-        toast({ title: "Database Error", description: error.message, variant: "destructive" });
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    fetchTeamLeads();
-  }, [toast]);
+    fetchData();
+  }, []);
+
+  const fetchData = async () => {
+    setLoading(true);
+    const { data, error } = await supabase.from('profiles').select('*').order('name', { ascending: true });
+    
+    if (!error && data) {
+      // Filter dynamically to avoid case-sensitivity bugs
+      const tls = data.filter(p => p.role && (p.role.toUpperCase() === 'TEAM_LEAD' || p.role.toUpperCase() === 'TL'));
+      setTeamLeads(tls);
+    }
+    setLoading(false);
+  };
+
+  // TERMINATION LOGIC
+  const handleTerminate = async (id: string, name: string) => {
+    if (!window.confirm(`CRITICAL WARNING: Are you absolutely sure you want to terminate Manager ${name}? \n\nNote: Employees assigned to this manager will need to be reassigned.`)) return;
+    
+    setLoading(true);
+    try {
+      // Archiving them triggers the firewall in DashboardLayout to kick them out
+      const { error } = await supabase.from('profiles').update({ role: 'ARCHIVED' }).eq('id', id);
+      if (error) throw error;
+      toast({ title: "Manager Terminated", description: `${name}'s access has been permanently revoked.`, variant: "destructive" });
+      fetchData();
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+      setLoading(false);
+    }
+  };
 
   return (
     <DashboardLayout role="admin">
-      <div className="space-y-6 animate-fade-in">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Team Leads Directory</h1>
-          <p className="text-muted-foreground">View all officially promoted managers in the startup.</p>
+      <div className="max-w-6xl mx-auto space-y-6 animate-fade-in pb-12">
+        
+        <div className="flex justify-between items-center bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
+              <UserCircle className="w-8 h-8 text-purple-600" /> Leadership Directory
+            </h1>
+            <p className="text-slate-500 mt-1">Manage executive access and leadership status.</p>
+          </div>
         </div>
 
-        <Card className="border-0 shadow-lg">
-          <CardHeader>
-            <CardTitle>Active Managers</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {isLoading ? (
-              <div className="p-8 text-center text-gray-500">Loading managers...</div>
-            ) : teamLeads.length === 0 ? (
-              <div className="p-8 text-center text-gray-500">
-                No Team Leads found. Go to the Employees tab to promote someone!
-              </div>
-            ) : (
-              <div className="rounded-md border overflow-x-auto">
+        <Card className="shadow-sm border-slate-200">
+          <CardContent className="p-0">
+            {loading ? <div className="flex justify-center p-12"><Loader2 className="w-8 h-8 animate-spin text-purple-600" /></div> : (
+              <div className="overflow-x-auto">
                 <Table>
-                  <TableHeader className="bg-gray-50">
+                  <TableHeader className="bg-slate-50">
                     <TableRow>
-                      <TableHead>Name</TableHead>
-                      <TableHead>Email</TableHead>
-                      <TableHead>Department</TableHead>
-                      <TableHead>Phone Number</TableHead>
+                      <TableHead className="font-bold text-slate-600">Manager Details</TableHead>
+                      <TableHead className="font-bold text-slate-600">System Role</TableHead>
+                      <TableHead className="font-bold text-right text-slate-600">Administrative Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {teamLeads.map((lead) => (
-                      <TableRow key={lead.id}>
-                        <TableCell className="font-medium">{lead.name || "N/A"}</TableCell>
-                        <TableCell>{lead.email}</TableCell>
-                        <TableCell>{lead.department || "N/A"}</TableCell>
-                        <TableCell>{lead.phone || "N/A"}</TableCell>
+                    {teamLeads.map(tl => (
+                      <TableRow key={tl.id} className="hover:bg-slate-50">
+                        <TableCell>
+                          <div className="font-bold text-slate-900">{tl.name}</div>
+                          <div className="text-xs text-slate-500">{tl.email}</div>
+                        </TableCell>
+                        <TableCell>
+                          <span className="px-3 py-1 rounded-full text-xs font-bold bg-purple-100 text-purple-700">
+                            Department Head
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button onClick={() => handleTerminate(tl.id, tl.name)} variant="destructive" className="h-8 text-xs bg-red-600 hover:bg-red-700">
+                            <UserX className="w-3 h-3 mr-1" /> Terminate
+                          </Button>
+                        </TableCell>
                       </TableRow>
                     ))}
+                    {teamLeads.length === 0 && (
+                      <TableRow><TableCell colSpan={3} className="text-center p-8 text-slate-500">No active Team Leads found in the system.</TableCell></TableRow>
+                    )}
                   </TableBody>
                 </Table>
               </div>
             )}
           </CardContent>
         </Card>
+
       </div>
     </DashboardLayout>
   );
