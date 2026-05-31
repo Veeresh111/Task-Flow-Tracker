@@ -1,207 +1,200 @@
 import { useState, useEffect } from "react";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabase";
-import { Loader2, AlertCircle, Clock, CheckCircle2, Eye, User } from "lucide-react";
+import { Loader2, AlertCircle, CheckCircle2, MessageSquare, Bot, Send, Flame, ShieldAlert, Info } from "lucide-react";
 
 export default function AdminComplaints() {
   const { toast } = useToast();
   const [complaints, setComplaints] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [resolutionNotes, setResolutionNotes] = useState<{ [key: string]: string }>({});
 
-  useEffect(() => {
-    fetchComplaints();
-  }, []);
+  // AI Assistant States
+  const [aiInput, setAiInput] = useState("");
+  const [aiChat, setAiChat] = useState<{role: string, text: string}[]>([
+    { role: 'ai', text: 'Hello Admin. I am scanning the database. How can I assist you with HR resolutions or analytics today?' }
+  ]);
+
+  useEffect(() => { fetchComplaints(); }, []);
 
   const fetchComplaints = async () => {
     setLoading(true);
-    // Fetch all complaints and join with profiles to get the user's name
     const { data, error } = await supabase
       .from('complaints')
-      .select('*, profiles(name, email, role)')
+      .select('*, profiles(name, email)')
       .order('created_at', { ascending: false });
-
-    if (!error && data) {
-      setComplaints(data);
       
-      // AUTO-VIEW ENGINE: Mark "Open" tickets as "Viewed" instantly
-      const unreadTickets = data.filter(c => c.status === 'Open');
-      if (unreadTickets.length > 0) {
-        const unreadIds = unreadTickets.map(c => c.id);
-        
-        await supabase
-          .from('complaints')
-          .update({ status: 'Viewed', viewed_at: new Date().toISOString() })
-          .in('id', unreadIds);
-
-        setComplaints(prev => prev.map(c => 
-          unreadIds.includes(c.id) 
-            ? { ...c, status: 'Viewed', viewed_at: new Date().toISOString() } 
-            : c
-        ));
-      }
-    }
+    if (!error && data) setComplaints(data);
     setLoading(false);
   };
 
-  const formatDate = (dateString: string) => {
-    if (!dateString) return 'N/A';
-    return new Date(dateString).toLocaleString('en-US', {
-      month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true
-    });
+  const updateStatus = async (id: string, newStatus: string) => {
+    setLoading(true);
+    try {
+      const { error } = await supabase.from('complaints').update({ status: newStatus }).eq('id', id);
+      if (error) throw error;
+      toast({ title: `Complaint marked as ${newStatus}` });
+      fetchComplaints();
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+      setLoading(false);
+    }
   };
 
-  const calculateSLA = (start: string, end: string) => {
-    const diffMs = new Date(end).getTime() - new Date(start).getTime();
-    const diffHrs = Math.floor(diffMs / (1000 * 60 * 60));
-    const diffMins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
-    if (diffHrs > 24) return `${Math.floor(diffHrs / 24)} days, ${diffHrs % 24} hrs`;
-    return `${diffHrs} hrs, ${diffMins} mins`;
+  const formatDate = (iso: string) => iso ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : "--";
+
+  // LOCAL ALGORITHM: Assign Priority based on complaint nature
+  const getPriority = (text: string) => {
+    const t = text.toLowerCase();
+    if (t.includes('harassment') || t.includes('illegal') || t.includes('danger') || t.includes('urgent')) {
+      return { level: 'CRITICAL', color: 'bg-red-100 text-red-800 border-red-300', icon: Flame };
+    }
+    if (t.includes('payment') || t.includes('salary') || t.includes('manager') || t.includes('conflict')) {
+      return { level: 'HIGH', color: 'bg-orange-100 text-orange-800 border-orange-300', icon: ShieldAlert };
+    }
+    return { level: 'STANDARD', color: 'bg-blue-100 text-blue-800 border-blue-300', icon: Info };
   };
 
-  // Mark as Viewed (Manual fallback)
-  const markAsViewed = async (id: string) => {
-    const { error } = await supabase
-      .from('complaints')
-      .update({ status: 'Viewed', viewed_at: new Date().toISOString() })
-      .eq('id', id);
+  // MOCK AI HANDLER (Requires OpenAI API integration for full capability)
+  const handleAiSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!aiInput.trim()) return;
+    
+    const userMsg = aiInput;
+    setAiChat(prev => [...prev, { role: 'admin', text: userMsg }]);
+    setAiInput("");
+
+    // Simulate AI thinking and analyzing local data
+    setTimeout(() => {
+      let aiResponse = "I have logged your request. To fully integrate deep analytics, meeting invites, and generative suggestions, please connect my module to the OpenAI API endpoint via Supabase Edge Functions.";
       
-    if (!error) {
-      toast({ title: "Ticket Marked as Viewed" });
-      fetchComplaints();
-    } else {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
-    }
-  };
-
-  // Resolve Ticket
-  const resolveComplaint = async (id: string) => {
-    const notes = resolutionNotes[id];
-    if (!notes || notes.trim() === '') {
-      toast({ title: "Wait!", description: "Please add resolution notes for the user.", variant: "destructive" });
-      return;
-    }
-
-    const { error } = await supabase
-      .from('complaints')
-      .update({ 
-        status: 'Resolved', 
-        resolved_at: new Date().toISOString(),
-        admin_notes: notes 
-      })
-      .eq('id', id);
-
-    if (!error) {
-      toast({ title: "Ticket Resolved & Closed" });
-      fetchComplaints();
-    } else {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
-    }
+      if (userMsg.toLowerCase().includes('priority') || userMsg.toLowerCase().includes('urgent')) {
+        const criticals = complaints.filter(c => getPriority(c.description).level === 'CRITICAL');
+        aiResponse = `I have scanned the database. There are currently ${criticals.length} CRITICAL complaints requiring immediate intervention.`;
+      }
+      
+      setAiChat(prev => [...prev, { role: 'ai', text: aiResponse }]);
+    }, 1000);
   };
 
   return (
     <DashboardLayout role="admin">
-      <div className="max-w-6xl mx-auto space-y-6 animate-fade-in pb-12">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">SLA Resolution Desk</h1>
-          <p className="text-muted-foreground">Monitor, view, and resolve tickets while tracking your response times.</p>
-        </div>
+      <div className="max-w-7xl mx-auto space-y-6 animate-fade-in pb-12 flex flex-col xl:flex-row gap-6">
+        
+        {/* LEFT COLUMN: Complaints Table */}
+        <div className="flex-1 space-y-6">
+          <div className="flex justify-between items-center bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+            <div>
+              <h1 className="text-3xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
+                <AlertCircle className="w-8 h-8 text-red-600" /> HR Complaints Hub
+              </h1>
+              <p className="text-slate-500 mt-1">Review and resolve workplace issues with smart priority routing.</p>
+            </div>
+          </div>
 
-        <div className="space-y-6">
-          {loading ? (
-             <div className="flex justify-center p-12"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div>
-          ) : complaints.length === 0 ? (
-             <div className="text-center py-12 text-gray-400 bg-gray-50 rounded-lg border border-dashed border-gray-200">
-               Inbox Zero! No complaints currently in the system.
-             </div>
-          ) : (
-            complaints.map((c) => (
-              <Card key={c.id} className={`overflow-hidden transition-all ${c.status === 'Resolved' ? 'border-green-200 bg-green-50/10' : c.status === 'Viewed' ? 'border-amber-200 bg-amber-50/10' : 'border-red-200 shadow-md'}`}>
-                <div className="p-5 flex flex-col md:flex-row gap-6">
-                  
-                  {/* Left Side: Issue Details */}
-                  <div className="flex-1 space-y-3">
-                    <div className="flex justify-between items-start">
-                      <div className="flex items-center gap-3">
-                        <span className={`px-2.5 py-1 text-xs font-bold uppercase rounded-full flex items-center gap-1
-                          ${c.status === 'Open' ? 'bg-red-100 text-red-700' : c.status === 'Viewed' ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>
-                          {c.status === 'Open' && <AlertCircle className="w-3 h-3"/>}
-                          {c.status === 'Viewed' && <Eye className="w-3 h-3"/>}
-                          {c.status === 'Resolved' && <CheckCircle2 className="w-3 h-3"/>}
-                          {c.status}
-                        </span>
-                        <h3 className="font-bold text-xl text-gray-900">{c.title}</h3>
-                      </div>
-                    </div>
-                    
-                    {/* User Info Badge */}
-                    <div className="inline-flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-md border border-slate-200 text-sm text-slate-700">
-                      <User className="w-4 h-4 text-slate-500" />
-                      <span className="font-semibold">{c.profiles?.name || 'Unknown User'}</span>
-                      <span className="text-slate-400">|</span>
-                      <span>{c.profiles?.role || 'Employee'}</span>
-                      <span className="text-slate-400">|</span>
-                      <span>{c.profiles?.email}</span>
-                    </div>
-                    
-                    <div className="bg-white p-4 rounded-md border shadow-sm mt-2">
-                      <p className="text-gray-700 whitespace-pre-wrap">{c.description}</p>
-                    </div>
-
-                    {/* Timeline Tracker */}
-                    <div className="text-xs text-gray-500 flex flex-wrap gap-4 mt-2">
-                      <div className="flex items-center gap-1"><Clock className="w-3.5 h-3.5"/> <b>Raised:</b> {formatDate(c.created_at)}</div>
-                      {c.viewed_at && <div className="flex items-center gap-1 text-amber-600"><Eye className="w-3.5 h-3.5"/> <b>Viewed:</b> {formatDate(c.viewed_at)}</div>}
-                      {c.resolved_at && <div className="flex items-center gap-1 text-green-600"><CheckCircle2 className="w-3.5 h-3.5"/> <b>Resolved:</b> {formatDate(c.resolved_at)} 
-                        <span className="ml-1 text-gray-400 bg-white px-2 py-0.5 rounded border">(SLA: {calculateSLA(c.created_at, c.resolved_at)})</span>
-                      </div>}
-                    </div>
-
-                    {/* Admin's Previous Notes */}
-                    {c.admin_notes && (
-                      <div className="mt-4 bg-green-50 p-3 rounded-md border border-green-200">
-                        <span className="text-xs font-bold text-green-800 uppercase tracking-wider mb-1 block">Your Resolution Notes</span>
-                        <p className="text-sm text-green-900">{c.admin_notes}</p>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Right Side: Admin Action Panel */}
-                  {c.status !== 'Resolved' && (
-                    <div className="w-full md:w-72 bg-slate-50 p-4 rounded-xl border border-slate-200 flex flex-col gap-3 shadow-inner">
-                      <span className="text-xs font-bold text-slate-500 uppercase tracking-wider text-center border-b pb-2">Resolution Tools</span>
-                      
-                      {c.status === 'Open' && (
-                        <Button onClick={() => markAsViewed(c.id)} className="w-full bg-amber-500 hover:bg-amber-600 text-white shadow-sm">
-                          <Eye className="w-4 h-4 mr-2" /> 1. Mark as Viewed
-                        </Button>
-                      )}
-
-                      {(c.status === 'Open' || c.status === 'Viewed') && (
-                        <div className="space-y-3 mt-2 flex-1 flex flex-col">
-                          <Label className="text-xs text-slate-600 font-semibold">2. Provide Feedback to User</Label>
-                          <textarea 
-                            placeholder="Type resolution notes here. The user will see this..." 
-                            className="w-full text-sm p-3 border rounded-lg resize-none flex-1 min-h-[100px] outline-none focus:border-green-500 focus:ring-1 focus:ring-green-500 shadow-sm"
-                            onChange={(e) => setResolutionNotes({...resolutionNotes, [c.id]: e.target.value})}
-                          />
-                          <Button onClick={() => resolveComplaint(c.id)} className="w-full bg-green-600 hover:bg-green-700 text-white shadow-sm">
-                            <CheckCircle2 className="w-4 h-4 mr-2" /> Close Ticket
-                          </Button>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
+          {loading ? <div className="flex justify-center p-20"><Loader2 className="w-10 h-10 animate-spin text-blue-600" /></div> : (
+            <Card className="shadow-sm border-slate-200">
+              <CardHeader className="border-b bg-slate-50/50">
+                <CardTitle className="text-lg text-slate-800 flex items-center gap-2"><MessageSquare className="w-5 h-5 text-slate-500" /> Active Tickets</CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader className="bg-slate-50">
+                      <TableRow>
+                        <TableHead className="font-bold">Date & Priority</TableHead>
+                        <TableHead className="font-bold">Submitted By</TableHead>
+                        <TableHead className="font-bold">Issue Description</TableHead>
+                        <TableHead className="font-bold">Status</TableHead>
+                        <TableHead className="font-bold text-right">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {complaints.map(complaint => {
+                        const Priority = getPriority(complaint.description || "");
+                        const PIcon = Priority.icon;
+                        return (
+                          <TableRow key={complaint.id} className="hover:bg-slate-50">
+                            <TableCell className="whitespace-nowrap">
+                              <div className="text-sm text-slate-600 mb-1">{formatDate(complaint.created_at)}</div>
+                              <span className={`flex items-center gap-1 w-max px-2 py-0.5 rounded text-[10px] font-bold border ${Priority.color}`}>
+                                <PIcon className="w-3 h-3" /> {Priority.level}
+                              </span>
+                            </TableCell>
+                            <TableCell>
+                              <div className="font-bold text-slate-900">{complaint.profiles?.name || 'Unknown'}</div>
+                              <div className="text-xs text-slate-500">{complaint.profiles?.email}</div>
+                            </TableCell>
+                            <TableCell>
+                              <div className="font-bold text-slate-800 mb-1">{complaint.title || 'General Complaint'}</div>
+                              <div className="text-sm text-slate-600 line-clamp-2 max-w-md">{complaint.description}</div>
+                            </TableCell>
+                            <TableCell>
+                              <span className={`px-2.5 py-1 rounded-full text-xs font-bold tracking-wider ${complaint.status === 'Resolved' ? 'bg-emerald-100 text-emerald-700' : complaint.status === 'Review' ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>
+                                {complaint.status?.toUpperCase() || 'OPEN'}
+                              </span>
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {complaint.status !== 'Resolved' && (
+                                <div className="flex justify-end gap-2 flex-col sm:flex-row">
+                                  <Button onClick={() => updateStatus(complaint.id, 'Review')} variant="outline" className="h-8 text-xs border-amber-200 text-amber-700 hover:bg-amber-50">Mark Review</Button>
+                                  <Button onClick={() => updateStatus(complaint.id, 'Resolved')} className="h-8 text-xs bg-emerald-600 hover:bg-emerald-700 text-white"><CheckCircle2 className="w-3 h-3 mr-1" /> Resolve</Button>
+                                </div>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                      {complaints.length === 0 && <TableRow><TableCell colSpan={5} className="text-center p-8 text-slate-500">No complaints found in the database.</TableCell></TableRow>}
+                    </TableBody>
+                  </Table>
                 </div>
-              </Card>
-            ))
+              </CardContent>
+            </Card>
           )}
         </div>
+
+        {/* RIGHT COLUMN: AI Assistant Interface */}
+        <div className="w-full xl:w-80 flex-shrink-0 flex flex-col h-[600px] xl:h-[calc(100vh-8rem)] sticky top-24">
+          <Card className="flex-1 flex flex-col shadow-lg border-indigo-200 overflow-hidden">
+            <div className="bg-indigo-600 p-4 text-white flex items-center gap-3">
+              <div className="p-2 bg-indigo-500 rounded-full"><Bot className="w-5 h-5" /></div>
+              <div>
+                <h3 className="font-bold text-sm">System AI Assistant</h3>
+                <p className="text-indigo-200 text-xs">Monitoring DB Activity</p>
+              </div>
+            </div>
+            
+            <div className="flex-1 p-4 overflow-y-auto space-y-4 bg-slate-50 custom-scrollbar">
+              {aiChat.map((msg, i) => (
+                <div key={i} className={`flex ${msg.role === 'admin' ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`max-w-[85%] rounded-xl p-3 text-sm ${msg.role === 'admin' ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-white border border-slate-200 text-slate-700 rounded-tl-none shadow-sm'}`}>
+                    {msg.text}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="p-3 bg-white border-t border-slate-200">
+              <form onSubmit={handleAiSubmit} className="flex items-center gap-2">
+                <Input 
+                  value={aiInput} 
+                  onChange={(e) => setAiInput(e.target.value)} 
+                  placeholder="Ask about reports, invites, data..." 
+                  className="flex-1 h-9 text-sm"
+                />
+                <Button type="submit" size="sm" className="h-9 w-9 p-0 bg-indigo-600 hover:bg-indigo-700">
+                  <Send className="w-4 h-4" />
+                </Button>
+              </form>
+            </div>
+          </Card>
+        </div>
+
       </div>
     </DashboardLayout>
   );

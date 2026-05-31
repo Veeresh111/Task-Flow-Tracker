@@ -6,14 +6,24 @@ import { supabase } from "@/lib/supabase";
 import { authService } from "@/lib/auth";
 import { 
   Menu, X, LogOut, Home, Users, Briefcase, MessageSquare, 
-  AlertCircle, CheckSquare, Clock, BarChart3, Bell, Settings, UserCircle, CheckCircle, Calendar 
+  AlertCircle, CheckSquare, Clock, BarChart3, Bell, Settings, UserCircle, CheckCircle, Calendar, ClipboardList 
 } from "lucide-react";
 
-// 100% RESTORED: Notifications and Settings are back for all roles!
+// 🔥 GLOBAL MEMORY CACHE (SPA FLICKER FIX) 🔥
+// These variables live completely outside the React component lifecycle.
+// When you switch pages, the layout instantly reads from here on the very first frame.
+// This prevents the 1.5s flash and provides true, instant SPA behavior.
+let globalProfile: any = null;
+let globalClockedIn = false;
+let globalLogId: string | null = null;
+let globalWorkLoc: string | null = null;
+let globalBadges = { complaints: 0, approvals: 0, notifications: 0 };
+
 const navItems: any = {
   admin: [
     { title: "Dashboard", href: "/admin", icon: Home },
     { title: "Time & Presence", href: "/admin/presence", icon: Clock },
+    { title: "HR Directory", href: "/admin/directory", icon: Users },
     { title: "Employees", href: "/admin/employees", icon: Users },
     { title: "Team Leads", href: "/admin/team-leads", icon: UserCircle },
     { title: "Projects", href: "/admin/projects", icon: Briefcase },
@@ -40,6 +50,7 @@ const navItems: any = {
   employee: [
     { title: "Dashboard", href: "/employee", icon: Home },
     { title: "Time & Presence", href: "/employee/presence", icon: Clock },
+    { title: "Work Logs", href: "/employee/worklogs", icon: ClipboardList },
     { title: "Projects", href: "/employee/projects", icon: Briefcase },
     { title: "Tasks", href: "/employee/tasks", icon: CheckSquare },
     { title: "Leaves & HR", href: "/employee/leaves", icon: Calendar },
@@ -53,10 +64,13 @@ const navItems: any = {
 
 export function DashboardLayout({ children, role }: { children: React.ReactNode; role?: string }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [isClockedIn, setIsClockedIn] = useState(false);
-  const [activeLogId, setActiveLogId] = useState<string | null>(null);
-  const [userProfile, setUserProfile] = useState<any>(null);
-  const [badges, setBadges] = useState({ complaints: 0, approvals: 0, notifications: 0 });
+  
+  // Synchronously initialize state from global cache
+  const [isClockedIn, setIsClockedIn] = useState(globalClockedIn);
+  const [activeLogId, setActiveLogId] = useState(globalLogId);
+  const [workLocation, setWorkLocation] = useState(globalWorkLoc); 
+  const [userProfile, setUserProfile] = useState(globalProfile);
+  const [badges, setBadges] = useState(globalBadges);
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -73,15 +87,45 @@ export function DashboardLayout({ children, role }: { children: React.ReactNode;
       const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).single();
       
       if (profile?.role === 'ARCHIVED') {
-        await authService.signOut();
-        navigate("/login");
+        handleLogout();
         toast({ title: "Account Disabled", description: "Your access has been revoked.", variant: "destructive" });
         return; 
       }
 
-      if (profile) setUserProfile(profile);
-      const { data: activeLog } = await supabase.from('work_logs').select('id').eq('user_id', user.id).eq('status', 'Active').single();
-      if (activeLog) { setIsClockedIn(true); setActiveLogId(activeLog.id); }
+      if (profile) {
+        globalProfile = profile;
+        setUserProfile(profile);
+        
+        // STRICT ROLE FIREWALL
+        const dbRole = profile.role?.toUpperCase() || '';
+        if (dbRole === 'TEAM_LEAD' && location.pathname.startsWith('/employee')) {
+          navigate('/team-lead');
+        } else if (dbRole === 'EMPLOYEE' && location.pathname.startsWith('/team-lead')) {
+          navigate('/employee');
+        } else if (dbRole === 'ADMIN' && (location.pathname.startsWith('/team-lead') || location.pathname.startsWith('/employee'))) {
+          navigate('/admin');
+        }
+      }
+      
+      const { data: activeLog } = await supabase.from('work_logs').select('id, work_location').eq('user_id', user.id).eq('status', 'Active').single();
+      
+      if (activeLog) { 
+        globalClockedIn = true;
+        globalLogId = activeLog.id;
+        globalWorkLoc = activeLog.work_location || 'WFO';
+
+        setIsClockedIn(true); 
+        setActiveLogId(activeLog.id); 
+        setWorkLocation(activeLog.work_location || 'WFO');
+      } else {
+        globalClockedIn = false;
+        globalLogId = null;
+        globalWorkLoc = null;
+
+        setIsClockedIn(false);
+        setActiveLogId(null);
+        setWorkLocation(null);
+      }
 
       fetchBadgeCounts(profile?.role || currentRole);
     };
@@ -96,7 +140,7 @@ export function DashboardLayout({ children, role }: { children: React.ReactNode;
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, [currentRole]);
+  }, [currentRole, location.pathname]); // Re-verify on path change
 
   const fetchBadgeCounts = async (userRole: string) => {
     let compCount = 0;
@@ -117,25 +161,52 @@ export function DashboardLayout({ children, role }: { children: React.ReactNode;
       appCount = pendingTasks + (leaves?.length || 0);
     }
 
-    setBadges({ complaints: compCount, approvals: appCount, notifications: 0 });
+    const newBadges = { complaints: compCount, approvals: appCount, notifications: 0 };
+    globalBadges = newBadges;
+    setBadges(newBadges);
   };
 
   const handleLogout = async () => {
+    // Clear global cache on logout to prevent state bleeding to next user
+    globalProfile = null;
+    globalClockedIn = false;
+    globalLogId = null;
+    globalWorkLoc = null;
+    globalBadges = { complaints: 0, approvals: 0, notifications: 0 };
+
     await authService.signOut();
     navigate("/login");
   };
 
-  const toggleClock = async () => {
+  const toggleClock = async (selectedLocation?: string) => {
     if (!userProfile) return;
     if (!isClockedIn) {
-      const { data } = await supabase.from('work_logs').insert([{ user_id: userProfile.id, status: 'Active' }]).select().single();
-      if (data) setActiveLogId(data.id);
+      const { data } = await supabase.from('work_logs').insert([{ 
+        user_id: userProfile.id, 
+        status: 'Active',
+        work_location: selectedLocation 
+      }]).select().single();
+      
+      if (data) {
+        globalClockedIn = true;
+        globalLogId = data.id;
+        globalWorkLoc = selectedLocation || 'WFO';
+
+        setActiveLogId(data.id);
+        setWorkLocation(selectedLocation || 'WFO');
+      }
       setIsClockedIn(true);
-      toast({ title: "Clocked In", description: "Your time is now being tracked." });
+      toast({ title: "Clocked In", description: `You are working from ${selectedLocation === 'WFO' ? 'Office' : 'Home'}.` });
     } else {
       if (activeLogId) await supabase.from('work_logs').update({ clock_out: new Date().toISOString(), status: 'Completed' }).eq('id', activeLogId);
+      
+      globalClockedIn = false;
+      globalLogId = null;
+      globalWorkLoc = null;
+
       setIsClockedIn(false);
       setActiveLogId(null);
+      setWorkLocation(null);
       toast({ title: "Clocked Out", description: "Hours logged successfully.", variant: "destructive" });
     }
   };
@@ -153,7 +224,12 @@ export function DashboardLayout({ children, role }: { children: React.ReactNode;
         <nav className="flex-1 overflow-y-auto py-6 px-4 space-y-1.5 custom-scrollbar">
           {items.map((item: any) => {
             const Icon = item.icon;
-            const isActive = location.pathname === item.href || location.pathname.startsWith(item.href + "/");
+            
+            const isBaseRoute = item.href === "/admin" || item.href === "/team-lead" || item.href === "/employee";
+            const isActive = isBaseRoute 
+              ? location.pathname === item.href 
+              : location.pathname === item.href || location.pathname.startsWith(item.href + "/");
+
             const badgeCount = item.badgeKey ? badges[item.badgeKey as keyof typeof badges] : 0;
 
             return (
@@ -188,10 +264,22 @@ export function DashboardLayout({ children, role }: { children: React.ReactNode;
           
           <div className="flex items-center gap-4">
             <span className="text-sm text-gray-500 font-medium hidden sm:block">{userProfile?.role?.replace('_', ' ').toUpperCase()}</span>
-            <Button onClick={toggleClock} variant={isClockedIn ? "destructive" : "default"} className={`rounded-full px-6 font-semibold shadow-sm transition-all ${!isClockedIn && "bg-emerald-500 hover:bg-emerald-600 text-white"}`}>
-              <Clock className="w-4 h-4 mr-2" />
-              {isClockedIn ? "Clock Out" : "Clock In"}
-            </Button>
+            
+            {!isClockedIn ? (
+              <div className="flex items-center gap-2">
+                <Button onClick={() => toggleClock('WFO')} className="bg-emerald-600 hover:bg-emerald-700 text-white rounded-full px-5 shadow-sm font-bold transition-all">
+                  🏢 WFO
+                </Button>
+                <Button onClick={() => toggleClock('WFH')} className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-full px-5 shadow-sm font-bold transition-all">
+                  🏠 WFH
+                </Button>
+              </div>
+            ) : (
+              <Button onClick={() => toggleClock()} variant="destructive" className="rounded-full px-6 font-bold shadow-sm transition-all">
+                <Clock className="w-4 h-4 mr-2" /> Clock Out ({workLocation})
+              </Button>
+            )}
+
           </div>
         </header>
         <div className="flex-1 p-4 md:p-6 lg:p-8 bg-slate-50/50">{children}</div>

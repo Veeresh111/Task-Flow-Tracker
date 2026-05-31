@@ -3,199 +3,106 @@ import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { supabase } from "@/lib/supabase";
-import { Loader2, Clock, UserCircle, Calendar, Activity, Timer, TrendingUp, Award, Zap, AlertTriangle } from "lucide-react";
+import { Loader2, Clock, Building2, Home as HomeIcon, MapPin, History } from "lucide-react";
 
 export default function AdminPresence() {
-  const [users, setUsers] = useState<any[]>([]);
-  const [workLogs, setWorkLogs] = useState<any[]>([]);
-  const [tasks, setTasks] = useState<any[]>([]);
-  const [complaints, setComplaints] = useState<any[]>([]);
-  const [selectedUserId, setSelectedUserId] = useState<string>("ALL");
+  const [logs, setLogs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [renderError, setRenderError] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetchData();
-  }, []);
+  useEffect(() => { fetchPresence(); }, []);
 
-  const fetchData = async () => {
+  const fetchPresence = async () => {
+    setLoading(true);
+    const { data } = await supabase.from('work_logs').select('*, profiles(name, email, role)').order('clock_in', { ascending: false });
+    if (data) setLogs(data);
+    setLoading(false);
+  };
+
+  const formatTime = (iso: string) => iso ? new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : "--";
+  const formatDate = (iso: string) => iso ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : "--";
+
+  // INDESTRUCTIBLE MATH ENGINE
+  const calculateHours = (start: string | null, end: string | null) => {
+    if (!start) return 0;
     try {
-      setLoading(true);
-      setRenderError(null);
-      
-      const [profilesRes, logsRes, tasksRes, compRes] = await Promise.all([
-        supabase.from('profiles').select('*').order('name', { ascending: true }),
-        supabase.from('work_logs').select('*').order('created_at', { ascending: false }),
-        supabase.from('tasks').select('*'),
-        supabase.from('complaints').select('*')
-      ]);
+      const startDate = new Date(start);
+      const startTime = startDate.getTime();
 
-      if (profilesRes.error) throw new Error("Profiles Error: " + profilesRes.error.message);
-      
-      setUsers(profilesRes.data || []);
-      setWorkLogs(logsRes.data || []);
-      setTasks(tasksRes.data || []);
-      setComplaints(compRes.data || []);
-      
-    } catch (err: any) {
-      setRenderError(err.message || "Database connection error.");
-    } finally {
-      setLoading(false);
-    }
+      let endTime;
+      if (end) {
+        endTime = new Date(end).getTime();
+      } else {
+        const now = new Date();
+        const eod = new Date(startDate);
+        eod.setHours(23, 59, 59, 999); 
+        endTime = now.getTime() > eod.getTime() ? eod.getTime() : now.getTime();
+      }
+
+      const hours = (endTime - startTime) / 3600000;
+      return hours > 24 ? 24 : (hours > 0 ? hours : 0);
+    } catch { return 0; }
   };
 
-  const calculateHours = (start: string, end: string) => {
-    if (!start || !end) return 0;
-    try { return (new Date(end).getTime() - new Date(start).getTime()) / (1000 * 60 * 60); } 
-    catch { return 0; }
-  };
-
-  const formatDateString = (iso: string) => iso ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : "--";
-  const formatTimeStr = (ms: number | null) => ms ? new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : "--";
-
-  // ==========================================
-  // FIRST-IN / LAST-OUT AGGREGATION ENGINE
-  // ==========================================
-  const filteredLogs = selectedUserId === "ALL" ? workLogs : workLogs.filter(log => log?.user_id === selectedUserId);
-  
-  const dailySummaries: { [key: string]: any } = {};
-  
-  filteredLogs.forEach(log => {
-    const startTime = log?.clock_in || log?.created_at;
-    if (!startTime) return;
-    const dateStr = formatDateString(startTime);
-    if (dateStr === "--") return;
-    
-    const key = `${log.user_id}_${dateStr}`;
-    const duration = calculateHours(startTime, log?.clock_out);
-    const startMs = new Date(startTime).getTime();
-    const endMs = log?.clock_out ? new Date(log.clock_out).getTime() : null;
-    
-    if (!dailySummaries[key]) {
-      dailySummaries[key] = {
-        user_id: log.user_id,
-        date: dateStr,
-        totalHours: 0,
-        status: 'Completed',
-        sortDate: startMs,
-        firstIn: startMs,
-        lastOut: endMs
-      };
-    }
-    
-    // Accumulate exact hours
-    dailySummaries[key].totalHours += duration;
-
-    // Track Absolute First Clock-In of the day
-    if (startMs < dailySummaries[key].firstIn) {
-      dailySummaries[key].firstIn = startMs;
-    }
-
-    // Track Absolute Final Clock-Out of the day
-    if (endMs && (!dailySummaries[key].lastOut || endMs > dailySummaries[key].lastOut)) {
-      dailySummaries[key].lastOut = endMs;
-    }
-
-    // If any shift is currently active, mark the whole day as active
-    if (log.status === 'Active') {
-      dailySummaries[key].status = 'Active';
-      dailySummaries[key].lastOut = null; // Still working
-    }
-  });
-
-  const aggregatedData = Object.values(dailySummaries).sort((a, b) => b.sortDate - a.sortDate);
-
-  const totalHours = aggregatedData.reduce((acc, sum) => acc + sum.totalHours, 0);
-  const activeNowCount = workLogs.filter(log => log?.status === 'Active').length;
-  
-  // Overall Efficiency Engine
-  const totalSystemComplaints = complaints.length || 1;
-  const userStats = users.map(user => {
-    const userLogs = workLogs.filter(l => l?.user_id === user?.id);
-    const totalHrs = userLogs.reduce((acc, log) => acc + calculateHours((log?.clock_in || log?.created_at), log?.clock_out), 0);
-    const uniqueDays = new Set(userLogs.map(l => new Date(l.created_at).toDateString())).size || 1;
-    const expectedHrs = uniqueDays * 8;
-    const timeScore = Math.min(100, (totalHrs / expectedHrs) * 100);
-
-    let finalEfficiency = 0;
-    if (user.role === 'ADMIN' || user.role === 'TL') {
-      const resolvedComplaints = complaints.filter(c => c.status === 'Resolved' && c.admin_notes).length;
-      const resolutionScore = Math.min(100, (resolvedComplaints / (totalSystemComplaints * 0.5)) * 100) || 100; 
-      finalEfficiency = (timeScore * 0.5) + (resolutionScore * 0.5);
-    } else {
-      const totalAssigned = tasks.filter(t => t.assigned_to === user.id).length || 1;
-      const completedTasks = tasks.filter(t => t.assigned_to === user.id && t.status?.toLowerCase().includes('complet')).length;
-      const taskScore = (completedTasks / totalAssigned) * 100;
-      finalEfficiency = (timeScore * 0.5) + (taskScore * 0.5);
-    }
-    return { id: user?.id, hrs: totalHrs, efficiency: Math.min(100, finalEfficiency) };
-  });
-
-  let displayEfficiency = selectedUserId === "ALL" 
-    ? (users.length > 0 ? userStats.reduce((acc, u) => acc + u.efficiency, 0) / users.length : 0)
-    : (userStats.find(u => u?.id === selectedUserId)?.efficiency || 0);
-
-  if (renderError) return <DashboardLayout role="admin"><div className="p-8 text-red-600 bg-red-50 rounded-xl"><h1>Error: {renderError}</h1><button onClick={fetchData} className="mt-4 px-4 py-2 bg-red-600 text-white rounded">Retry</button></div></DashboardLayout>;
+  const activeUsers = logs.filter(l => l.status === 'Active');
+  const historicalLogs = logs.filter(l => l.status !== 'Active');
+  const wfoCount = activeUsers.filter(u => u.work_location === 'WFO').length;
+  const wfhCount = activeUsers.filter(u => u.work_location === 'WFH').length;
 
   return (
     <DashboardLayout role="admin">
-      <div className="max-w-7xl mx-auto space-y-6 animate-fade-in pb-12">
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
-              <Activity className="w-8 h-8 text-blue-600" /> Executive Presence Dashboard
-            </h1>
-            <p className="text-slate-500 mt-1">First-In / Last-Out daily tracking & performance efficiency.</p>
-          </div>
-          <div className="w-full md:w-72">
-            <select className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg outline-none font-medium text-slate-700" value={selectedUserId} onChange={(e) => setSelectedUserId(e.target.value)}>
-              <option value="ALL">🏢 Entire Company Overview</option>
-              {users.map(u => <option key={u.id} value={u.id}>{u.name} ({u.role})</option>)}
-            </select>
-          </div>
+      <div className="max-w-6xl mx-auto space-y-6 animate-fade-in pb-12">
+        <div className="flex justify-between items-center bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+          <div><h1 className="text-3xl font-bold tracking-tight text-slate-900 flex items-center gap-2"><MapPin className="w-8 h-8 text-blue-600" /> Time & Presence</h1><p className="text-slate-500 mt-1">Live location tracking and historical attendance records.</p></div>
         </div>
 
-        {loading ? (
-          <div className="flex justify-center p-20"><Loader2 className="w-10 h-10 animate-spin text-blue-600" /></div>
-        ) : (
+        {loading ? <div className="flex justify-center p-20"><Loader2 className="w-10 h-10 animate-spin text-blue-600" /></div> : (
           <>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <Card><CardContent className="p-5 flex items-center gap-4"><div className="p-3 bg-blue-100 rounded-full text-blue-600"><Clock className="w-6 h-6" /></div><div><p className="text-xs font-bold text-slate-500 uppercase">Total Logged Time</p><h2 className="text-2xl font-black">{totalHours.toFixed(1)} <span className="text-sm font-medium">hrs</span></h2></div></CardContent></Card>
-              <Card><CardContent className="p-5 flex items-center gap-4"><div className="p-3 bg-emerald-100 rounded-full text-emerald-600"><Zap className="w-6 h-6" /></div><div><p className="text-xs font-bold text-slate-500 uppercase">Active Right Now</p><h2 className="text-2xl font-black">{activeNowCount} <span className="text-sm font-medium">online</span></h2></div></CardContent></Card>
-              <Card className="bg-amber-50 border-amber-200"><CardContent className="p-5 flex items-center gap-4"><div className="p-3 rounded-full bg-amber-100 text-amber-600"><Award className="w-6 h-6" /></div><div><p className="text-xs font-bold text-amber-700 uppercase">Overall Efficiency</p><h2 className="text-3xl font-black text-amber-900">{displayEfficiency.toFixed(0)}%</h2><p className="text-xs text-amber-700 font-medium">Based on Time + Output</p></div></CardContent></Card>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <Card className="shadow-sm border-slate-200"><CardContent className="p-6 flex items-center gap-4"><div className="p-4 bg-blue-100 text-blue-600 rounded-full"><Clock className="w-6 h-6"/></div><div><p className="text-sm font-bold text-slate-500 uppercase">Total Online Now</p><h2 className="text-3xl font-black text-slate-800">{activeUsers.length}</h2></div></CardContent></Card>
+              <Card className="shadow-sm border-emerald-200 bg-emerald-50/30"><CardContent className="p-6 flex items-center gap-4"><div className="p-4 bg-emerald-100 text-emerald-600 rounded-full"><Building2 className="w-6 h-6"/></div><div><p className="text-sm font-bold text-emerald-700 uppercase">In Office (WFO)</p><h2 className="text-3xl font-black text-emerald-800">{wfoCount}</h2></div></CardContent></Card>
+              <Card className="shadow-sm border-indigo-200 bg-indigo-50/30"><CardContent className="p-6 flex items-center gap-4"><div className="p-4 bg-indigo-100 text-indigo-600 rounded-full"><HomeIcon className="w-6 h-6"/></div><div><p className="text-sm font-bold text-indigo-700 uppercase">Working From Home</p><h2 className="text-3xl font-black text-indigo-800">{wfhCount}</h2></div></CardContent></Card>
             </div>
 
-            <Card className="shadow-sm border-slate-200">
-              <CardHeader className="border-b bg-slate-50/50"><CardTitle className="text-lg flex items-center gap-2"><Timer className="w-5 h-5 text-slate-500" />Daily Aggregated Work Log</CardTitle></CardHeader>
+            <Card className="shadow-sm border-blue-200">
+              <CardHeader className="border-b bg-blue-50/50"><CardTitle className="text-lg text-blue-800 flex items-center gap-2"><Clock className="w-5 h-5 text-blue-500" /> Currently On The Clock</CardTitle></CardHeader>
               <CardContent className="p-0">
                 <div className="overflow-x-auto">
                   <Table>
-                    <TableHeader className="bg-slate-50">
-                      <TableRow>
-                        {selectedUserId === "ALL" && <TableHead>Employee</TableHead>}
-                        <TableHead>Date</TableHead>
-                        <TableHead>First Clock-In</TableHead>
-                        <TableHead>Final Clock-Out</TableHead>
-                        <TableHead>Daily Hours</TableHead>
-                        <TableHead>Status</TableHead>
-                      </TableRow>
-                    </TableHeader>
+                    <TableHeader className="bg-slate-50"><TableRow><TableHead className="font-bold text-slate-600">Employee Details</TableHead><TableHead className="font-bold text-slate-600">Role</TableHead><TableHead className="font-bold text-slate-600">Location</TableHead><TableHead className="font-bold text-slate-600">Clocked In At</TableHead></TableRow></TableHeader>
                     <TableBody>
-                      {aggregatedData.map((summary, idx) => {
-                        const user = users.find(u => u.id === summary.user_id);
-                        return (
-                          <TableRow key={idx}>
-                            {selectedUserId === "ALL" && <TableCell className="font-medium"><div className="flex flex-col"><span>{user?.name || 'Unknown'}</span><span className="text-xs text-slate-500">{user?.role}</span></div></TableCell>}
-                            <TableCell className="font-medium">{summary.date}</TableCell>
-                            <TableCell className="text-emerald-600 font-medium">{formatTimeStr(summary.firstIn)}</TableCell>
-                            <TableCell className="text-red-500 font-medium">{formatTimeStr(summary.lastOut)}</TableCell>
-                            <TableCell className="font-bold text-slate-700">
-                              {summary.status === 'Active' ? <span className="text-blue-500 text-xs">Running...</span> : `${summary.totalHours.toFixed(2)}h`}
-                            </TableCell>
-                            <TableCell>{summary.status === 'Active' ? <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded text-xs animate-pulse font-bold uppercase">Working</span> : <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded text-xs font-bold uppercase">Completed</span>}</TableCell>
-                          </TableRow>
-                        );
-                      })}
+                      {activeUsers.map(log => (
+                        <TableRow key={log.id} className="hover:bg-slate-50 transition-colors">
+                          <TableCell><div className="font-bold text-slate-900">{log.profiles?.name}</div><div className="text-xs text-slate-500">{log.profiles?.email}</div></TableCell>
+                          <TableCell><span className="text-xs font-bold text-slate-500 uppercase tracking-wider">{log.profiles?.role?.replace('_', ' ')}</span></TableCell>
+                          <TableCell>{log.work_location === 'WFH' ? <span className="flex items-center gap-1 text-xs font-bold text-indigo-700 bg-indigo-100 px-2 py-1 rounded w-max"><HomeIcon className="w-3 h-3"/> Working From Home</span> : <span className="flex items-center gap-1 text-xs font-bold text-emerald-700 bg-emerald-100 px-2 py-1 rounded w-max"><Building2 className="w-3 h-3"/> In Office (WFO)</span>}</TableCell>
+                          <TableCell className="text-emerald-600 font-medium"><span className="text-xs text-slate-400 block">{formatDate(log.clock_in || log.created_at)}</span>{formatTime(log.clock_in || log.created_at)}</TableCell>
+                        </TableRow>
+                      ))}
+                      {activeUsers.length === 0 && <TableRow><TableCell colSpan={4} className="text-center p-8 text-slate-500">No one is currently clocked in.</TableCell></TableRow>}
+                    </TableBody>
+                  </Table>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="shadow-sm border-slate-200 mt-8">
+              <CardHeader className="border-b bg-slate-50/50"><CardTitle className="text-lg text-slate-800 flex items-center gap-2"><History className="w-5 h-5 text-slate-500" /> Historical Attendance Records</CardTitle></CardHeader>
+              <CardContent className="p-0">
+                <div className="overflow-x-auto max-h-[500px]">
+                  <Table>
+                    <TableHeader className="bg-slate-50 sticky top-0 z-10 shadow-sm"><TableRow><TableHead className="font-bold text-slate-600">Date</TableHead><TableHead className="font-bold text-slate-600">Employee</TableHead><TableHead className="font-bold text-slate-600">Location</TableHead><TableHead className="font-bold text-slate-600">Clock In</TableHead><TableHead className="font-bold text-slate-600">Clock Out</TableHead><TableHead className="font-bold text-slate-600">Total Hours</TableHead></TableRow></TableHeader>
+                    <TableBody>
+                      {historicalLogs.map(log => (
+                        <TableRow key={log.id} className="hover:bg-slate-50">
+                          <TableCell className="font-medium text-slate-900">{formatDate(log.clock_in || log.created_at)}</TableCell>
+                          <TableCell><div className="font-bold text-slate-800">{log.profiles?.name}</div><div className="text-[10px] text-slate-500 uppercase">{log.profiles?.role?.replace('_', ' ')}</div></TableCell>
+                          <TableCell>{log.work_location === 'WFH' ? <span className="text-xs font-bold text-indigo-600">WFH</span> : <span className="text-xs font-bold text-emerald-600">WFO</span>}</TableCell>
+                          <TableCell className="text-sm text-slate-600">{formatTime(log.clock_in || log.created_at)}</TableCell>
+                          <TableCell className="text-sm text-slate-600">{formatTime(log.clock_out)}</TableCell>
+                          <TableCell className="font-bold text-slate-800">{calculateHours(log.clock_in || log.created_at, log.clock_out).toFixed(2)} hrs</TableCell>
+                        </TableRow>
+                      ))}
+                      {historicalLogs.length === 0 && <TableRow><TableCell colSpan={6} className="text-center p-8 text-slate-500">No historical records found.</TableCell></TableRow>}
                     </TableBody>
                   </Table>
                 </div>

@@ -1,4 +1,5 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
+import { FloatingChatbot } from "./components/FloatingChatbot";
 import { Toaster } from "@/components/ui/toaster";
 import Login from "./pages/auth/Login";
 import Register from "./pages/auth/Register";
@@ -6,6 +7,7 @@ import Register from "./pages/auth/Register";
 // Admin Pages
 import AdminDashboard from "./pages/admin/Dashboard";
 import AdminEmployees from "./pages/admin/Employees";
+import AdminMasterDirectory from "./pages/admin/MasterDirectory";
 import AdminTeamLeads from "./pages/admin/TeamLeads";
 import AdminProjects from "./pages/admin/Projects";
 import AdminAnalytics from "./pages/admin/Analytics";
@@ -14,20 +16,22 @@ import AdminComplaints from "./pages/admin/Complaints";
 import AdminPresence from "./pages/admin/Presence";
 import AdminNotifications from "./pages/admin/Notifications";
 import AdminSettings from "./pages/admin/SettingsPage";
-import AdminApprovals from "./pages/admin/approvals"; // <-- EXACT MATCH: lowercase 'a'
+import AdminApprovals from "./pages/admin/approvals";
 
 // Team Lead Pages
 import TeamLeadDashboard from "./pages/team-lead/Dashboard";
 import TeamLeadMyTeam from "./pages/team-lead/MyTeam";
 import TeamLeadProjects from "./pages/team-lead/Projects";
 import TeamLeadTasks from "./pages/team-lead/Tasks";
-import TeamLeadApprovals from "./pages/team-lead/Approvals"; // <-- EXACT MATCH: Uppercase 'A'
+import TeamLeadApprovals from "./pages/team-lead/Approvals";
 import TeamLeadAnalytics from "./pages/team-lead/Analytics";
 import TeamLeadChat from "./pages/team-lead/Chat";
 import TeamLeadComplaints from "./pages/team-lead/Complaints";
 import TeamLeadNotifications from "./pages/team-lead/Notifications";
 import TeamLeadSettings from "./pages/team-lead/SettingsPage";
 import TeamLeadLeaves from "./pages/team-lead/leaves"; 
+import TeamLeadPresence from "./pages/team-lead/Presence"; // NEW
+import TeamLeadWorkLogs from "./pages/team-lead/WorkLogs"; // NEW
 
 // Employee Pages
 import EmployeeDashboard from "./pages/employee/Dashboard";
@@ -40,6 +44,7 @@ import EmployeeComplaints from "./pages/employee/Complaints";
 import EmployeeNotifications from "./pages/employee/Notifications";
 import EmployeeSettings from "./pages/employee/SettingsPage";
 import EmployeeLeaves from "./pages/employee/leaves"; 
+import EmployeePresence from "./pages/employee/Presence"; // NEW
 
 export default function App() {
   return (
@@ -61,9 +66,12 @@ export default function App() {
         <Route path="/admin/notifications" element={<AdminNotifications />} />
         <Route path="/admin/settings" element={<AdminSettings />} />
         <Route path="/admin/approvals" element={<AdminApprovals />} />
+        <Route path="/admin/directory" element={<AdminMasterDirectory />} />
 
         {/* TEAM LEAD ROUTES */}
         <Route path="/team-lead" element={<TeamLeadDashboard />} />
+        <Route path="/team-lead/presence" element={<TeamLeadPresence />} />
+        <Route path="/team-lead/worklogs" element={<TeamLeadWorkLogs />} />
         <Route path="/team-lead/team" element={<TeamLeadMyTeam />} />
         <Route path="/team-lead/projects" element={<TeamLeadProjects />} />
         <Route path="/team-lead/tasks" element={<TeamLeadTasks />} />
@@ -77,10 +85,10 @@ export default function App() {
 
         {/* EMPLOYEE ROUTES */}
         <Route path="/employee" element={<EmployeeDashboard />} />
-        <Route path="/employee/presence" element={<EmployeeWorkLogs />} />
+        <Route path="/employee/presence" element={<EmployeePresence />} />
+        <Route path="/employee/worklogs" element={<EmployeeWorkLogs />} />
         <Route path="/employee/projects" element={<EmployeeProjects />} />
         <Route path="/employee/tasks" element={<EmployeeTasks />} />
-        <Route path="/employee/worklogs" element={<EmployeeWorkLogs />} />
         <Route path="/employee/analytics" element={<EmployeeAnalytics />} />
         <Route path="/employee/chat" element={<EmployeeChat />} />
         <Route path="/employee/complaints" element={<EmployeeComplaints />} />
@@ -90,6 +98,8 @@ export default function App() {
         
         <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
+      <Toaster />
+      <FloatingChatbot />
       <Toaster />
     </Router>
   );

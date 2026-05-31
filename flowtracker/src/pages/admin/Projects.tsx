@@ -1,157 +1,185 @@
 import { useState, useEffect } from "react";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabase";
-import { Loader2, Briefcase, Calendar, Flag, Edit, Trash2, Plus, UserCircle, X } from "lucide-react";
+// FIXED: Added 'Users' and 'UserCircle' to the import list to prevent the crash
+import { Loader2, Briefcase, Calendar, CheckSquare, Clock, ArrowRight, Eye, X, Activity, TrendingDown, Star, Users, UserCircle } from "lucide-react";
 
 export default function AdminProjects() {
-  const { toast } = useToast();
   const [projects, setProjects] = useState<any[]>([]);
-  const [teamLeads, setTeamLeads] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   
-  // Modal State
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [formData, setFormData] = useState({ name: "", description: "", status: "Active", team_lead_id: "", start_date: "", deadline: "" });
+  const [viewProject, setViewProject] = useState<any | null>(null);
+  const [projectAnalytics, setProjectAnalytics] = useState<any>(null);
 
-  useEffect(() => { 
-    fetchData(); 
-  }, []);
+  useEffect(() => { fetchProjects(); }, []);
 
-  const fetchData = async () => {
+  const fetchProjects = async () => {
     setLoading(true);
-    const [projRes, tlRes] = await Promise.all([
-      supabase.from('projects').select('*, profiles(name)').order('created_at', { ascending: false }),
-      supabase.from('profiles').select('id, name, role') // Fetching roles to filter safely in code
-    ]);
-    
-    if (projRes.data) setProjects(projRes.data);
-    
-    if (tlRes.data) {
-      // FIX: Dynamically checks for TL, TEAM_LEAD, team_lead to prevent blank dropdowns
-      const leads = tlRes.data.filter(p => 
-        p.role && (p.role.toUpperCase() === 'TEAM_LEAD' || p.role.toUpperCase() === 'TL')
-      );
-      setTeamLeads(leads);
-    }
-    
+    const { data } = await supabase.from('projects')
+      .select('*, tasks(*), profiles(name)')
+      .order('created_at', { ascending: false });
+    if (data) setProjects(data);
     setLoading(false);
   };
 
-  const openCreateModal = () => {
-    setEditingId(null);
-    setFormData({ name: "", description: "", status: "Active", team_lead_id: "", start_date: "", deadline: "" });
-    setIsModalOpen(true);
+  const getStatusColor = (status: string) => {
+    if (status === 'Completed') return 'bg-emerald-100 text-emerald-700';
+    if (status === 'In Progress') return 'bg-blue-100 text-blue-700';
+    return 'bg-amber-100 text-amber-700';
   };
 
-  const openEditModal = (project: any) => {
-    setEditingId(project.id);
-    setFormData({
-      name: project.name,
-      description: project.description,
-      status: project.status || "Active",
-      team_lead_id: project.team_lead_id || "",
-      start_date: project.start_date || "",
-      deadline: project.deadline || ""
-    });
-    setIsModalOpen(true);
-  };
+  const loadProjectAnalytics = async (proj: any) => {
+    setViewProject(proj);
+    setProjectAnalytics(null);
 
-  const saveProject = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    try {
-      if (editingId) {
-        await supabase.from('projects').update(formData).eq('id', editingId);
-        toast({ title: "Project Updated!" });
-      } else {
-        await supabase.from('projects').insert([formData]);
-        toast({ title: "Project Created!" });
+    const { data: projectTasks } = await supabase.from('tasks')
+      .select('*, profiles(name)')
+      .eq('project_id', proj.id);
+
+    if (!projectTasks) return;
+
+    const start = new Date(proj.created_at).getTime();
+    const now = proj.status === 'Completed' && proj.updated_at ? new Date(proj.updated_at).getTime() : new Date().getTime();
+    const daysActive = Math.floor((now - start) / (1000 * 60 * 60 * 24));
+
+    const contributorMap: any = {};
+    projectTasks.forEach(t => {
+      const empName = t.profiles?.name || 'Unassigned';
+      if (!contributorMap[empName]) {
+        contributorMap[empName] = { total: 0, completed: 0 };
       }
-      setIsModalOpen(false);
-      fetchData();
-    } catch (err: any) {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
-      setLoading(false);
-    }
-  };
+      contributorMap[empName].total += 1;
+      if (t.status === 'Completed') contributorMap[empName].completed += 1;
+    });
 
-  const deleteProject = async (id: string) => {
-    if (!window.confirm("Delete this project? All associated tasks will be lost.")) return;
-    setLoading(true);
-    await supabase.from('projects').delete().eq('id', id);
-    toast({ title: "Project Deleted", variant: "destructive" });
-    fetchData();
-  };
+    const contributors = Object.keys(contributorMap).map(name => {
+      const rate = contributorMap[name].total > 0 
+        ? (contributorMap[name].completed / contributorMap[name].total) * 100 
+        : 0;
+      return { name, rate, total: contributorMap[name].total, completed: contributorMap[name].completed };
+    });
 
-  const formatDate = (iso: string) => iso ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : "Not Set";
+    const topPerformers = contributors.filter(c => c.rate >= 80 && c.total > 0);
+    const needsAttention = contributors.filter(c => c.rate < 50 && c.total > 0);
+
+    setProjectAnalytics({
+      daysActive,
+      totalEmployees: contributors.length,
+      contributors,
+      topPerformers,
+      needsAttention
+    });
+  };
 
   return (
     <DashboardLayout role="admin">
-      <div className="max-w-6xl mx-auto space-y-6 animate-fade-in pb-12">
+      <div className="max-w-7xl mx-auto space-y-6 animate-fade-in pb-12">
         <div className="flex justify-between items-center bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-          <div><h1 className="text-3xl font-bold tracking-tight text-slate-900">Project Directory</h1><p className="text-slate-500">Manage, edit, and assign company projects.</p></div>
-          <Button onClick={openCreateModal} className="bg-blue-600 hover:bg-blue-700 text-white"><Plus className="w-4 h-4 mr-2" /> New Project</Button>
+          <div><h1 className="text-3xl font-bold tracking-tight text-slate-900 flex items-center gap-2"><Briefcase className="w-8 h-8 text-blue-600" /> Central Project Hub</h1><p className="text-slate-500 mt-1">High-level overview of all company projects and their completion status.</p></div>
         </div>
 
-        {loading ? <div className="flex justify-center p-12"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div> : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {projects.map(p => (
-              <Card key={p.id} className="shadow-sm border-slate-200 group">
-                <CardContent className="p-5 space-y-4">
-                  <div className="flex justify-between items-start">
-                    <div className="p-2 bg-blue-50 text-blue-600 rounded"><Briefcase className="w-5 h-5"/></div>
-                    <div className="flex gap-2">
-                      <button onClick={() => openEditModal(p)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded"><Edit className="w-4 h-4"/></button>
-                      <button onClick={() => deleteProject(p.id)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded"><Trash2 className="w-4 h-4"/></button>
+        {loading ? <div className="flex justify-center p-20"><Loader2 className="w-10 h-10 animate-spin text-blue-600" /></div> : (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+            {projects.map(proj => {
+              const totalTasks = proj.tasks?.length || 0;
+              const completedTasks = proj.tasks?.filter((t: any) => t.status === 'Completed').length || 0;
+              const progress = totalTasks > 0 ? (completedTasks / totalTasks) * 100 : 0;
+
+              return (
+                <Card key={proj.id} className="shadow-sm border-slate-200 hover:shadow-md transition-all group flex flex-col">
+                  <CardHeader className="pb-3 flex-none">
+                    <div className="flex justify-between items-start mb-2">
+                      <Badge variant="secondary" className={`${getStatusColor(proj.status)} border-none shadow-sm`}>{proj.status}</Badge>
+                      <Button onClick={() => loadProjectAnalytics(proj)} variant="ghost" size="sm" className="h-8 text-xs text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100">
+                        <Eye className="w-3 h-3 mr-1" /> View Details
+                      </Button>
                     </div>
-                  </div>
-                  <div>
-                    <span className={`px-2 py-1 text-[10px] font-bold uppercase rounded ${p.status === 'Completed' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{p.status || 'Active'}</span>
-                    <h3 className="font-bold text-lg text-slate-800 line-clamp-1 mt-2">{p.name}</h3>
-                    <p className="text-sm text-slate-500 line-clamp-2 mt-1">{p.description}</p>
-                  </div>
-                  <div className="pt-4 border-t flex flex-col gap-2 bg-slate-50 p-3 rounded-md mt-2">
-                    <div className="flex items-center justify-between text-xs text-slate-600"><span className="flex items-center"><UserCircle className="w-3.5 h-3.5 mr-1.5 text-purple-500"/> Lead:</span><strong className="text-slate-800 truncate max-w-[100px]">{p.profiles?.name || "Unassigned"}</strong></div>
-                    <div className="flex items-center justify-between text-xs text-slate-600"><span className="flex items-center"><Calendar className="w-3.5 h-3.5 mr-1.5 text-blue-500"/> Start Date:</span><strong className="text-slate-800">{formatDate(p.start_date || p.created_at)}</strong></div>
-                    <div className="flex items-center justify-between text-xs text-slate-600"><span className="flex items-center"><Flag className="w-3.5 h-3.5 mr-1.5 text-red-500"/> Deadline:</span><strong className="text-red-600">{formatDate(p.deadline)}</strong></div>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+                    <CardTitle className="text-xl font-bold text-slate-800 line-clamp-1">{proj.name}</CardTitle>
+                    <p className="text-sm text-slate-500 line-clamp-2 mt-2 leading-relaxed">{proj.description}</p>
+                  </CardHeader>
+                  <CardContent className="pt-2 flex-1 flex flex-col justify-end">
+                    <div className="space-y-4">
+                      <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                        <div className="flex items-center justify-between text-xs text-slate-500 mb-2"><span className="flex items-center font-bold text-slate-700"><CheckSquare className="w-3.5 h-3.5 mr-1.5 text-blue-500"/> Task Progress</span><span className="font-bold">{progress.toFixed(0)}% ({completedTasks}/{totalTasks})</span></div>
+                        <div className="w-full bg-slate-200 rounded-full h-2"><div className="bg-blue-600 h-2 rounded-full transition-all duration-500" style={{ width: `${progress}%` }}></div></div>
+                      </div>
+                      <div className="flex items-center justify-between text-xs font-medium text-slate-500 pt-2 border-t border-slate-100">
+                        <span className="flex items-center"><Calendar className="w-3.5 h-3.5 mr-1.5"/> Started {new Date(proj.created_at).toLocaleDateString()}</span>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
           </div>
         )}
 
-        {/* CREATE / EDIT MODAL */}
-        {isModalOpen && (
+        {viewProject && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-            <Card className="w-full max-w-lg shadow-2xl animate-fade-in border-none">
-              <CardContent className="p-6">
-                <div className="flex justify-between items-center mb-6">
-                  <h2 className="text-xl font-bold">{editingId ? "Edit Project" : "Create New Project"}</h2>
-                  <button onClick={() => setIsModalOpen(false)} className="text-slate-500 hover:text-slate-800"><X className="w-5 h-5"/></button>
+            <Card className="w-full max-w-4xl shadow-2xl border-none animate-fade-in overflow-hidden">
+              <div className="bg-slate-900 p-6 text-white flex justify-between items-start">
+                <div>
+                  <div className="flex items-center gap-3 mb-2">
+                    <h2 className="text-2xl font-black">{viewProject.name}</h2>
+                    <span className="px-2 py-1 rounded text-xs font-bold bg-blue-500/20 text-blue-300 border border-blue-500/30">{viewProject.status}</span>
+                  </div>
+                  <p className="text-slate-400 text-sm max-w-2xl">{viewProject.description}</p>
                 </div>
-                <form onSubmit={saveProject} className="space-y-4">
-                  <div className="space-y-2"><Label>Project Name</Label><Input required value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} /></div>
-                  <div className="space-y-2"><Label>Description</Label><textarea required className="w-full p-2 border rounded-md h-20 resize-none text-sm" value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})} /></div>
-                  
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2"><Label>Status</Label><select className="w-full p-2 border rounded-md text-sm" value={formData.status} onChange={e => setFormData({...formData, status: e.target.value})}><option value="Active">Active</option><option value="On Hold">On Hold</option><option value="Completed">Completed</option></select></div>
-                    <div className="space-y-2"><Label>Assign Team Lead</Label><select className="w-full p-2 border rounded-md text-sm" value={formData.team_lead_id} onChange={e => setFormData({...formData, team_lead_id: e.target.value})}><option value="">-- Select --</option>{teamLeads.map(tl => (<option key={tl.id} value={tl.id}>{tl.name}</option>))}</select></div>
-                  </div>
+                <button onClick={() => setViewProject(null)} className="text-slate-400 hover:text-white"><X className="w-6 h-6"/></button>
+              </div>
+              
+              <CardContent className="p-6 bg-slate-50 max-h-[75vh] overflow-y-auto">
+                {!projectAnalytics ? <div className="flex justify-center p-8"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div> : (
+                  <div className="space-y-6">
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                        <p className="text-xs font-bold text-slate-500 uppercase flex items-center gap-1 mb-1"><Clock className="w-3.5 h-3.5"/> Days Active</p>
+                        <p className="text-2xl font-black text-slate-800">{projectAnalytics.daysActive}</p>
+                      </div>
+                      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                        <p className="text-xs font-bold text-slate-500 uppercase flex items-center gap-1 mb-1"><Users className="w-3.5 h-3.5"/> Team Size</p>
+                        <p className="text-2xl font-black text-slate-800">{projectAnalytics.totalEmployees}</p>
+                      </div>
+                      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                        <p className="text-xs font-bold text-slate-500 uppercase flex items-center gap-1 mb-1"><UserCircle className="w-3.5 h-3.5"/> Project Lead</p>
+                        <p className="text-lg font-bold text-slate-800 truncate">{viewProject.profiles?.name || 'Unassigned'}</p>
+                      </div>
+                    </div>
 
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2"><Label>Start Date</Label><Input type="date" value={formData.start_date} onChange={e => setFormData({...formData, start_date: e.target.value})} /></div>
-                    <div className="space-y-2"><Label>Deadline</Label><Input type="date" value={formData.deadline} onChange={e => setFormData({...formData, deadline: e.target.value})} /></div>
-                  </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="bg-white p-5 rounded-xl border border-emerald-200 shadow-sm">
+                        <h3 className="font-bold text-emerald-800 flex items-center gap-2 mb-4 border-b border-emerald-100 pb-2"><Star className="w-4 h-4 text-emerald-600"/> Top Contributors</h3>
+                        {projectAnalytics.topPerformers.length > 0 ? (
+                          <ul className="space-y-3">
+                            {projectAnalytics.topPerformers.map((emp: any, i: number) => (
+                              <li key={i} className="flex justify-between items-center text-sm">
+                                <span className="font-bold text-slate-700">{emp.name}</span>
+                                <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2 py-1 rounded">100% ({emp.completed}/{emp.total})</span>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : <p className="text-sm text-slate-500 italic">No one has 100% completion rate yet.</p>}
+                      </div>
 
-                  <Button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white mt-4">{editingId ? "Save Changes" : "Create Project"}</Button>
-                </form>
+                      <div className="bg-white p-5 rounded-xl border border-red-200 shadow-sm">
+                        <h3 className="font-bold text-red-800 flex items-center gap-2 mb-4 border-b border-red-100 pb-2"><TrendingDown className="w-4 h-4 text-red-600"/> Needs Attention</h3>
+                        {projectAnalytics.needsAttention.length > 0 ? (
+                          <ul className="space-y-3">
+                            {projectAnalytics.needsAttention.map((emp: any, i: number) => (
+                              <li key={i} className="flex justify-between items-center text-sm">
+                                <span className="font-bold text-slate-700">{emp.name}</span>
+                                <span className="text-xs font-bold text-red-700 bg-red-50 px-2 py-1 rounded">{emp.rate.toFixed(0)}% ({emp.completed}/{emp.total})</span>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : <p className="text-sm text-slate-500 italic">Everyone is performing well.</p>}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </div>
