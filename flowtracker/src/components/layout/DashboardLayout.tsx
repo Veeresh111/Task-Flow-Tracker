@@ -76,7 +76,8 @@ export function DashboardLayout({ children, role }: { children: React.ReactNode;
   const location = useLocation();
   const { toast } = useToast();
 
-  const currentRole = role || "employee";
+  // 🔥 SMART ROLE DETECTION: Strictly bypass hardcoded props and use the real DB profile role
+  const currentRole = userProfile?.role?.toLowerCase() || role || "employee";
   const items = navItems[currentRole] || navItems.employee;
 
   useEffect(() => {

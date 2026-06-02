@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase";
 import { Send, Loader2, Trash2, Hash, UserCircle, Video, ShieldAlert } from "lucide-react";
+import { useLocation, useSearchParams } from "react-router-dom"; // ADDED ROUTER CATCHERS
 
 export default function EmployeeChat() {
   const [messages, setMessages] = useState<any[]>([]);
@@ -13,6 +14,10 @@ export default function EmployeeChat() {
   const [userId, setUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // NEW: Catchers to receive the specific employee data
+  const location = useLocation(); 
+  const [searchParams] = useSearchParams();
 
   useEffect(() => {
     initChat();
@@ -40,7 +45,21 @@ export default function EmployeeChat() {
     const { data: profiles } = await supabase.from('profiles').select('id, name, role').neq('id', user?.id || '');
     if (profiles) setUsers(profiles);
 
-    await loadMessages("GLOBAL", user?.id);
+    // NEW: FOOLPROOF CATCHER ENGINE
+    // Checks if the user was directed here from MyTeam or Analytics
+    const routedUserId = location.state?.selectedUserId || searchParams.get('userId') || localStorage.getItem('activeChatUserId');
+    
+    let targetChatId = "GLOBAL";
+    
+    if (routedUserId) {
+      targetChatId = routedUserId;
+      // Clear the local storage cache so it doesn't get stuck on normal visits later
+      localStorage.removeItem('activeChatUserId');
+      localStorage.removeItem('activeChatUserName');
+    }
+
+    setActiveChat(targetChatId);
+    await loadMessages(targetChatId, user?.id);
   };
 
   const loadMessages = async (chatId: string, currentUserId: string | null = userId) => {

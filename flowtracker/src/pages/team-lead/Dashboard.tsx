@@ -18,32 +18,55 @@ export default function TeamLeadDashboard() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      // 1. Fetch all required data safely
+      // 1. Fetch current TL's profile to define their department jurisdiction
+      const { data: leadProfile } = await supabase
+        .from('profiles')
+        .select('department')
+        .eq('id', user.id)
+        .single();
+
+      const currentLeadDept = leadProfile?.department || '';
+
+      // 2. Fetch all required data matrices safely
       const [profilesRes, projectsRes, tasksRes, complaintsRes, leavesRes] = await Promise.all([
-        supabase.from('profiles').select('role'),
+        supabase.from('profiles').select('id, role, department, team_lead_id'),
         supabase.from('projects').select('team_lead_id, status'),
-        supabase.from('tasks').select('*'),
-        supabase.from('complaints').select('status'),
-        supabase.from('leaves').select('status') // Fetching Leave Requests!
+        supabase.from('tasks').select('assigned_to, status, state'),
+        supabase.from('complaints').select('user_id, status'),
+        supabase.from('leaves').select('user_id, status')
       ]);
 
-      const teamCount = profilesRes.data?.filter(p => p.role?.toUpperCase() === 'EMPLOYEE').length || 0;
+      const allProfiles = profilesRes.data || [];
+
+      // 3. SMART MNC MATCHING STRATEGY: Isolate only this TL's team members
+      const teamMembers = allProfiles.filter(p => 
+        p.id !== user.id && 
+        (p.team_lead_id === user.id || (p.department === currentLeadDept && p.role?.toLowerCase() === 'employee'))
+      );
+      
+      const teamMemberIds = teamMembers.map(m => m.id);
+
+      // Calculate localized statistics
+      const teamCount = teamMembers.length;
       const projCount = projectsRes.data?.filter(p => p.team_lead_id === user.id && p.status !== 'Completed').length || 0;
 
-      // 2. APPROVALS ENGINE: Checks Tasks AND Leaves
+      // 4. APPROVALS ENGINE: Strictly check tasks and leaves for THIS team only
       const pendingTasks = tasksRes.data?.filter(t => {
         const s = (t.status || t.state || '').toLowerCase();
-        return s.includes('pending') || s.includes('review') || s.includes('awaiting');
+        const isPending = s.includes('pending') || s.includes('review') || s.includes('awaiting');
+        return isPending && teamMemberIds.includes(t.assigned_to);
       }).length || 0;
 
       const pendingLeaves = leavesRes.data?.filter(l => 
-        l.status?.toLowerCase() === 'pending'
+        l.status?.toLowerCase() === 'pending' && teamMemberIds.includes(l.user_id)
       ).length || 0;
 
-      // Combine them for the True Approvals count
       const totalPendingApprovals = pendingTasks + pendingLeaves;
 
-      const compCount = complaintsRes.data?.filter(c => c.status === 'Open').length || 0;
+      // 5. COMPLAINTS ENGINE: Check complaints filed by THIS team only
+      const compCount = complaintsRes.data?.filter(c => 
+        c.status === 'Open' && teamMemberIds.includes(c.user_id)
+      ).length || 0;
 
       setStats({
         teamMembers: teamCount,
