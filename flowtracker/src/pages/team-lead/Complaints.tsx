@@ -1,176 +1,289 @@
 import { useState, useEffect } from "react";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabase";
-import { Loader2, Send, AlertCircle, Clock, CheckCircle2, Eye } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { Loader2, ShieldAlert, CheckCircle, Clock, MessageSquare, ArrowUpRight, Search, Filter, Send, AlertTriangle } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export default function TeamLeadComplaints() {
   const { toast } = useToast();
-  const [loading, setLoading] = useState(false);
-  const [fetching, setFetching] = useState(true);
   const [complaints, setComplaints] = useState<any[]>([]);
-  const [formData, setFormData] = useState({ title: "", description: "" });
-  const [userId, setUserId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const navigate = useNavigate();
+
+  // NEW: State for Search, Filter, and Filing Complaints
+  const [userProfile, setUserProfile] = useState<any>(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [severityFilter, setSeverityFilter] = useState("ALL");
+  const [submitting, setSubmitting] = useState(false);
+  const [form, setForm] = useState({ title: "", description: "", category: "General Workflow" });
 
   useEffect(() => {
-    fetchUserDataAndComplaints();
+    fetchTeamComplaints();
   }, []);
 
-  const fetchUserDataAndComplaints = async () => {
-    setFetching(true);
+  const fetchTeamComplaints = async () => {
+    setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
-    
-    if (user) {
-      setUserId(user.id);
-      const { data, error } = await supabase
-        .from('complaints')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false });
-        
-      if (!error && data) {
-        setComplaints(data);
-      }
-    }
-    setFetching(false);
+    if (!user) return;
+
+    // Get current user profile for filing new complaints
+    const { data: tlProfile } = await supabase.from('profiles').select('*').eq('id', user.id).single();
+    if (tlProfile) setUserProfile(tlProfile);
+
+    const tlDept = tlProfile?.department || '';
+
+    // Find all employees under this TL
+    const { data: allProfiles } = await supabase.from('profiles').select('id, team_lead_id, department, role');
+    const teamMembers = (allProfiles || []).filter(p => 
+      p.id !== user.id && 
+      (p.team_lead_id === user.id || (p.department === tlDept && p.role?.toUpperCase() === 'EMPLOYEE'))
+    );
+    const teamIds = teamMembers.map(m => m.id);
+
+    // Fetch complaints routed to the TEAM_LEAD from THEIR specific team
+    const { data: teamComplaints } = teamIds.length > 0 
+      ? await supabase.from('complaints').select('*, profiles!inner(name)').eq('target_role', 'TEAM_LEAD').in('user_id', teamIds)
+      : { data: [] };
+
+    // Fetch complaints FILED BY the Team Lead themselves
+    const { data: myComplaints } = await supabase.from('complaints')
+      .select('*, profiles!inner(name)')
+      .eq('user_id', user.id);
+
+    // Merge safely
+    const merged = [...(teamComplaints || []), ...(myComplaints || [])];
+    const uniqueMap = new Map();
+    merged.forEach(c => uniqueMap.set(c.id, c));
+    const finalComplaints = Array.from(uniqueMap.values()).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+    setComplaints(finalComplaints);
+    setLoading(false);
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const getSeverityBadge = (sev: string) => {
+    const s = (sev || "MODERATE").toUpperCase();
+    if (s === "CRITICAL") return <span className="bg-red-100 text-red-700 border border-red-200 px-2 py-0.5 rounded text-[10px] font-black uppercase">Critical</span>;
+    if (s === "HIGH") return <span className="bg-orange-100 text-orange-700 border border-orange-200 px-2 py-0.5 rounded text-[10px] font-black uppercase">High</span>;
+    if (s === "LOW") return <span className="bg-slate-100 text-slate-700 border border-slate-200 px-2 py-0.5 rounded text-[10px] font-black uppercase">Low</span>;
+    return <span className="bg-amber-100 text-amber-700 border border-amber-200 px-2 py-0.5 rounded text-[10px] font-black uppercase">Moderate</span>;
+  };
+
+  const updateStatus = async (id: string, newStatus: string) => {
+    const { error } = await supabase.from('complaints').update({ status: newStatus }).eq('id', id);
+    if (!error) {
+      toast({ title: "Status Updated", description: `Complaint marked as ${newStatus}` });
+      setComplaints(complaints.map(c => c.id === id ? { ...c, status: newStatus } : c));
+    }
+  };
+
+  const escalateToAdmin = async (id: string) => {
+    if (!window.confirm("Escalate this issue directly to the HR System Admin?")) return;
+    const { error } = await supabase.from('complaints').update({ target_role: 'ADMIN', status: 'Escalated' }).eq('id', id);
+    if (!error) {
+      toast({ title: "Ticket Escalated", description: "Transferred to System Admin." });
+      setComplaints(complaints.filter(c => c.id !== id));
+    }
+  };
+
+  const dispatchChat = (userId: string, userName: string) => {
+    localStorage.setItem('activeChatUserId', userId);
+    localStorage.setItem('activeChatUserName', userName);
+    navigate(`/team-lead/chat?userId=${userId}`, { state: { selectedUserId: userId, selectedUserName: userName } });
+  };
+
+  // NEW: Submit Complaint Function for TL
+  const submitComplaint = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!userId) return;
-    setLoading(true);
+    if (!form.title || !form.description || !userProfile) return;
+    setSubmitting(true);
 
     try {
+      let aiSeverity = "MODERATE";
+      try {
+        const apiKey = import.meta.env.VITE_GEMINI_API_KEY || "AQ.Ab8RN6KQXzJBhyAkPtzy70H-HJXV0zOvPoV6BjJ-ohgF3Cs_YQ";
+        const genAI = new GoogleGenerativeAI(apiKey);
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const prompt = `Analyze this corporate employee complaint: "${form.title} - ${form.description}". Return EXACTLY ONE WORD determining the severity: CRITICAL, HIGH, MODERATE, or LOW. No markdown, no punctuation.`;
+        const result = await model.generateContent(prompt);
+        const responseText = result.response.text().trim().toUpperCase();
+        if (["CRITICAL", "HIGH", "MODERATE", "LOW"].includes(responseText)) {
+          aiSeverity = responseText;
+        }
+      } catch (aiError) {
+        console.warn("AI Triage offline, defaulting to MODERATE", aiError);
+      }
+
       const { error } = await supabase.from('complaints').insert([{
-        user_id: userId,
-        title: formData.title,
-        description: formData.description,
+        user_id: userProfile.id,
+        title: form.title,
+        description: form.description,
+        category: form.category,
+        target_role: 'ADMIN', // TL complaints always route to System Admin
+        severity: aiSeverity,
         status: 'Open'
       }]);
 
       if (error) throw error;
-      toast({ title: "Issue Submitted", description: "The admin team has been notified." });
-      setFormData({ title: "", description: "" });
-      fetchUserDataAndComplaints();
+      toast({ title: "Ticket Submitted", description: `Routed to System Admin (Severity: ${aiSeverity})` });
+      setForm({ title: "", description: "", category: "General Workflow" });
+      fetchTeamComplaints();
     } catch (err: any) {
-      toast({ title: "Submission Failed", description: err.message, variant: "destructive" });
-    } finally {
-      setLoading(false);
+      toast({ title: "Error", description: err.message, variant: "destructive" });
     }
+    setSubmitting(false);
   };
 
-  const formatDate = (dateString: string) => {
-    if (!dateString) return '';
-    return new Date(dateString).toLocaleString('en-US', {
-      month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true
-    });
-  };
-
-  const calculateSLA = (start: string, end: string) => {
-    const diffMs = new Date(end).getTime() - new Date(start).getTime();
-    const diffHrs = Math.floor(diffMs / (1000 * 60 * 60));
-    const diffMins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
-    if (diffHrs > 24) return `${Math.floor(diffHrs / 24)}d ${diffHrs % 24}h`;
-    return `${diffHrs}h ${diffMins}m`;
-  };
+  // NEW: Smart Search & Filter Engine
+  const filteredComplaints = complaints.filter(c => {
+    const matchesSearch = c.title.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                          c.profiles?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          c.description?.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesSeverity = severityFilter === "ALL" || (c.severity || "MODERATE").toUpperCase() === severityFilter;
+    return matchesSearch && matchesSeverity;
+  });
 
   return (
     <DashboardLayout role="team_lead">
-      <div className="space-y-8 max-w-4xl mx-auto animate-fade-in pb-12">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Support & Escalations</h1>
-          <p className="text-muted-foreground">Submit managerial issues and track their resolution status in real-time.</p>
+      <div className="max-w-7xl mx-auto space-y-6 animate-fade-in pb-12">
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 flex flex-col md:flex-row justify-between items-start md:items-center">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
+              <ShieldAlert className="w-8 h-8 text-amber-600" /> Team Resolutions
+            </h1>
+            <p className="text-slate-500 mt-1">Review internal team conflicts, or file your own escalation to the HR Admin.</p>
+          </div>
         </div>
 
-        {/* 1. SUBMISSION FORM */}
-        <Card className="shadow-md border-purple-100">
-          <CardHeader className="bg-purple-50/50 border-b pb-4 mb-4">
-            <CardTitle className="text-lg flex items-center gap-2 text-purple-800">
-              <AlertCircle className="w-5 h-5" /> Raise an Administrative Issue
-            </CardTitle>
-            <CardDescription>Detailed reports help Admins resolve issues faster.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="space-y-2">
-                <Label>Subject</Label>
-                <Input required placeholder="e.g. Resource request, Team conflict" value={formData.title} onChange={(e) => setFormData({...formData, title: e.target.value})} />
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* NEW: File a Ticket Form for TL */}
+          <div className="lg:col-span-1">
+            <Card className="shadow-sm border-slate-200 sticky top-24">
+              <CardHeader className="border-b bg-slate-50/50 pb-4">
+                <CardTitle className="text-lg text-slate-800 flex items-center gap-2">
+                  <AlertTriangle className="w-5 h-5 text-amber-600" /> File System Escalation
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-5">
+                <form onSubmit={submitComplaint} className="space-y-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-bold text-slate-500 uppercase">Complaint Category</Label>
+                    <select className="w-full p-2.5 border border-slate-300 rounded-md text-sm focus:ring-2 focus:ring-amber-500 bg-white" value={form.category} onChange={e => setForm({...form, category: e.target.value})}>
+                      <option value="General Workflow">General Workflow Issue</option>
+                      <option value="Payroll & Finance">Payroll & Compensation</option>
+                      <option value="Harassment / HR">Harassment / HR Violation</option>
+                      <option value="IT & Infrastructure">IT / Technical Equipment</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-bold text-slate-500 uppercase">Subject Title</Label>
+                    <Input placeholder="Brief summary of issue" value={form.title} onChange={e => setForm({...form, title: e.target.value})} required />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-bold text-slate-500 uppercase flex justify-between">
+                      Detailed Description <span className="text-[9px] text-indigo-500">AI Triaged</span>
+                    </Label>
+                    <Textarea className="h-28 resize-none" placeholder="Provide specific details..." value={form.description} onChange={e => setForm({...form, description: e.target.value})} required />
+                  </div>
+                  <Button type="submit" disabled={submitting} className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold">
+                    {submitting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Send className="w-4 h-4 mr-2" />} 
+                    Escalate to Admin
+                  </Button>
+                </form>
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="lg:col-span-2 space-y-4">
+            {/* NEW: Smart Search & Filter Bar */}
+            <div className="flex flex-col md:flex-row gap-3">
+              <div className="relative flex-1 shadow-sm">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <Input placeholder="Search tickets by subject, description, or employee name..." className="pl-9 border-slate-300 focus-visible:ring-amber-500" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
               </div>
-              <div className="space-y-2">
-                <Label>Full Explanation</Label>
-                <textarea 
-                  required
-                  placeholder="Describe the situation..." 
-                  className="flex min-h-[120px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring resize-none"
-                  value={formData.description} 
-                  onChange={(e) => setFormData({...formData, description: e.target.value})} 
-                />
+              <div className="flex items-center gap-2 shadow-sm">
+                <Filter className="w-4 h-4 text-slate-500" />
+                <select className="p-2.5 border border-slate-300 rounded-md text-sm outline-none focus:ring-2 focus:ring-amber-500 bg-white font-bold text-slate-700" value={severityFilter} onChange={e => setSeverityFilter(e.target.value)}>
+                  <option value="ALL">All Severities</option>
+                  <option value="CRITICAL">Critical AI Rating</option>
+                  <option value="HIGH">High AI Rating</option>
+                  <option value="MODERATE">Moderate AI Rating</option>
+                  <option value="LOW">Low AI Rating</option>
+                </select>
               </div>
-              <Button type="submit" className="bg-purple-600 hover:bg-purple-700 text-white" disabled={loading}>
-                {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Send className="w-4 h-4 mr-2" />}
-                Submit Securely
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
-
-        {/* 2. REAL-TIME TRACKING HISTORY */}
-        <div className="space-y-4 pt-4">
-          <h2 className="text-xl font-bold tracking-tight border-b pb-2">Your Escalation History</h2>
-          {fetching ? (
-            <div className="flex justify-center p-8"><Loader2 className="w-6 h-6 animate-spin text-purple-600" /></div>
-          ) : complaints.length === 0 ? (
-            <div className="text-center py-12 bg-gray-50 rounded-lg border border-dashed border-gray-200">
-              <p className="text-gray-500 font-medium">No escalations submitted.</p>
             </div>
-          ) : (
-            <div className="space-y-4">
-              {complaints.map((c) => (
-                <Card key={c.id} className={`overflow-hidden transition-all ${c.status === 'Resolved' ? 'border-green-200 bg-green-50/30' : c.status === 'Viewed' ? 'border-amber-200 bg-amber-50/30' : 'border-gray-200'}`}>
-                  <CardContent className="p-5">
-                    <div className="flex flex-col space-y-3">
-                      <div className="flex items-center gap-3">
-                        <span className={`px-2.5 py-1 text-xs font-bold uppercase rounded-full flex items-center gap-1
-                          ${c.status === 'Open' ? 'bg-red-100 text-red-700' : c.status === 'Viewed' ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>
-                          {c.status === 'Open' && <AlertCircle className="w-3 h-3"/>}
-                          {c.status === 'Viewed' && <Eye className="w-3 h-3"/>}
-                          {c.status === 'Resolved' && <CheckCircle2 className="w-3 h-3"/>}
-                          {c.status}
-                        </span>
-                        <h3 className="font-bold text-lg text-gray-900">{c.title}</h3>
-                      </div>
-                      
-                      <p className="text-gray-700 whitespace-pre-wrap bg-white p-3 rounded-md border border-gray-100 shadow-sm text-sm">
-                        {c.description}
-                      </p>
 
-                      <div className="text-xs text-gray-500 flex flex-wrap gap-x-6 gap-y-2 pt-2">
-                        <div className="flex items-center gap-1"><Clock className="w-3.5 h-3.5"/> <b>Opened:</b> {formatDate(c.created_at)}</div>
-                        {c.viewed_at && <div className="flex items-center gap-1 text-amber-600"><Eye className="w-3.5 h-3.5"/> <b>Admin Viewed:</b> {formatDate(c.viewed_at)}</div>}
-                        {c.resolved_at && (
-                          <div className="flex items-center gap-1 text-green-600">
-                            <CheckCircle2 className="w-3.5 h-3.5"/> <b>Resolved:</b> {formatDate(c.resolved_at)} 
-                            <span className="ml-1 text-gray-400 font-medium">(Time taken: {calculateSLA(c.created_at, c.resolved_at)})</span>
-                          </div>
-                        )}
-                      </div>
-
-                      {c.admin_notes && (
-                        <div className="mt-2 bg-white p-3 rounded-md border border-green-200 shadow-sm">
-                          <span className="text-xs font-bold text-green-800 uppercase tracking-wider mb-1 block">Response from Admin</span>
-                          <p className="text-sm text-gray-800">{c.admin_notes}</p>
-                        </div>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          )}
+            <Card className="shadow-sm border-slate-200 bg-white">
+              <CardHeader className="border-b bg-slate-50/50">
+                <CardTitle className="text-lg text-slate-800">Tickets & Resolutions ({filteredComplaints.filter(c => c.status !== 'Resolved' && c.status !== 'Closed').length} Active)</CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                {loading ? <div className="flex justify-center p-12"><Loader2 className="w-8 h-8 animate-spin text-amber-600" /></div> : (
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader className="bg-slate-50">
+                        <TableRow>
+                          <TableHead className="font-bold text-slate-700">Origin / Category</TableHead>
+                          <TableHead className="font-bold text-slate-700">Complaint Description</TableHead>
+                          <TableHead className="font-bold text-slate-700">AI Severity</TableHead>
+                          <TableHead className="font-bold text-slate-700 text-center">Status</TableHead>
+                          <TableHead className="font-bold text-slate-700 text-right">Actions</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {filteredComplaints.map(comp => (
+                          <TableRow key={comp.id} className="hover:bg-slate-50/80">
+                            <TableCell>
+                              <div className="font-bold text-slate-900">{comp.profiles?.name} {comp.user_id === userProfile?.id && "(You)"}</div>
+                              <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mt-1">{comp.category}</div>
+                            </TableCell>
+                            <TableCell>
+                              <div className="font-bold text-slate-800 text-sm">{comp.title}</div>
+                              <div className="text-xs text-slate-500 mt-0.5 line-clamp-2 max-w-[200px]" title={comp.description}>{comp.description}</div>
+                            </TableCell>
+                            <TableCell>{getSeverityBadge(comp.severity)}</TableCell>
+                            <TableCell className="text-center">
+                              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border ${comp.status === 'Resolved' || comp.status === 'Closed' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
+                                {comp.status === 'Resolved' || comp.status === 'Closed' ? <CheckCircle className="w-3 h-3"/> : <Clock className="w-3 h-3"/>}
+                                {comp.status}
+                              </span>
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <div className="flex justify-end gap-2">
+                                {comp.user_id !== userProfile?.id && (
+                                  <Button onClick={() => dispatchChat(comp.user_id, comp.profiles?.name)} variant="outline" size="sm" className="h-8 text-xs text-indigo-600 border-indigo-200 hover:bg-indigo-50" title="Message Employee">
+                                    <MessageSquare className="w-3.5 h-3.5" />
+                                  </Button>
+                                )}
+                                {comp.status !== 'Resolved' && comp.status !== 'Closed' && comp.user_id !== userProfile?.id && (
+                                  <>
+                                    <Button onClick={() => updateStatus(comp.id, 'Resolved')} size="sm" className="h-8 text-xs bg-emerald-600 hover:bg-emerald-700 text-white" title="Mark Resolved">
+                                      <CheckCircle className="w-3.5 h-3.5" />
+                                    </Button>
+                                    <Button onClick={() => escalateToAdmin(comp.id)} variant="outline" size="sm" className="h-8 text-xs text-red-600 border-red-200 hover:bg-red-50" title="Escalate to HR Admin">
+                                      <ArrowUpRight className="w-3.5 h-3.5" />
+                                    </Button>
+                                  </>
+                                )}
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                        {filteredComplaints.length === 0 && <TableRow><TableCell colSpan={5} className="text-center p-12 text-slate-500">No complaints found matching this filter.</TableCell></TableRow>}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
         </div>
       </div>
     </DashboardLayout>

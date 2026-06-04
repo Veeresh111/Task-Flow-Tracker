@@ -2,15 +2,24 @@ import { useState, useEffect } from "react";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { supabase } from "@/lib/supabase";
-import { Loader2, Clock, Calendar, CheckCircle2, Building2, Home as HomeIcon } from "lucide-react";
+import { Loader2, Clock, Calendar, CheckCircle2, Building2, Home as HomeIcon, FileText, Download, User, Search } from "lucide-react";
 
 export default function TeamLeadWorkLogs() {
   const [workLogs, setWorkLogs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const [teamReports, setTeamReports] = useState<any[]>([]);
+  const [loadingReports, setLoadingReports] = useState(true);
+
+  // NEW: Search engine for Team Lead to easily find reports by employee or content
+  const [searchTerm, setSearchTerm] = useState("");
+
   useEffect(() => {
     fetchLogs();
+    fetchTeamReports(); 
   }, []);
 
   const fetchLogs = async () => {
@@ -21,6 +30,65 @@ export default function TeamLeadWorkLogs() {
       if (data) setWorkLogs(data);
     }
     setLoading(false);
+  };
+
+  const fetchTeamReports = async () => {
+    setLoadingReports(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data: tlProfile } = await supabase.from('profiles').select('*').eq('id', user.id).single();
+      const tlDept = tlProfile?.department || '';
+
+      const { data: allProfiles } = await supabase.from('profiles').select('id, name, team_lead_id, department, role');
+      const teamMembers = (allProfiles || []).filter(p => 
+        p.id !== user.id && 
+        (p.team_lead_id === user.id || (p.department === tlDept && p.role?.toUpperCase() === 'EMPLOYEE'))
+      );
+      
+      const teamIds = teamMembers.map(m => m.id);
+
+      if (teamIds.length > 0) {
+        const { data: tLogs } = await supabase.from('work_logs')
+          .select('*, profiles!inner(name)')
+          .in('user_id', teamIds)
+          .order('created_at', { ascending: false });
+
+        const standups = (tLogs || []).filter(l => l.notes && l.notes.includes('DAILY STAND-UP UPDATE'));
+        setTeamReports(standups);
+      }
+    } catch (error) {
+      console.error(error);
+    }
+    setLoadingReports(false);
+  };
+
+  // NEW: Filter logic applying the search engine to the reports array
+  const filteredTeamReports = teamReports.filter(report => {
+    const searchLow = searchTerm.toLowerCase();
+    return (
+      (report.profiles?.name || "").toLowerCase().includes(searchLow) ||
+      (report.notes || "").toLowerCase().includes(searchLow)
+    );
+  });
+
+  const downloadTeamReports = () => {
+    let csvContent = `data:text/csv;charset=utf-8,DATE,EMPLOYEE,STAND-UP REPORT\n`;
+    filteredTeamReports.forEach(r => {
+      const date = new Date(r.created_at).toLocaleString('en-US');
+      const name = r.profiles?.name || "Unknown";
+      const cleanReport = r.notes.replace(/"/g, '""').replace(/=== DAILY STAND-UP UPDATE ===/g, '').trim();
+      csvContent += `"${date}","${name}","${cleanReport}"\n`;
+    });
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `Team_Daily_Standups.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const calculateHours = (start: string | null, end: string | null) => {
@@ -105,11 +173,62 @@ export default function TeamLeadWorkLogs() {
           </div>
         </div>
 
+        <Card className="shadow-sm border-slate-200 bg-gradient-to-br from-indigo-50 to-white">
+          <CardHeader className="border-b border-indigo-100/50 pb-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+            <CardTitle className="text-lg text-indigo-900 flex items-center gap-2">
+              <FileText className="w-5 h-5 text-indigo-600" /> Team Daily Stand-up Updates
+            </CardTitle>
+            
+            {/* NEW: Search Engine & Filter inside the Team Lead Reports Header */}
+            <div className="flex items-center gap-2 w-full md:w-auto">
+              <div className="relative flex-1 md:w-64">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-indigo-400" />
+                <Input 
+                  placeholder="Search by name or content..." 
+                  className="pl-9 h-9 text-sm border-indigo-200 focus-visible:ring-indigo-500" 
+                  value={searchTerm} 
+                  onChange={e => setSearchTerm(e.target.value)} 
+                />
+              </div>
+              <Button onClick={downloadTeamReports} variant="outline" className="text-indigo-700 border-indigo-200 hover:bg-indigo-100 font-bold h-9 text-xs bg-white shadow-sm whitespace-nowrap">
+                <Download className="w-3.5 h-3.5 mr-2"/> Export
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="p-6">
+            {loadingReports ? (
+              <div className="flex justify-center p-12"><Loader2 className="w-8 h-8 animate-spin text-indigo-600" /></div>
+            ) : filteredTeamReports.length === 0 ? (
+              <div className="text-center p-8 text-slate-500 italic bg-white rounded-lg border border-slate-100">No team stand-up reports match your search.</div>
+            ) : (
+              <div className="space-y-4 max-h-[500px] overflow-y-auto custom-scrollbar pr-2">
+                {filteredTeamReports.map((report, idx) => (
+                  <div key={idx} className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm transition-all hover:shadow-md">
+                    <div className="flex justify-between items-start mb-3 pb-3 border-b border-slate-100">
+                      <div className="flex items-center gap-3">
+                        <div className="bg-indigo-100 p-2 rounded-full"><User className="w-4 h-4 text-indigo-600"/></div>
+                        <div>
+                          <h4 className="font-bold text-slate-900 text-sm">{report.profiles?.name}</h4>
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{new Date(report.created_at).toLocaleString()}</p>
+                        </div>
+                      </div>
+                      <span className="text-[10px] font-bold bg-emerald-100 text-emerald-700 px-2 py-1 rounded border border-emerald-200">Received</span>
+                    </div>
+                    <div className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed pl-2">
+                      {report.notes.replace('=== DAILY STAND-UP UPDATE ===\n', '')}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
         {loading ? <div className="flex justify-center p-20"><Loader2 className="w-10 h-10 animate-spin text-blue-600" /></div> : (
-          <Card className="shadow-sm border-slate-200">
+          <Card className="shadow-sm border-slate-200 mt-6">
             <CardHeader className="border-b bg-slate-50/50">
               <CardTitle className="text-lg text-slate-800 flex items-center gap-2">
-                <CheckCircle2 className="w-5 h-5 text-emerald-500" /> Daily Attendance Record
+                <CheckCircle2 className="w-5 h-5 text-emerald-500" /> My Daily Attendance Record
               </CardTitle>
             </CardHeader>
             <CardContent className="p-0">

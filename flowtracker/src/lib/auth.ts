@@ -11,36 +11,66 @@ const adminSupabase = createClient(supabaseUrl, supabaseAnonKey, {
 export const authService = {
   signUp: async (formData: any) => {
     await supabase.auth.signOut(); // Wipes stuck sessions so it never crashes
+    
     const { data, error } = await supabase.auth.signUp({
       email: formData.email,
       password: formData.password,
-      options: { data: { name: formData.name, phone: formData.phone || "N/A", department: formData.department || "Unassigned" } }
+      options: { 
+        data: { 
+          name: formData.name, 
+          phone: formData.phone || "N/A", 
+          department: formData.department || "Unassigned",
+          role: formData.role || "employee" // The role is permanently saved in secure Auth Metadata
+        } 
+      }
     });
+    
     if (error) throw error;
     return data;
   },
 
   signIn: async (email: string, password: string) => {
-    await supabase.auth.signOut(); // Wipes stuck sessions so switching accounts works
+    await supabase.auth.signOut(); 
     const { data: authData, error: authError } = await supabase.auth.signInWithPassword({ email, password });
     if (authError) throw authError;
 
-    const { data: profileData, error: profileError } = await supabase.from('profiles').select('role').eq('id', authData.user.id).single();
-    if (profileError || !profileData) return { user: authData.user, role: 'employee' };
-    return { user: authData.user, role: profileData.role };
+    // THE BULLETPROOF FIX: Read the exact role you registered with from the secure Auth layer
+    const trueRole = authData.user.user_metadata?.role;
+
+    // Self-Heal the database now that you are successfully authenticated
+    if (trueRole) {
+      await supabase.from('profiles').update({ role: trueRole }).eq('id', authData.user.id);
+    }
+
+    const { data: profileData } = await supabase.from('profiles').select('role').eq('id', authData.user.id).single();
+    
+    // Always trust the True Role over a broken database value
+    return { 
+      user: authData.user, 
+      role: trueRole || profileData?.role || 'employee' 
+    };
   },
 
   adminCreateUser: async (formData: any) => {
-    // Admin creates users without logging themselves out
     const { data, error } = await adminSupabase.auth.signUp({
       email: formData.email,
       password: formData.password,
-      options: { data: { name: formData.name, phone: formData.phone || "N/A", department: formData.department || "Unassigned" } }
+      options: { 
+        data: { 
+          name: formData.name, 
+          phone: formData.phone || "N/A", 
+          department: formData.department || "Unassigned",
+          role: formData.role || "employee"
+        } 
+      }
     });
+    
     if (error) throw error;
+    
     if (data.user && formData.role) {
       await supabase.from('profiles').update({ role: formData.role }).eq('id', data.user.id);
     }
+    
     return data;
   },
 

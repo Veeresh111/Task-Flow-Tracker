@@ -1,199 +1,198 @@
 import { useState, useEffect } from "react";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabase";
-import { Loader2, Send, AlertCircle, Clock, CheckCircle2, Eye } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { Loader2, AlertTriangle, CheckCircle, Clock, ShieldAlert, Sparkles, Send } from "lucide-react";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export default function EmployeeComplaints() {
   const { toast } = useToast();
-  const [loading, setLoading] = useState(false);
-  const [fetching, setFetching] = useState(true);
   const [complaints, setComplaints] = useState<any[]>([]);
-  const [formData, setFormData] = useState({ title: "", description: "" });
-  const [userId, setUserId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [userProfile, setUserProfile] = useState<any>(null);
+
+  // Smart Form State
+  const [form, setForm] = useState({ title: "", description: "", category: "General Workflow", target_role: "TEAM_LEAD" });
 
   useEffect(() => {
-    fetchUserDataAndComplaints();
+    fetchComplaints();
   }, []);
 
-  const fetchUserDataAndComplaints = async () => {
-    setFetching(true);
+  const fetchComplaints = async () => {
+    setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
-    
-    if (user) {
-      setUserId(user.id);
-      // Fetch this specific employee's complaint history
-      const { data, error } = await supabase
-        .from('complaints')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false });
-        
-      if (!error && data) {
-        setComplaints(data);
-      }
-    }
-    setFetching(false);
+    if (!user) return;
+
+    const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).single();
+    if (profile) setUserProfile(profile);
+
+    const { data } = await supabase.from('complaints').select('*').eq('user_id', user.id).order('created_at', { ascending: false });
+    if (data) setComplaints(data);
+    setLoading(false);
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const getSeverityBadge = (sev: string) => {
+    const s = (sev || "MODERATE").toUpperCase();
+    if (s === "CRITICAL") return <span className="bg-red-100 text-red-700 border border-red-200 px-2 py-0.5 rounded text-[10px] font-black uppercase">Critical</span>;
+    if (s === "HIGH") return <span className="bg-orange-100 text-orange-700 border border-orange-200 px-2 py-0.5 rounded text-[10px] font-black uppercase">High</span>;
+    if (s === "LOW") return <span className="bg-slate-100 text-slate-700 border border-slate-200 px-2 py-0.5 rounded text-[10px] font-black uppercase">Low</span>;
+    return <span className="bg-amber-100 text-amber-700 border border-amber-200 px-2 py-0.5 rounded text-[10px] font-black uppercase">Moderate</span>;
+  };
+
+  const submitComplaint = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!userId) return;
-    setLoading(true);
+    if (!form.title || !form.description || !userProfile) return;
+    setSubmitting(true);
 
     try {
+      // AI TRIAGE ENGINE: Automatically assess severity to prevent false reporting
+      let aiSeverity = "MODERATE";
+      try {
+        const genAI = new GoogleGenerativeAI(import.meta.env.VITE_GEMINI_API_KEY);
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const prompt = `Analyze this corporate employee complaint: "${form.title} - ${form.description}". Return EXACTLY ONE WORD determining the severity: CRITICAL, HIGH, MODERATE, or LOW. No markdown, no punctuation.`;
+        const result = await model.generateContent(prompt);
+        const responseText = result.response.text().trim().toUpperCase();
+        if (["CRITICAL", "HIGH", "MODERATE", "LOW"].includes(responseText)) {
+          aiSeverity = responseText;
+        }
+      } catch (aiError) {
+        console.warn("AI Triage offline, defaulting to MODERATE", aiError);
+      }
+
       const { error } = await supabase.from('complaints').insert([{
-        user_id: userId,
-        title: formData.title,
-        description: formData.description,
-        status: 'Open' // Must be 'Open' to match our new database rules
+        user_id: userProfile.id,
+        title: form.title,
+        description: form.description,
+        category: form.category,
+        target_role: form.target_role,
+        severity: aiSeverity,
+        status: 'Open'
       }]);
 
       if (error) throw error;
-      toast({ title: "Complaint Submitted", description: "The admin team has been notified." });
-      setFormData({ title: "", description: "" });
-      
-      // Refresh the history feed immediately
-      fetchUserDataAndComplaints();
+      toast({ title: "Ticket Submitted", description: `Routed to ${form.target_role === 'ADMIN' ? 'System Admin' : 'Team Lead'} (Severity: ${aiSeverity})` });
+      setForm({ title: "", description: "", category: "General Workflow", target_role: "TEAM_LEAD" });
+      fetchComplaints();
     } catch (err: any) {
-      toast({ title: "Submission Failed", description: err.message, variant: "destructive" });
-    } finally {
-      setLoading(false);
+      toast({ title: "Error", description: err.message, variant: "destructive" });
     }
-  };
-
-  // Helper function to format dates nicely
-  const formatDate = (dateString: string) => {
-    if (!dateString) return '';
-    return new Date(dateString).toLocaleString('en-US', {
-      month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true
-    });
-  };
-
-  // Helper function to calculate how long the Admin took to resolve it
-  const calculateSLA = (start: string, end: string) => {
-    const diffMs = new Date(end).getTime() - new Date(start).getTime();
-    const diffHrs = Math.floor(diffMs / (1000 * 60 * 60));
-    const diffMins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
-    if (diffHrs > 24) return `${Math.floor(diffHrs / 24)}d ${diffHrs % 24}h`;
-    return `${diffHrs}h ${diffMins}m`;
+    setSubmitting(false);
   };
 
   return (
     <DashboardLayout role="employee">
-      <div className="space-y-8 max-w-4xl mx-auto animate-fade-in pb-12">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Support & Complaints</h1>
-          <p className="text-muted-foreground">Submit an issue and track its resolution status in real-time.</p>
+      <div className="max-w-6xl mx-auto space-y-6 animate-fade-in pb-12">
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 flex flex-col md:flex-row justify-between items-start md:items-center">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
+              <ShieldAlert className="w-8 h-8 text-red-600" /> Resolution Desk
+            </h1>
+            <p className="text-slate-500 mt-1">Submit workflow issues, payroll concerns, or HR reports securely.</p>
+          </div>
         </div>
 
-        {/* 1. SUBMISSION FORM */}
-        <Card className="shadow-md border-blue-100">
-          <CardHeader className="bg-blue-50/50 border-b pb-4 mb-4">
-            <CardTitle className="text-lg flex items-center gap-2 text-blue-800">
-              <AlertCircle className="w-5 h-5" /> Raise a New Issue
-            </CardTitle>
-            <CardDescription>Please be detailed so our Admins can resolve it quickly.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="space-y-2">
-                <Label>Subject / Issue Topic</Label>
-                <Input 
-                  required 
-                  placeholder="e.g. Broken hardware, Payroll issue" 
-                  value={formData.title} 
-                  onChange={(e) => setFormData({...formData, title: e.target.value})} 
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Full Explanation</Label>
-                <textarea 
-                  required
-                  placeholder="Describe the problem you are facing..." 
-                  className="flex min-h-[120px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 resize-none"
-                  value={formData.description} 
-                  onChange={(e) => setFormData({...formData, description: e.target.value})} 
-                />
-              </div>
-              <Button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white" disabled={loading}>
-                {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Send className="w-4 h-4 mr-2" />}
-                Submit Complaint Securely
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-1">
+            <Card className="shadow-sm border-slate-200 sticky top-24">
+              <CardHeader className="border-b bg-slate-50/50 pb-4">
+                <CardTitle className="text-lg text-slate-800 flex items-center gap-2">
+                  <AlertTriangle className="w-5 h-5 text-red-500" /> File a New Ticket
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-5">
+                <form onSubmit={submitComplaint} className="space-y-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-bold text-slate-500 uppercase">Complaint Category</Label>
+                    <select className="w-full p-2.5 border border-slate-300 rounded-md text-sm focus:ring-2 focus:ring-red-500 bg-white" value={form.category} onChange={e => setForm({...form, category: e.target.value})}>
+                      <option value="General Workflow">General Workflow Issue</option>
+                      <option value="Payroll & Finance">Payroll & Compensation</option>
+                      <option value="Harassment / HR">Harassment / HR Violation</option>
+                      <option value="IT & Infrastructure">IT / Technical Equipment</option>
+                    </select>
+                  </div>
+                  
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-bold text-slate-500 uppercase">Chain of Command Routing</Label>
+                    <select className="w-full p-2.5 border border-slate-300 rounded-md text-sm focus:ring-2 focus:ring-red-500 bg-red-50 text-red-700 font-bold" value={form.target_role} onChange={e => setForm({...form, target_role: e.target.value})}>
+                      <option value="TEAM_LEAD">Route to My Team Lead</option>
+                      <option value="ADMIN">Escalate Directly to HR Admin</option>
+                    </select>
+                  </div>
 
-        {/* 2. REAL-TIME TRACKING HISTORY */}
-        <div className="space-y-4 pt-4">
-          <h2 className="text-xl font-bold tracking-tight border-b pb-2">Your Complaint History</h2>
-          
-          {fetching ? (
-            <div className="flex justify-center p-8"><Loader2 className="w-6 h-6 animate-spin text-blue-600" /></div>
-          ) : complaints.length === 0 ? (
-            <div className="text-center py-12 bg-gray-50 rounded-lg border border-dashed border-gray-200">
-              <p className="text-gray-500 font-medium">You haven't submitted any complaints yet.</p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {complaints.map((c) => (
-                <Card key={c.id} className={`overflow-hidden transition-all ${c.status === 'Resolved' ? 'border-green-200 bg-green-50/30' : c.status === 'Viewed' ? 'border-amber-200 bg-amber-50/30' : 'border-gray-200'}`}>
-                  <CardContent className="p-5">
-                    <div className="flex flex-col space-y-3">
-                      
-                      {/* Header & Status Badge */}
-                      <div className="flex items-center gap-3">
-                        <span className={`px-2.5 py-1 text-xs font-bold uppercase rounded-full flex items-center gap-1
-                          ${c.status === 'Open' ? 'bg-red-100 text-red-700' : c.status === 'Viewed' ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>
-                          {c.status === 'Open' && <AlertCircle className="w-3 h-3"/>}
-                          {c.status === 'Viewed' && <Eye className="w-3 h-3"/>}
-                          {c.status === 'Resolved' && <CheckCircle2 className="w-3 h-3"/>}
-                          {c.status}
-                        </span>
-                        <h3 className="font-bold text-lg text-gray-900">{c.title}</h3>
-                      </div>
-                      
-                      {/* Employee's Original Message */}
-                      <p className="text-gray-700 whitespace-pre-wrap bg-white p-3 rounded-md border border-gray-100 shadow-sm text-sm">
-                        {c.description}
-                      </p>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-bold text-slate-500 uppercase">Subject Title</Label>
+                    <Input placeholder="Brief summary of issue" value={form.title} onChange={e => setForm({...form, title: e.target.value})} required />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-bold text-slate-500 uppercase flex justify-between">
+                      Detailed Description <span className="flex items-center gap-1 text-[9px] text-indigo-500"><Sparkles className="w-3 h-3"/> AI Triaged</span>
+                    </Label>
+                    <Textarea className="h-32 resize-none" placeholder="Provide specific details..." value={form.description} onChange={e => setForm({...form, description: e.target.value})} required />
+                  </div>
+                  <Button type="submit" disabled={submitting} className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold">
+                    {submitting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Send className="w-4 h-4 mr-2" />} 
+                    Submit Secure Ticket
+                  </Button>
+                </form>
+              </CardContent>
+            </Card>
+          </div>
 
-                      {/* Timestamps (The Real-World Feature!) */}
-                      <div className="text-xs text-gray-500 flex flex-wrap gap-x-6 gap-y-2 pt-2">
-                        <div className="flex items-center gap-1">
-                          <Clock className="w-3.5 h-3.5"/> <b>Opened:</b> {formatDate(c.created_at)}
-                        </div>
-                        {c.viewed_at && (
-                          <div className="flex items-center gap-1 text-amber-600">
-                            <Eye className="w-3.5 h-3.5"/> <b>Admin Viewed:</b> {formatDate(c.viewed_at)}
-                          </div>
-                        )}
-                        {c.resolved_at && (
-                          <div className="flex items-center gap-1 text-green-600">
-                            <CheckCircle2 className="w-3.5 h-3.5"/> <b>Resolved:</b> {formatDate(c.resolved_at)} 
-                            <span className="ml-1 text-gray-400 font-medium">(Time taken: {calculateSLA(c.created_at, c.resolved_at)})</span>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Admin Feedback (If resolved) */}
-                      {c.admin_notes && (
-                        <div className="mt-2 bg-white p-3 rounded-md border border-green-200 shadow-sm">
-                          <span className="text-xs font-bold text-green-800 uppercase tracking-wider mb-1 block">Response from Admin</span>
-                          <p className="text-sm text-gray-800">{c.admin_notes}</p>
-                        </div>
-                      )}
-                      
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          )}
+          <div className="lg:col-span-2">
+            <Card className="shadow-sm border-slate-200">
+              <CardHeader className="border-b bg-slate-50/50 pb-4">
+                <CardTitle className="text-lg text-slate-800 flex items-center gap-2">
+                  <Clock className="w-5 h-5 text-blue-500" /> My Ticket History
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                {loading ? <div className="flex justify-center p-12"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div> : (
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader className="bg-slate-50">
+                        <TableRow>
+                          <TableHead className="font-bold text-slate-700">Ticket Details</TableHead>
+                          <TableHead className="font-bold text-slate-700">Routing / AI Severity</TableHead>
+                          <TableHead className="font-bold text-slate-700 text-right">Current Status</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {complaints.map(comp => (
+                          <TableRow key={comp.id} className="hover:bg-slate-50/80">
+                            <TableCell>
+                              <div className="font-bold text-slate-900">{comp.title}</div>
+                              <div className="text-xs text-slate-500 font-medium mt-1 truncate max-w-xs">{comp.category}</div>
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex flex-col gap-1.5 items-start">
+                                <span className="text-[10px] bg-slate-100 border text-slate-600 px-1.5 py-0.5 rounded font-bold uppercase">{comp.target_role === 'ADMIN' ? 'HR ADMIN' : 'TEAM LEAD'}</span>
+                                {getSeverityBadge(comp.severity)}
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold border ${comp.status === 'Resolved' || comp.status === 'Closed' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
+                                {comp.status === 'Resolved' || comp.status === 'Closed' ? <CheckCircle className="w-3 h-3"/> : <Clock className="w-3 h-3"/>}
+                                {comp.status}
+                              </span>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                        {complaints.length === 0 && <TableRow><TableCell colSpan={3} className="text-center p-12 text-slate-500">No complaints filed.</TableCell></TableRow>}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
         </div>
       </div>
     </DashboardLayout>

@@ -18,7 +18,6 @@ export default function TeamLeadDashboard() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      // 1. Fetch current TL's profile to define their department jurisdiction
       const { data: leadProfile } = await supabase
         .from('profiles')
         .select('department')
@@ -27,7 +26,6 @@ export default function TeamLeadDashboard() {
 
       const currentLeadDept = leadProfile?.department || '';
 
-      // 2. Fetch all required data matrices safely
       const [profilesRes, projectsRes, tasksRes, complaintsRes, leavesRes] = await Promise.all([
         supabase.from('profiles').select('id, role, department, team_lead_id'),
         supabase.from('projects').select('team_lead_id, status'),
@@ -38,34 +36,32 @@ export default function TeamLeadDashboard() {
 
       const allProfiles = profilesRes.data || [];
 
-      // 3. SMART MNC MATCHING STRATEGY: Isolate only this TL's team members
       const teamMembers = allProfiles.filter(p => 
         p.id !== user.id && 
         (p.team_lead_id === user.id || (p.department === currentLeadDept && p.role?.toLowerCase() === 'employee'))
       );
       
-      const teamMemberIds = teamMembers.map(m => m.id);
+      // ADVANCED DSA: O(1) HASH SET FOR BLAZING FAST LOOKUPS
+      const teamMemberSet = new Set(teamMembers.map(m => m.id));
 
-      // Calculate localized statistics
       const teamCount = teamMembers.length;
       const projCount = projectsRes.data?.filter(p => p.team_lead_id === user.id && p.status !== 'Completed').length || 0;
 
-      // 4. APPROVALS ENGINE: Strictly check tasks and leaves for THIS team only
       const pendingTasks = tasksRes.data?.filter(t => {
         const s = (t.status || t.state || '').toLowerCase();
         const isPending = s.includes('pending') || s.includes('review') || s.includes('awaiting');
-        return isPending && teamMemberIds.includes(t.assigned_to);
+        // O(1) lookup speed
+        return isPending && teamMemberSet.has(t.assigned_to);
       }).length || 0;
 
       const pendingLeaves = leavesRes.data?.filter(l => 
-        l.status?.toLowerCase() === 'pending' && teamMemberIds.includes(l.user_id)
+        l.status?.toLowerCase() === 'pending' && teamMemberSet.has(l.user_id)
       ).length || 0;
 
       const totalPendingApprovals = pendingTasks + pendingLeaves;
 
-      // 5. COMPLAINTS ENGINE: Check complaints filed by THIS team only
       const compCount = complaintsRes.data?.filter(c => 
-        c.status === 'Open' && teamMemberIds.includes(c.user_id)
+        c.status === 'Open' && teamMemberSet.has(c.user_id)
       ).length || 0;
 
       setStats({

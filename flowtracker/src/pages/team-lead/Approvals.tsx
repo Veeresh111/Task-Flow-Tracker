@@ -16,12 +16,43 @@ export default function TeamLeadApprovals() {
 
   const fetchApprovals = async () => {
     setLoading(true);
-    // LOGIC FIX: Inner join explicitly asking for ONLY 'EMPLOYEE' roles!
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      setLoading(false);
+      return;
+    }
+
+    // 1. Fetch Team Lead profile data to know their department
+    const { data: tlProfile } = await supabase
+      .from('profiles')
+      .select('department')
+      .eq('id', user.id)
+      .single();
+    
+    const tlDept = tlProfile?.department || '';
+
+    // 2. Fetch all profiles to isolate the TL's exact team members (Smart MNC Matching)
+    const { data: allProfiles } = await supabase.from('profiles').select('id, team_lead_id, department, role');
+    const teamMembers = (allProfiles || []).filter(p => 
+      p.id !== user.id && 
+      (p.team_lead_id === user.id || (p.department === tlDept && p.role?.toUpperCase() === 'EMPLOYEE'))
+    );
+    
+    const teamMemberIds = teamMembers.map(m => m.id);
+
+    // If the TL has no team members yet, skip the leaves fetch entirely
+    if (teamMemberIds.length === 0) {
+      setLeaves([]);
+      setLoading(false);
+      return;
+    }
+
+    // 3. LOGIC FIX: Fetch ONLY the pending leaves for this specific TL's team!
     const { data, error } = await supabase
       .from('leaves')
       .select('*, profiles!inner(name, email, role)')
       .eq('status', 'Pending')
-      .eq('profiles.role', 'EMPLOYEE') // The Magic Line that prevents TLs seeing their own leaves
+      .in('user_id', teamMemberIds) // The Magic Line that scopes data strictly to their team
       .order('created_at', { ascending: false });
 
     if (!error && data) setLeaves(data);

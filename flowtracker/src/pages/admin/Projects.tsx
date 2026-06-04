@@ -4,9 +4,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Briefcase, Calendar, CheckSquare, Clock, Eye, X, Users, UserCircle, Star, TrendingDown, Edit, PieChart, BarChart3 } from "lucide-react";
+import { Loader2, Briefcase, Calendar, CheckSquare, Clock, Eye, X, Users, UserCircle, Star, TrendingDown, Edit, PieChart, BarChart3, Trash2, MessageSquare } from "lucide-react";
+import { useNavigate } from "react-router-dom"; 
 
 export default function AdminProjects() {
   const { toast } = useToast();
@@ -19,7 +22,11 @@ export default function AdminProjects() {
   const [projectAnalytics, setProjectAnalytics] = useState<any>(null);
   const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<any | null>(null);
-  const [selectedTL, setSelectedTL] = useState("");
+  
+  // Edit Form State
+  const [editForm, setEditForm] = useState({ name: "", description: "", status: "", team_lead_id: "" });
+
+  const navigate = useNavigate();
 
   useEffect(() => { 
     fetchProjects(); 
@@ -29,40 +36,81 @@ export default function AdminProjects() {
   const fetchProjects = async () => {
     setLoading(true);
     const { data } = await supabase.from('projects')
-      .select('*, tasks(*), profiles(name)')
+      .select('*, tasks(*), profiles(name, id)')
       .order('created_at', { ascending: false });
     if (data) setProjects(data);
     setLoading(false);
   };
 
   const fetchTeamLeads = async () => {
-    const { data } = await supabase.from('profiles').select('*').in('role', ['TEAM_LEAD', 'TL']);
-    if (data) setTeamLeads(data);
+    const { data } = await supabase.from('profiles').select('*').in('role', ['TEAM_LEAD', 'TL', 'team_lead', 'tl']);
+    if (data) {
+      // DSA Sort: Ensure most competent/highest rated TLs appear at the top
+      const sorted = data.sort((a, b) => Number(b.rating || 0) - Number(a.rating || 0));
+      setTeamLeads(sorted);
+    }
   };
 
   const getStatusColor = (status: string) => {
-    if (status === 'Completed') return 'bg-emerald-100 text-emerald-700';
-    if (status === 'In Progress') return 'bg-blue-100 text-blue-700';
-    return 'bg-amber-100 text-amber-700';
+    const s = (status || "").toLowerCase();
+    if (s.includes('complet')) return 'bg-emerald-50 text-emerald-700 border-emerald-300';
+    if (s.includes('progress') || s.includes('active') || s.includes('open')) return 'bg-blue-50 text-blue-700 border-blue-300';
+    if (s.includes('hold') || s.includes('suspend')) return 'bg-red-50 text-red-700 border-red-300';
+    return 'bg-amber-50 text-amber-700 border-amber-300';
   };
 
-  // RESTORED: Assign Team Lead Functionality
-  const saveAssignment = async (e: React.FormEvent) => {
+  const openEditModal = (proj: any) => {
+    setEditingProject(proj);
+    setEditForm({
+      name: proj.name || "",
+      description: proj.description || "",
+      status: proj.status || "Active",
+      team_lead_id: proj.team_lead_id || ""
+    });
+    setIsAssignModalOpen(true);
+  };
+
+  const saveProjectChanges = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingProject) return;
     setLoading(true);
-    await supabase.from('projects').update({ team_lead_id: selectedTL || null }).eq('id', editingProject.id);
-    toast({ title: "Project Reassigned", description: "The Team Lead has been updated." });
-    setIsAssignModalOpen(false);
-    fetchProjects();
+    
+    const { error } = await supabase.from('projects')
+      .update({ 
+        name: editForm.name,
+        description: editForm.description,
+        status: editForm.status,
+        team_lead_id: editForm.team_lead_id || null 
+      }).eq('id', editingProject.id);
+
+    if (error) {
+      toast({ title: "Update Failed", description: error.message, variant: "destructive" });
+    } else {
+      toast({ title: "Project Updated", description: "Corporate project data successfully synchronized." });
+      setIsAssignModalOpen(false);
+      fetchProjects();
+    }
   };
 
-  // UPGRADED: Deep Analytics with Pie/Bar Chart Data
+  const deleteProject = async () => {
+    if (!editingProject || !window.confirm("CRITICAL WARNING: Are you sure you want to completely erase this project and all associated tasks from the database?")) return;
+    setLoading(true);
+    const { error } = await supabase.from('projects').delete().eq('id', editingProject.id);
+    
+    if (error) {
+      toast({ title: "Deletion Failed", description: error.message, variant: "destructive" });
+    } else {
+      toast({ title: "Project Erased", description: "Project has been permanently removed." });
+      setIsAssignModalOpen(false);
+      fetchProjects();
+    }
+  };
+
   const loadProjectAnalytics = async (proj: any) => {
     setViewProject(proj);
     setProjectAnalytics(null);
 
-    const { data: projectTasks } = await supabase.from('tasks').select('*, profiles(name)').eq('project_id', proj.id);
+    const { data: projectTasks } = await supabase.from('tasks').select('*, profiles(name, id)').eq('project_id', proj.id);
     if (!projectTasks) return;
 
     const start = new Date(proj.created_at).getTime();
@@ -96,6 +144,12 @@ export default function AdminProjects() {
     });
   };
 
+  const initiateDispatch = async (targetId: string, targetName: string) => {
+    localStorage.setItem('activeChatUserId', targetId);
+    localStorage.setItem('activeChatUserName', targetName);
+    navigate(`/admin/chat?userId=${targetId}`, { state: { selectedUserId: targetId, selectedUserName: targetName } });
+  };
+
   return (
     <DashboardLayout role="admin">
       <div className="max-w-7xl mx-auto space-y-6 animate-fade-in pb-12">
@@ -114,10 +168,11 @@ export default function AdminProjects() {
                 <Card key={proj.id} className="shadow-sm border-slate-200 hover:shadow-md transition-all group flex flex-col">
                   <CardHeader className="pb-3 flex-none">
                     <div className="flex justify-between items-start mb-2">
-                      <Badge variant="secondary" className={`${getStatusColor(proj.status)} border-none shadow-sm`}>{proj.status}</Badge>
+                      <Badge variant="outline" className={`${getStatusColor(proj.status)} px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider shadow-sm`}>
+                        {proj.status || "UNKNOWN"}
+                      </Badge>
                       <div className="flex gap-1">
-                        {/* RESTORED: Edit Button */}
-                        <Button onClick={() => { setEditingProject(proj); setSelectedTL(proj.team_lead_id || ""); setIsAssignModalOpen(true); }} variant="ghost" size="sm" className="h-8 w-8 p-0 text-slate-500 hover:text-blue-600 bg-slate-50 hover:bg-blue-50"><Edit className="w-4 h-4" /></Button>
+                        <Button onClick={() => openEditModal(proj)} variant="ghost" size="sm" className="h-8 w-8 p-0 text-slate-500 hover:text-blue-600 bg-slate-50 hover:bg-blue-50"><Edit className="w-4 h-4" /></Button>
                         <Button onClick={() => loadProjectAnalytics(proj)} variant="ghost" size="sm" className="h-8 text-xs text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100"><Eye className="w-3 h-3 mr-1" /> Details</Button>
                       </div>
                     </div>
@@ -142,32 +197,87 @@ export default function AdminProjects() {
           </div>
         )}
 
-        {/* RESTORED ASSIGN MODAL */}
         {isAssignModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-            <Card className="w-full max-w-md shadow-2xl border-none animate-fade-in"><CardContent className="p-6"><div className="flex justify-between items-center mb-6"><h2 className="text-xl font-bold text-slate-800">Assign Project TL</h2><button onClick={() => setIsAssignModalOpen(false)} className="text-slate-500 hover:text-slate-800"><X className="w-5 h-5"/></button></div><form onSubmit={saveAssignment} className="space-y-4"><div className="space-y-2"><Label className="text-slate-600">Select Team Lead</Label><select className="w-full p-2.5 border border-slate-300 rounded-md text-sm outline-none focus:ring-2 focus:ring-blue-500" value={selectedTL} onChange={e => setSelectedTL(e.target.value)}><option value="">-- Unassigned --</option>{teamLeads.map(tl => <option key={tl.id} value={tl.id}>{tl.name}</option>)}</select></div><Button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white mt-4">Save Assignment</Button></form></CardContent></Card>
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+            <Card className="w-full max-w-lg shadow-2xl border-none animate-in zoom-in-95 duration-200">
+              <CardContent className="p-6">
+                <div className="flex justify-between items-center mb-6 border-b border-slate-100 pb-3">
+                  <h2 className="text-2xl font-black text-slate-800">Project Configuration</h2>
+                  <button onClick={() => setIsAssignModalOpen(false)} className="text-slate-400 hover:bg-slate-100 p-1.5 rounded-full"><X className="w-5 h-5"/></button>
+                </div>
+                <form onSubmit={saveProjectChanges} className="space-y-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-slate-700 font-bold text-xs uppercase tracking-wider">Project Title</Label>
+                    <Input className="font-medium focus-visible:ring-blue-500" value={editForm.name} onChange={e => setEditForm({...editForm, name: e.target.value})} required />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-slate-700 font-bold text-xs uppercase tracking-wider">Corporate Description</Label>
+                    <Textarea className="resize-none h-24 focus-visible:ring-blue-500" value={editForm.description} onChange={e => setEditForm({...editForm, description: e.target.value})} />
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <Label className="text-slate-700 font-bold text-xs uppercase tracking-wider">Lifecycle Status</Label>
+                      <select className="w-full p-2.5 border border-slate-300 rounded-md text-sm outline-none focus:ring-2 focus:ring-blue-500 bg-white font-medium" value={editForm.status} onChange={e => setEditForm({...editForm, status: e.target.value})}>
+                        <option value="Active">Active / In Progress</option>
+                        <option value="Hold">On Hold</option>
+                        <option value="Completed">Completed</option>
+                      </select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-slate-700 font-bold text-xs uppercase tracking-wider">Assign Team Lead</Label>
+                      <select className="w-full p-2.5 border border-slate-300 rounded-md text-sm outline-none focus:ring-2 focus:ring-blue-500 bg-white" value={editForm.team_lead_id} onChange={e => setEditForm({...editForm, team_lead_id: e.target.value})}>
+                        <option value="">-- Leave Unassigned --</option>
+                        {teamLeads.map(tl => (
+                          <option key={tl.id} value={tl.id}>
+                            {tl.name} (⭐ {Number(tl.rating || 0).toFixed(1)})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-3 pt-4 border-t border-slate-100 mt-4">
+                    <Button type="submit" className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold shadow-sm">Save Configuration</Button>
+                    <Button type="button" onClick={deleteProject} variant="destructive" className="flex-none shadow-sm" title="Permanently Delete Project"><Trash2 className="w-4 h-4"/></Button>
+                  </div>
+                </form>
+              </CardContent>
+            </Card>
           </div>
         )}
 
-        {/* UPGRADED: Deep Analytics Modal with Visual Charts */}
         {viewProject && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-            <Card className="w-full max-w-4xl shadow-2xl border-none animate-fade-in overflow-hidden">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+            <Card className="w-full max-w-4xl shadow-2xl border-none animate-in zoom-in-95 duration-200 overflow-hidden">
               <div className="bg-slate-900 p-6 text-white flex justify-between items-start">
                 <div>
                   <div className="flex items-center gap-3 mb-2">
                     <h2 className="text-2xl font-black">{viewProject.name}</h2>
-                    <span className="px-2 py-1 rounded text-xs font-bold bg-blue-500/20 text-blue-300 border border-blue-500/30">{viewProject.status}</span>
+                    <span className="px-2 py-1 rounded text-xs font-bold bg-blue-500/20 text-blue-300 border border-blue-500/30 uppercase tracking-wider">{viewProject.status}</span>
                   </div>
                   <p className="text-slate-400 text-sm max-w-2xl">{viewProject.description}</p>
                 </div>
-                <button onClick={() => setViewProject(null)} className="text-slate-400 hover:text-white"><X className="w-6 h-6"/></button>
+                <button onClick={() => setViewProject(null)} className="text-slate-400 hover:text-white p-1 rounded-full bg-slate-800"><X className="w-5 h-5"/></button>
               </div>
               
               <CardContent className="p-6 bg-slate-50 max-h-[80vh] overflow-y-auto">
                 {!projectAnalytics ? <div className="flex justify-center p-8"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div> : (
                   <div className="space-y-6">
-                    {/* Top KPI Bar */}
+                    {viewProject.team_lead_id && (
+                      <div className="bg-indigo-50 border border-indigo-100 p-4 rounded-xl flex items-center justify-between shadow-sm">
+                        <div>
+                          <p className="text-xs font-bold text-indigo-500 uppercase tracking-wider mb-0.5">Workspace Dispatch</p>
+                          <p className="text-sm font-semibold text-slate-800">Communicate directly with TL: {viewProject.profiles?.name}</p>
+                        </div>
+                        <div className="flex gap-2">
+                          <Button onClick={() => initiateDispatch(viewProject.team_lead_id, viewProject.profiles?.name)} className="bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm h-9">
+                            <MessageSquare className="w-4 h-4 mr-2"/> Message TL
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+
                     <div className="grid grid-cols-4 gap-4">
                       <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-center">
                         <p className="text-xs font-bold text-slate-500 uppercase mb-1 flex items-center gap-1"><Clock className="w-3.5 h-3.5"/> Days Active</p>
@@ -178,7 +288,6 @@ export default function AdminProjects() {
                         <p className="text-2xl font-black text-slate-800">{projectAnalytics.totalEmployees}</p>
                       </div>
                       
-                      {/* NEW: CSS PIE CHART */}
                       <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm col-span-2 flex items-center gap-6">
                         <div className="relative w-16 h-16 rounded-full flex items-center justify-center shadow-inner" style={{ background: `conic-gradient(#2563eb ${projectAnalytics.overallProgress}%, #e2e8f0 ${projectAnalytics.overallProgress}% 100%)` }}>
                           <div className="absolute w-12 h-12 bg-white rounded-full flex items-center justify-center">
@@ -192,9 +301,8 @@ export default function AdminProjects() {
                       </div>
                     </div>
 
-                    {/* NEW: CSS BAR CHARTS FOR EMPLOYEE CONTRIBUTION */}
                     <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
-                      <h3 className="font-bold text-slate-800 flex items-center gap-2 mb-4 border-b border-slate-100 pb-2"><BarChart3 className="w-4 h-4 text-blue-600"/> Team Contribution (Bar Chart)</h3>
+                      <h3 className="font-bold text-slate-800 flex items-center gap-2 mb-4 border-b border-slate-100 pb-2"><BarChart3 className="w-4 h-4 text-blue-600"/> Team Contribution Matrix</h3>
                       {projectAnalytics.contributors.length > 0 ? (
                         <div className="space-y-4">
                           {projectAnalytics.contributors.map((emp: any, i: number) => (
@@ -209,7 +317,7 @@ export default function AdminProjects() {
                             </div>
                           ))}
                         </div>
-                      ) : <p className="text-sm text-slate-500 italic">No tasks assigned yet.</p>}
+                      ) : <p className="text-sm text-slate-500 italic">No tasks assigned to this project yet.</p>}
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -218,12 +326,14 @@ export default function AdminProjects() {
                         {projectAnalytics.topPerformers.map((emp: any, i: number) => (
                           <div key={i} className="flex justify-between text-sm py-1 border-b border-slate-50 last:border-0"><span className="font-medium text-slate-700">{emp.name}</span><span className="font-bold text-emerald-700">100%</span></div>
                         ))}
+                        {projectAnalytics.topPerformers.length === 0 && <p className="text-xs text-emerald-600 italic">No top performers yet.</p>}
                       </div>
                       <div className="bg-white p-5 rounded-xl border border-amber-200 shadow-sm">
                         <h3 className="font-bold text-amber-800 flex items-center gap-2 mb-3 border-b border-amber-100 pb-2"><TrendingDown className="w-4 h-4 text-amber-600"/> Needs Attention</h3>
                         {projectAnalytics.needsAttention.map((emp: any, i: number) => (
                           <div key={i} className="flex justify-between text-sm py-1 border-b border-slate-50 last:border-0"><span className="font-medium text-slate-700">{emp.name}</span><span className="font-bold text-amber-700">{emp.rate.toFixed(0)}%</span></div>
                         ))}
+                        {projectAnalytics.needsAttention.length === 0 && <p className="text-xs text-amber-600 italic">No employees lagging behind.</p>}
                       </div>
                     </div>
                   </div>

@@ -28,9 +28,10 @@ export default function Login() {
       // 2. ONLY show success if line above doesn't fail
       toast({ title: "Login Successful", description: "Welcome back to the dashboard!" });
       
-      // 3. Route precisely to the correct dashboard (Fixes the 404 flaw)
+      // 3. Route precisely to the correct dashboard (Fixes the HR routing flaw)
       if (role === 'admin') navigate("/admin");
       else if (role === 'team_lead') navigate("/team-lead");
+      else if (role === 'hr') navigate("/hr"); // NEW: Explicit HR routing
       else navigate("/employee");
       
     } catch (error: any) {

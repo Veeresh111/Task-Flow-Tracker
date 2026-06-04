@@ -26,16 +26,9 @@ export default function TeamLeadAnalytics() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    // Fetch Team Lead profile data to know their department
-    const { data: currentLeadProfile } = await supabase
-      .from('profiles')
-      .select('department')
-      .eq('id', user.id)
-      .single();
-
+    const { data: currentLeadProfile } = await supabase.from('profiles').select('department').eq('id', user.id).single();
     const currentLeadDept = currentLeadProfile?.department || '';
 
-    // Fetch all profiles, tasks, and logs
     const [profilesRes, tasksRes, logsRes] = await Promise.all([
       supabase.from('profiles').select('*'),
       supabase.from('tasks').select('*'),
@@ -46,13 +39,25 @@ export default function TeamLeadAnalytics() {
     const tasks = tasksRes.data || [];
     const logs = logsRes.data || [];
 
-    // SMART MNC MATCHING STRATEGY: Match by explicit ID assignment OR same department alignment
     const profiles = allProfiles.filter(p => 
       p.id !== user.id && 
       (p.team_lead_id === user.id || (p.department === currentLeadDept && p.role === 'employee'))
     );
 
-    // INDESTRUCTIBLE MATH ENGINE
+    // ADVANCED DSA: HASH TABLE INDEXING FOR O(1) LOOKUPS
+    // This entirely removes the O(N * M) nested looping delay.
+    const taskMap = new Map();
+    tasks.forEach(t => {
+      if (!taskMap.has(t.assigned_to)) taskMap.set(t.assigned_to, []);
+      taskMap.get(t.assigned_to).push(t);
+    });
+
+    const logMap = new Map();
+    logs.forEach(l => {
+      if (!logMap.has(l.user_id)) logMap.set(l.user_id, []);
+      logMap.get(l.user_id).push(l);
+    });
+
     const calculateHours = (start: string | null, end: string | null) => {
       if (!start) return 0;
       try {
@@ -75,11 +80,14 @@ export default function TeamLeadAnalytics() {
     };
 
     const analyticsData = profiles.map(emp => {
-      const empTasks = tasks.filter(t => t.assigned_to === emp.id);
+      // O(1) Instant Lookup
+      const empTasks = taskMap.get(emp.id) || [];
       const assignedCount = empTasks.length;
-      const completedCount = empTasks.filter(t => t.status?.toLowerCase().includes('complet')).length;
-      const empLogs = logs.filter(l => l.user_id === emp.id);
-      const totalHrs = empLogs.reduce((acc, log) => acc + calculateHours((log.clock_in || log.created_at), log.clock_out), 0);
+      const completedCount = empTasks.filter((t: any) => t.status?.toLowerCase().includes('complet')).length;
+      
+      // O(1) Instant Lookup
+      const empLogs = logMap.get(emp.id) || [];
+      const totalHrs = empLogs.reduce((acc: number, log: any) => acc + calculateHours((log.clock_in || log.created_at), log.clock_out), 0);
 
       let completionRate = assignedCount > 0 ? (completedCount / assignedCount) * 100 : 0;
       let performanceStatus = "No Data";
@@ -135,10 +143,8 @@ export default function TeamLeadAnalytics() {
     { name: 'Other', value: employees.filter(e => !["Top Performer", "Solid", "Underperforming"].includes(e.status)).length },
   ].filter(d => d.value > 0);
 
-  // SECURE NOTIFICATION & FOOLPROOF ROUTING
   const handleOneOnOneSync = async (emp: any) => {
     try {
-      // 1. Push immediate database notification
       const { error } = await supabase.from('notifications').insert([{
         user_id: emp.id,
         title: "1-on-1 Sync Request",
@@ -146,24 +152,12 @@ export default function TeamLeadAnalytics() {
         is_read: false,
         created_at: new Date().toISOString()
       }]);
+      if (!error) toast({ title: "Notification Sent", description: `${emp.name} was notified.` });
+    } catch (error) { console.error("Failed to push notification", error); }
 
-      if (!error) {
-        toast({ title: "Notification Sent", description: `${emp.name} was notified.` });
-      } else {
-        console.error("Supabase Notification Error:", error);
-      }
-    } catch (error) {
-      console.error("Failed to push notification", error);
-    }
-
-    // 2. Set strict local storage fallback
     localStorage.setItem('activeChatUserId', emp.id);
     localStorage.setItem('activeChatUserName', emp.name);
-
-    // 3. Route directly to internal chat with Query Param + Router State
-    navigate(`/team-lead/chat?userId=${emp.id}`, { 
-      state: { selectedUserId: emp.id, selectedUserName: emp.name } 
-    });
+    navigate(`/team-lead/chat?userId=${emp.id}`, { state: { selectedUserId: emp.id, selectedUserName: emp.name } });
   };
 
   return (

@@ -4,197 +4,309 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useToast } from "@/hooks/use-toast";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
 import { supabase } from "@/lib/supabase";
-import { Loader2, AlertCircle, CheckCircle2, MessageSquare, Bot, Send, Flame, ShieldAlert, Info } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { Loader2, ShieldAlert, CheckCircle, Clock, Briefcase, Video, MessageSquare, AlertTriangle, Search, Filter, Send } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export default function AdminComplaints() {
   const { toast } = useToast();
   const [complaints, setComplaints] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const navigate = useNavigate();
 
-  // AI Assistant States
-  const [aiInput, setAiInput] = useState("");
-  const [aiChat, setAiChat] = useState<{role: string, text: string}[]>([
-    { role: 'ai', text: 'Hello Admin. I am scanning the database. How can I assist you with HR resolutions or analytics today?' }
-  ]);
+  // NEW: State for Search, Filter, and Filing System Tickets
+  const [userProfile, setUserProfile] = useState<any>(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [severityFilter, setSeverityFilter] = useState("ALL");
+  const [submitting, setSubmitting] = useState(false);
+  const [form, setForm] = useState({ title: "", description: "", category: "System & Infrastructure" });
 
-  useEffect(() => { fetchComplaints(); }, []);
+  useEffect(() => {
+    fetchGlobalComplaints();
+  }, []);
 
-  const fetchComplaints = async () => {
+  const fetchGlobalComplaints = async () => {
     setLoading(true);
-    const { data, error } = await supabase
-      .from('complaints')
-      .select('*, profiles(name, email)')
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).single();
+      if (profile) setUserProfile(profile);
+    }
+
+    // Fetch complaints that are specifically targeted to Admin OR Escalated
+    const { data } = await supabase.from('complaints')
+      .select('*, profiles!inner(name, department, role)')
+      .in('target_role', ['ADMIN', 'ESCALATED'])
       .order('created_at', { ascending: false });
-      
-    if (!error && data) setComplaints(data);
+
+    if (data) setComplaints(data);
     setLoading(false);
   };
 
+  const getSeverityBadge = (sev: string) => {
+    const s = (sev || "MODERATE").toUpperCase();
+    if (s === "CRITICAL") return <span className="bg-red-100 text-red-700 border border-red-200 px-2 py-0.5 rounded text-[10px] font-black uppercase shadow-sm">Critical</span>;
+    if (s === "HIGH") return <span className="bg-orange-100 text-orange-700 border border-orange-200 px-2 py-0.5 rounded text-[10px] font-black uppercase shadow-sm">High</span>;
+    if (s === "LOW") return <span className="bg-slate-100 text-slate-700 border border-slate-200 px-2 py-0.5 rounded text-[10px] font-black uppercase shadow-sm">Low</span>;
+    return <span className="bg-amber-100 text-amber-700 border border-amber-200 px-2 py-0.5 rounded text-[10px] font-black uppercase shadow-sm">Moderate</span>;
+  };
+
   const updateStatus = async (id: string, newStatus: string) => {
-    setLoading(true);
+    const { error } = await supabase.from('complaints').update({ status: newStatus }).eq('id', id);
+    if (!error) {
+      toast({ title: "Status Updated", description: `Corporate ticket marked as ${newStatus}` });
+      setComplaints(complaints.map(c => c.id === id ? { ...c, status: newStatus } : c));
+    }
+  };
+
+  const dispatchMediation = async (userId: string, userName: string, title: string) => {
+    await supabase.from('notifications').insert([{
+      user_id: userId,
+      title: "Mediation Request",
+      message: `HR Administration has opened a direct channel regarding your ticket: "${title}"`,
+      is_read: false
+    }]);
+    
+    localStorage.setItem('activeChatUserId', userId);
+    localStorage.setItem('activeChatUserName', userName);
+    navigate(`/admin/chat?userId=${userId}`, { state: { selectedUserId: userId, selectedUserName: userName } });
+  };
+
+  const routeToDepartment = async (id: string, dept: string) => {
+    toast({ title: "Ticket Routed", description: `Successfully forwarded to the ${dept} department queue.` });
+    updateStatus(id, `Forwarded to ${dept}`);
+  };
+
+  // NEW: Admin Submitting System Level Complaints/Alerts
+  const submitComplaint = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.title || !form.description || !userProfile) return;
+    setSubmitting(true);
+
     try {
-      const { error } = await supabase.from('complaints').update({ status: newStatus }).eq('id', id);
+      let aiSeverity = "MODERATE";
+      try {
+        const apiKey = import.meta.env.VITE_GEMINI_API_KEY || "AQ.Ab8RN6KQXzJBhyAkPtzy70H-HJXV0zOvPoV6BjJ-ohgF3Cs_YQ";
+        const genAI = new GoogleGenerativeAI(apiKey);
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const prompt = `Analyze this system admin alert: "${form.title} - ${form.description}". Return EXACTLY ONE WORD determining the severity: CRITICAL, HIGH, MODERATE, or LOW. No markdown, no punctuation.`;
+        const result = await model.generateContent(prompt);
+        const responseText = result.response.text().trim().toUpperCase();
+        if (["CRITICAL", "HIGH", "MODERATE", "LOW"].includes(responseText)) {
+          aiSeverity = responseText;
+        }
+      } catch (aiError) {
+        console.warn("AI Triage offline, defaulting to MODERATE", aiError);
+      }
+
+      const { error } = await supabase.from('complaints').insert([{
+        user_id: userProfile.id,
+        title: form.title,
+        description: form.description,
+        category: form.category,
+        target_role: 'ADMIN', 
+        severity: aiSeverity,
+        status: 'Open'
+      }]);
+
       if (error) throw error;
-      toast({ title: `Complaint marked as ${newStatus}` });
-      fetchComplaints();
+      toast({ title: "Alert Broadcasted", description: `System Alert recorded (Severity: ${aiSeverity})` });
+      setForm({ title: "", description: "", category: "System & Infrastructure" });
+      fetchGlobalComplaints();
     } catch (err: any) {
       toast({ title: "Error", description: err.message, variant: "destructive" });
-      setLoading(false);
     }
+    setSubmitting(false);
   };
 
-  const formatDate = (iso: string) => iso ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : "--";
-
-  // LOCAL ALGORITHM: Assign Priority based on complaint nature
-  const getPriority = (text: string) => {
-    const t = text.toLowerCase();
-    if (t.includes('harassment') || t.includes('illegal') || t.includes('danger') || t.includes('urgent')) {
-      return { level: 'CRITICAL', color: 'bg-red-100 text-red-800 border-red-300', icon: Flame };
-    }
-    if (t.includes('payment') || t.includes('salary') || t.includes('manager') || t.includes('conflict')) {
-      return { level: 'HIGH', color: 'bg-orange-100 text-orange-800 border-orange-300', icon: ShieldAlert };
-    }
-    return { level: 'STANDARD', color: 'bg-blue-100 text-blue-800 border-blue-300', icon: Info };
-  };
-
-  // MOCK AI HANDLER (Requires OpenAI API integration for full capability)
-  const handleAiSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!aiInput.trim()) return;
-    
-    const userMsg = aiInput;
-    setAiChat(prev => [...prev, { role: 'admin', text: userMsg }]);
-    setAiInput("");
-
-    // Simulate AI thinking and analyzing local data
-    setTimeout(() => {
-      let aiResponse = "I have logged your request. To fully integrate deep analytics, meeting invites, and generative suggestions, please connect my module to the OpenAI API endpoint via Supabase Edge Functions.";
-      
-      if (userMsg.toLowerCase().includes('priority') || userMsg.toLowerCase().includes('urgent')) {
-        const criticals = complaints.filter(c => getPriority(c.description).level === 'CRITICAL');
-        aiResponse = `I have scanned the database. There are currently ${criticals.length} CRITICAL complaints requiring immediate intervention.`;
-      }
-      
-      setAiChat(prev => [...prev, { role: 'ai', text: aiResponse }]);
-    }, 1000);
-  };
+  // NEW: Smart Search & Filter Engine
+  const filteredComplaints = complaints.filter(c => {
+    const matchesSearch = c.title.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                          c.profiles?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          c.description?.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesSeverity = severityFilter === "ALL" || (c.severity || "MODERATE").toUpperCase() === severityFilter;
+    return matchesSearch && matchesSeverity;
+  });
 
   return (
     <DashboardLayout role="admin">
-      <div className="max-w-7xl mx-auto space-y-6 animate-fade-in pb-12 flex flex-col xl:flex-row gap-6">
-        
-        {/* LEFT COLUMN: Complaints Table */}
-        <div className="flex-1 space-y-6">
-          <div className="flex justify-between items-center bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-            <div>
-              <h1 className="text-3xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
-                <AlertCircle className="w-8 h-8 text-red-600" /> HR Complaints Hub
-              </h1>
-              <p className="text-slate-500 mt-1">Review and resolve workplace issues with smart priority routing.</p>
-            </div>
+      <div className="max-w-7xl mx-auto space-y-6 animate-fade-in pb-12">
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 flex flex-col md:flex-row justify-between items-start md:items-center">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
+              <ShieldAlert className="w-8 h-8 text-indigo-600" /> HR Mediation Center
+            </h1>
+            <p className="text-slate-500 mt-1">Global oversight of critical escalations, payroll disputes, and system alerts.</p>
           </div>
-
-          {loading ? <div className="flex justify-center p-20"><Loader2 className="w-10 h-10 animate-spin text-blue-600" /></div> : (
-            <Card className="shadow-sm border-slate-200">
-              <CardHeader className="border-b bg-slate-50/50">
-                <CardTitle className="text-lg text-slate-800 flex items-center gap-2"><MessageSquare className="w-5 h-5 text-slate-500" /> Active Tickets</CardTitle>
-              </CardHeader>
-              <CardContent className="p-0">
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader className="bg-slate-50">
-                      <TableRow>
-                        <TableHead className="font-bold">Date & Priority</TableHead>
-                        <TableHead className="font-bold">Submitted By</TableHead>
-                        <TableHead className="font-bold">Issue Description</TableHead>
-                        <TableHead className="font-bold">Status</TableHead>
-                        <TableHead className="font-bold text-right">Actions</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {complaints.map(complaint => {
-                        const Priority = getPriority(complaint.description || "");
-                        const PIcon = Priority.icon;
-                        return (
-                          <TableRow key={complaint.id} className="hover:bg-slate-50">
-                            <TableCell className="whitespace-nowrap">
-                              <div className="text-sm text-slate-600 mb-1">{formatDate(complaint.created_at)}</div>
-                              <span className={`flex items-center gap-1 w-max px-2 py-0.5 rounded text-[10px] font-bold border ${Priority.color}`}>
-                                <PIcon className="w-3 h-3" /> {Priority.level}
-                              </span>
-                            </TableCell>
-                            <TableCell>
-                              <div className="font-bold text-slate-900">{complaint.profiles?.name || 'Unknown'}</div>
-                              <div className="text-xs text-slate-500">{complaint.profiles?.email}</div>
-                            </TableCell>
-                            <TableCell>
-                              <div className="font-bold text-slate-800 mb-1">{complaint.title || 'General Complaint'}</div>
-                              <div className="text-sm text-slate-600 line-clamp-2 max-w-md">{complaint.description}</div>
-                            </TableCell>
-                            <TableCell>
-                              <span className={`px-2.5 py-1 rounded-full text-xs font-bold tracking-wider ${complaint.status === 'Resolved' ? 'bg-emerald-100 text-emerald-700' : complaint.status === 'Review' ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>
-                                {complaint.status?.toUpperCase() || 'OPEN'}
-                              </span>
-                            </TableCell>
-                            <TableCell className="text-right">
-                              {complaint.status !== 'Resolved' && (
-                                <div className="flex justify-end gap-2 flex-col sm:flex-row">
-                                  <Button onClick={() => updateStatus(complaint.id, 'Review')} variant="outline" className="h-8 text-xs border-amber-200 text-amber-700 hover:bg-amber-50">Mark Review</Button>
-                                  <Button onClick={() => updateStatus(complaint.id, 'Resolved')} className="h-8 text-xs bg-emerald-600 hover:bg-emerald-700 text-white"><CheckCircle2 className="w-3 h-3 mr-1" /> Resolve</Button>
-                                </div>
-                              )}
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })}
-                      {complaints.length === 0 && <TableRow><TableCell colSpan={5} className="text-center p-8 text-slate-500">No complaints found in the database.</TableCell></TableRow>}
-                    </TableBody>
-                  </Table>
-                </div>
-              </CardContent>
-            </Card>
-          )}
         </div>
 
-        {/* RIGHT COLUMN: AI Assistant Interface */}
-        <div className="w-full xl:w-80 flex-shrink-0 flex flex-col h-[600px] xl:h-[calc(100vh-8rem)] sticky top-24">
-          <Card className="flex-1 flex flex-col shadow-lg border-indigo-200 overflow-hidden">
-            <div className="bg-indigo-600 p-4 text-white flex items-center gap-3">
-              <div className="p-2 bg-indigo-500 rounded-full"><Bot className="w-5 h-5" /></div>
+        {/* KPI Row */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <Card className="shadow-sm border-red-200 bg-red-50/50">
+            <CardContent className="p-4 flex items-center gap-4">
+              <div className="p-3 bg-red-100 text-red-600 rounded-full"><AlertTriangle className="w-5 h-5"/></div>
               <div>
-                <h3 className="font-bold text-sm">System AI Assistant</h3>
-                <p className="text-indigo-200 text-xs">Monitoring DB Activity</p>
+                <p className="text-xs font-bold text-red-800 uppercase tracking-wider">Critical Escalations</p>
+                <h2 className="text-2xl font-black text-slate-900">{complaints.filter(c => c.severity === 'CRITICAL' && c.status !== 'Closed').length}</h2>
               </div>
-            </div>
-            
-            <div className="flex-1 p-4 overflow-y-auto space-y-4 bg-slate-50 custom-scrollbar">
-              {aiChat.map((msg, i) => (
-                <div key={i} className={`flex ${msg.role === 'admin' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[85%] rounded-xl p-3 text-sm ${msg.role === 'admin' ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-white border border-slate-200 text-slate-700 rounded-tl-none shadow-sm'}`}>
-                    {msg.text}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="p-3 bg-white border-t border-slate-200">
-              <form onSubmit={handleAiSubmit} className="flex items-center gap-2">
-                <Input 
-                  value={aiInput} 
-                  onChange={(e) => setAiInput(e.target.value)} 
-                  placeholder="Ask about reports, invites, data..." 
-                  className="flex-1 h-9 text-sm"
-                />
-                <Button type="submit" size="sm" className="h-9 w-9 p-0 bg-indigo-600 hover:bg-indigo-700">
-                  <Send className="w-4 h-4" />
-                </Button>
-              </form>
-            </div>
+            </CardContent>
+          </Card>
+          <Card className="shadow-sm border-blue-200 bg-blue-50/50">
+            <CardContent className="p-4 flex items-center gap-4">
+              <div className="p-3 bg-blue-100 text-blue-600 rounded-full"><Briefcase className="w-5 h-5"/></div>
+              <div>
+                <p className="text-xs font-bold text-blue-800 uppercase tracking-wider">Payroll & Finance</p>
+                <h2 className="text-2xl font-black text-slate-900">{complaints.filter(c => c.category === 'Payroll & Finance' && c.status !== 'Closed').length}</h2>
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="shadow-sm border-emerald-200 bg-emerald-50/50">
+            <CardContent className="p-4 flex items-center gap-4">
+              <div className="p-3 bg-emerald-100 text-emerald-600 rounded-full"><CheckCircle className="w-5 h-5"/></div>
+              <div>
+                <p className="text-xs font-bold text-emerald-800 uppercase tracking-wider">Resolved Tickets</p>
+                <h2 className="text-2xl font-black text-slate-900">{complaints.filter(c => c.status === 'Closed').length}</h2>
+              </div>
+            </CardContent>
           </Card>
         </div>
 
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* NEW: Admin Broadcast/Alert Form */}
+          <div className="lg:col-span-1">
+            <Card className="shadow-sm border-slate-200 sticky top-24">
+              <CardHeader className="border-b bg-slate-50/50 pb-4">
+                <CardTitle className="text-lg text-slate-800 flex items-center gap-2">
+                  <ShieldAlert className="w-5 h-5 text-indigo-600" /> Post System Alert
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-5">
+                <form onSubmit={submitComplaint} className="space-y-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-bold text-slate-500 uppercase">Alert Category</Label>
+                    <select className="w-full p-2.5 border border-slate-300 rounded-md text-sm focus:ring-2 focus:ring-indigo-500 bg-white" value={form.category} onChange={e => setForm({...form, category: e.target.value})}>
+                      <option value="System & Infrastructure">System & Infrastructure</option>
+                      <option value="Company Wide Policy">Company Wide Policy</option>
+                      <option value="Security Violation">Security Violation</option>
+                      <option value="General Workflow">General Workflow Issue</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-bold text-slate-500 uppercase">Subject Title</Label>
+                    <Input placeholder="E.g., Server Downtime Expected" value={form.title} onChange={e => setForm({...form, title: e.target.value})} required />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-bold text-slate-500 uppercase flex justify-between">
+                      Alert Details <span className="text-[9px] text-indigo-500">AI Triaged</span>
+                    </Label>
+                    <Textarea className="h-28 resize-none" placeholder="Provide system details..." value={form.description} onChange={e => setForm({...form, description: e.target.value})} required />
+                  </div>
+                  <Button type="submit" disabled={submitting} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold">
+                    {submitting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Send className="w-4 h-4 mr-2" />} 
+                    Broadcast System Alert
+                  </Button>
+                </form>
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="lg:col-span-2 space-y-4">
+            {/* NEW: Smart Search & Filter Bar */}
+            <div className="flex flex-col md:flex-row gap-3">
+              <div className="relative flex-1 shadow-sm">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <Input placeholder="Search globally by subject, description, or employee name..." className="pl-9 border-slate-300 focus-visible:ring-indigo-500" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+              </div>
+              <div className="flex items-center gap-2 shadow-sm">
+                <Filter className="w-4 h-4 text-slate-500" />
+                <select className="p-2.5 border border-slate-300 rounded-md text-sm outline-none focus:ring-2 focus:ring-indigo-500 bg-white font-bold text-slate-700" value={severityFilter} onChange={e => setSeverityFilter(e.target.value)}>
+                  <option value="ALL">All Severities</option>
+                  <option value="CRITICAL">Critical AI Rating</option>
+                  <option value="HIGH">High AI Rating</option>
+                  <option value="MODERATE">Moderate AI Rating</option>
+                  <option value="LOW">Low AI Rating</option>
+                </select>
+              </div>
+            </div>
+
+            <Card className="shadow-sm border-slate-200 bg-white">
+              <CardHeader className="border-b bg-slate-50/50">
+                <CardTitle className="text-lg text-slate-800">Global Escalation Queue ({filteredComplaints.filter(c => c.status !== 'Closed').length} Active)</CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                {loading ? <div className="flex justify-center p-12"><Loader2 className="w-8 h-8 animate-spin text-indigo-600" /></div> : (
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader className="bg-slate-50">
+                        <TableRow>
+                          <TableHead className="font-bold text-slate-700">Origin Employee</TableHead>
+                          <TableHead className="font-bold text-slate-700">Subject Details</TableHead>
+                          <TableHead className="font-bold text-slate-700 text-center">AI Triage / Status</TableHead>
+                          <TableHead className="font-bold text-slate-700 text-right">Department Dispatch & Actions</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {filteredComplaints.map(comp => (
+                          <TableRow key={comp.id} className="hover:bg-slate-50/80">
+                            <TableCell>
+                              <div className="font-bold text-slate-900 flex items-center gap-1">
+                                {comp.profiles?.name} {comp.user_id === userProfile?.id && "(System)"}
+                              </div>
+                              <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mt-1">{comp.profiles?.department || 'System'} Dept</div>
+                            </TableCell>
+                            <TableCell>
+                              <div className="font-bold text-indigo-900 text-sm flex items-center gap-2">
+                                {comp.title}
+                                <span className="text-[9px] bg-slate-100 border text-slate-600 px-1.5 py-0.5 rounded uppercase whitespace-nowrap">{comp.category}</span>
+                              </div>
+                              <div className="text-xs text-slate-500 mt-1 line-clamp-2 max-w-xs" title={comp.description}>{comp.description}</div>
+                            </TableCell>
+                            <TableCell className="text-center">
+                              <div className="flex flex-col gap-1.5 items-center">
+                                {getSeverityBadge(comp.severity)}
+                                <span className={`text-[10px] font-bold uppercase tracking-wider ${comp.status === 'Closed' ? 'text-emerald-600' : 'text-amber-600'}`}>
+                                  {comp.status}
+                               </span>
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {comp.status !== 'Closed' ? (
+                                <div className="flex flex-col items-end gap-2">
+                                  <div className="flex gap-2">
+                                    <Button onClick={() => routeToDepartment(comp.id, 'Payroll')} variant="outline" size="sm" className="h-7 text-[10px] text-slate-600">Route Payroll</Button>
+                                    <Button onClick={() => routeToDepartment(comp.id, 'Legal')} variant="outline" size="sm" className="h-7 text-[10px] text-slate-600">Route Legal</Button>
+                                  </div>
+                                  <div className="flex gap-2">
+                                    {comp.user_id !== userProfile?.id && (
+                                      <Button onClick={() => dispatchMediation(comp.user_id, comp.profiles?.name, comp.title)} size="sm" className="h-8 text-xs bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm">
+                                        <Video className="w-3.5 h-3.5 mr-1.5" /> Mediation Chat
+                                      </Button>
+                                    )}
+                                    <Button onClick={() => updateStatus(comp.id, 'Closed')} size="sm" className="h-8 text-xs bg-slate-900 hover:bg-slate-800 text-white shadow-sm">
+                                      Close Ticket
+                                    </Button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <span className="text-xs font-bold text-emerald-600 flex items-center justify-end gap-1"><CheckCircle className="w-4 h-4"/> Resolved</span>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                        {filteredComplaints.length === 0 && <TableRow><TableCell colSpan={4} className="text-center p-12 text-slate-500">The global escalation queue matches no records.</TableCell></TableRow>}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        </div>
       </div>
     </DashboardLayout>
   );

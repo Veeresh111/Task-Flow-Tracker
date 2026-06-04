@@ -22,6 +22,7 @@ export default function Register() {
     confirmPassword: "",
     phone: "",
     department: "",
+    role: "employee", // NEW: Added role field to capture multi-role registrations
     teamLeadId: "",
   });
   
@@ -92,7 +93,7 @@ export default function Register() {
               </div>
               <h2 className="text-2xl font-bold mb-2">Registration Submitted!</h2>
               <p className="text-muted-foreground mb-6">
-                {selectedTeamLead 
+                {selectedTeamLead && formData.role === 'employee'
                   ? `Your request has been sent to ${selectedTeamLead.name} for approval.` 
                   : `Your account has been created successfully.`}
               </p>
@@ -172,6 +173,23 @@ export default function Register() {
                       </SelectContent>
                     </Select>
                   </div>
+
+                  {/* NEW: Role Selection so the database captures 'hr', 'admin', etc. correctly */}
+                  <div className="space-y-2">
+                    <Label htmlFor="role">Account Role</Label>
+                    <Select value={formData.role} onValueChange={(value) => handleChange("role", value)}>
+                      <SelectTrigger className="h-11">
+                        <SelectValue placeholder="Select your role" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="employee">Employee</SelectItem>
+                        <SelectItem value="hr">Human Resources (HR)</SelectItem>
+                        <SelectItem value="team_lead">Team Lead</SelectItem>
+                        <SelectItem value="admin">System Admin</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
                   <div className="space-y-2">
                     <Label htmlFor="password">Password</Label>
                     <div className="relative">
@@ -191,8 +209,8 @@ export default function Register() {
                   <div className="space-y-2">
                     <Label>Select Your Team Lead</Label>
                     <p className="text-sm text-muted-foreground">
-                      {realTeamLeads.length === 0 
-                        ? "No team leads available in the system yet. You may submit the form." 
+                      {realTeamLeads.length === 0 || formData.role !== 'employee'
+                        ? "You do not need to select a team lead for your role. You may submit the form." 
                         : "Your registration will be sent for approval to the selected team lead."}
                     </p>
                   </div>
@@ -229,7 +247,8 @@ export default function Register() {
                 <Button 
                   type="submit" 
                   className="flex-1 h-11 gradient-primary text-white font-medium" 
-                  disabled={isLoading || (step === 2 && realTeamLeads.length > 0 && !formData.teamLeadId)}
+                  // UPDATED: Doesn't force HR/Admins to select a team lead
+                  disabled={isLoading || (step === 2 && realTeamLeads.length > 0 && !formData.teamLeadId && formData.role === 'employee')}
                 >
                   {isLoading ? (
                     <span className="flex items-center gap-2">
