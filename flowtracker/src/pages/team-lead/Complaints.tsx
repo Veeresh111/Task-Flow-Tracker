@@ -108,7 +108,7 @@ export default function TeamLeadComplaints() {
     try {
       let aiSeverity = "MODERATE";
       try {
-        const apiKey = import.meta.env.VITE_GEMINI_API_KEY || "AQ.Ab8RN6KQXzJBhyAkPtzy70H-HJXV0zOvPoV6BjJ-ohgF3Cs_YQ";
+        const apiKey = import.meta.env.VITE_GEMINI_API_KEY ;
         const genAI = new GoogleGenerativeAI(apiKey);
         const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
         const prompt = `Analyze this corporate employee complaint: "${form.title} - ${form.description}". Return EXACTLY ONE WORD determining the severity: CRITICAL, HIGH, MODERATE, or LOW. No markdown, no punctuation.`;

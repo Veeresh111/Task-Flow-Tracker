@@ -6,10 +6,12 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Briefcase, Calendar, CheckSquare, Clock, Eye, X, Users, UserCircle, Star, TrendingDown, Edit, PieChart, BarChart3, Trash2, MessageSquare } from "lucide-react";
+import { Loader2, Briefcase, Calendar, CheckSquare, Clock, Eye, X, Users, UserCircle, Star, TrendingDown, Edit, PieChart, BarChart3, Trash2, MessageSquare, Search, Filter, Plus, Sparkles, BrainCircuit } from "lucide-react";
 import { useNavigate } from "react-router-dom"; 
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export default function AdminProjects() {
   const { toast } = useToast();
@@ -17,14 +19,22 @@ export default function AdminProjects() {
   const [teamLeads, setTeamLeads] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   
+  // Search & Filter States
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("All");
+
   // Modals State
   const [viewProject, setViewProject] = useState<any | null>(null);
   const [projectAnalytics, setProjectAnalytics] = useState<any>(null);
   const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<any | null>(null);
   
+  // AI Roadmap State
+  const [aiRoadmap, setAiRoadmap] = useState<string | null>(null);
+  const [isAiLoading, setIsAiLoading] = useState(false);
+
   // Edit Form State
-  const [editForm, setEditForm] = useState({ name: "", description: "", status: "", team_lead_id: "" });
+  const [editForm, setEditForm] = useState({ name: "", description: "", status: "Active", team_lead_id: "" });
 
   const navigate = useNavigate();
 
@@ -45,7 +55,6 @@ export default function AdminProjects() {
   const fetchTeamLeads = async () => {
     const { data } = await supabase.from('profiles').select('*').in('role', ['TEAM_LEAD', 'TL', 'team_lead', 'tl']);
     if (data) {
-      // DSA Sort: Ensure most competent/highest rated TLs appear at the top
       const sorted = data.sort((a, b) => Number(b.rating || 0) - Number(a.rating || 0));
       setTeamLeads(sorted);
     }
@@ -57,6 +66,13 @@ export default function AdminProjects() {
     if (s.includes('progress') || s.includes('active') || s.includes('open')) return 'bg-blue-50 text-blue-700 border-blue-300';
     if (s.includes('hold') || s.includes('suspend')) return 'bg-red-50 text-red-700 border-red-300';
     return 'bg-amber-50 text-amber-700 border-amber-300';
+  };
+
+  // RESTORED FLAW 1: Create New Project Modal Function
+  const openCreateModal = () => {
+    setEditingProject(null);
+    setEditForm({ name: "", description: "", status: "Active", team_lead_id: "" });
+    setIsAssignModalOpen(true);
   };
 
   const openEditModal = (proj: any) => {
@@ -72,38 +88,40 @@ export default function AdminProjects() {
 
   const saveProjectChanges = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingProject) return;
     setLoading(true);
     
-    const { error } = await supabase.from('projects')
-      .update({ 
-        name: editForm.name,
-        description: editForm.description,
-        status: editForm.status,
-        team_lead_id: editForm.team_lead_id || null 
+    if (editingProject) {
+      // UPDATE EXISTING
+      const { error } = await supabase.from('projects').update({ 
+        name: editForm.name, description: editForm.description, status: editForm.status, team_lead_id: editForm.team_lead_id || null 
       }).eq('id', editingProject.id);
 
-    if (error) {
-      toast({ title: "Update Failed", description: error.message, variant: "destructive" });
+      if (error) toast({ title: "Update Failed", description: error.message, variant: "destructive" });
+      else toast({ title: "Project Updated", description: "Corporate project data successfully synchronized." });
     } else {
-      toast({ title: "Project Updated", description: "Corporate project data successfully synchronized." });
-      setIsAssignModalOpen(false);
-      fetchProjects();
+      // CREATE NEW
+      const { error } = await supabase.from('projects').insert([{ 
+        name: editForm.name, description: editForm.description, status: editForm.status, team_lead_id: editForm.team_lead_id || null 
+      }]);
+
+      if (error) toast({ title: "Creation Failed", description: error.message, variant: "destructive" });
+      else toast({ title: "Project Created", description: "New project successfully deployed to the database." });
     }
+    
+    setIsAssignModalOpen(false);
+    fetchProjects();
   };
 
   const deleteProject = async () => {
-    if (!editingProject || !window.confirm("CRITICAL WARNING: Are you sure you want to completely erase this project and all associated tasks from the database?")) return;
+    if (!editingProject || !window.confirm("CRITICAL WARNING: Are you sure you want to completely erase this project?")) return;
     setLoading(true);
     const { error } = await supabase.from('projects').delete().eq('id', editingProject.id);
     
-    if (error) {
-      toast({ title: "Deletion Failed", description: error.message, variant: "destructive" });
-    } else {
-      toast({ title: "Project Erased", description: "Project has been permanently removed." });
-      setIsAssignModalOpen(false);
-      fetchProjects();
-    }
+    if (error) toast({ title: "Deletion Failed", description: error.message, variant: "destructive" });
+    else toast({ title: "Project Erased", description: "Project has been permanently removed." });
+    
+    setIsAssignModalOpen(false);
+    fetchProjects();
   };
 
   const loadProjectAnalytics = async (proj: any) => {
@@ -135,10 +153,7 @@ export default function AdminProjects() {
     const overallProgress = totalTasks > 0 ? (completedTasks / totalTasks) * 100 : 0;
 
     setProjectAnalytics({
-      daysActive,
-      totalEmployees: contributors.length,
-      contributors,
-      overallProgress,
+      daysActive, totalEmployees: contributors.length, contributors, overallProgress,
       topPerformers: contributors.filter(c => c.rate >= 80 && c.total > 0),
       needsAttention: contributors.filter(c => c.rate < 50 && c.total > 0)
     });
@@ -150,16 +165,88 @@ export default function AdminProjects() {
     navigate(`/admin/chat?userId=${targetId}`, { state: { selectedUserId: targetId, selectedUserName: targetName } });
   };
 
+  // SMART AI ROADMAP GENERATOR
+  const generateProjectRoadmap = async (proj: any) => {
+    setIsAiLoading(true);
+    toast({ title: "AI Framework Initiated", description: "Scanning corporate database for optimal team matching and workflow generation..." });
+    
+    try {
+      const { data: allDepts } = await supabase.from('profiles').select('department, role');
+      const deptCounts: any = {};
+      allDepts?.forEach(d => {
+        if (!deptCounts[d.department]) deptCounts[d.department] = 0;
+        deptCounts[d.department]++;
+      });
+
+      const prompt = `Act as an Elite Enterprise Project Director.
+      Project Name: "${proj.name}"
+      Requirements/Description: "${proj.description}"
+      Current Organization Departments: ${JSON.stringify(deptCounts)}
+      
+      Analyze this project deeply and provide a highly professional corporate roadmap. Include:
+      1. Best Suited Team: Which department in our organization is best suited to handle this, and why?
+      2. Workflow Structure: A 3-phase execution roadmap.
+      3. Meeting Cadence: Recommended schedule for scrums and stakeholder updates.
+      4. Risk Mitigation: Top 2 potential blockers and how to avoid them.
+      
+      Do not use markdown backticks, output clean readable text.`;
+
+      const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+      const genAI = new GoogleGenerativeAI(apiKey);
+      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+      const result = await model.generateContent(prompt);
+      
+      setAiRoadmap(result.response.text());
+    } catch (e) {
+      toast({ title: "AI Error", description: "Failed to generate project roadmap.", variant: "destructive" });
+    }
+    setIsAiLoading(false);
+  };
+
+  const filteredProjects = projects.filter(p => {
+    const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase()) || (p.description || "").toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesStatus = statusFilter === "All" || p.status === statusFilter;
+    return matchesSearch && matchesStatus;
+  });
+
   return (
     <DashboardLayout role="admin">
       <div className="max-w-7xl mx-auto space-y-6 animate-fade-in pb-12">
-        <div className="flex justify-between items-center bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-          <div><h1 className="text-3xl font-bold tracking-tight text-slate-900 flex items-center gap-2"><Briefcase className="w-8 h-8 text-blue-600" /> Central Project Hub</h1><p className="text-slate-500 mt-1">Manage projects, assign Team Leads, and view deep analytics.</p></div>
+        
+        {/* HEADER & RESTORED CREATE BUTTON */}
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-white p-6 rounded-xl shadow-sm border border-slate-200 gap-4">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight text-slate-900 flex items-center gap-2"><Briefcase className="w-8 h-8 text-blue-600" /> Central Project Hub</h1>
+            <p className="text-slate-500 mt-1">Manage projects, assign Team Leads, and view deep analytics.</p>
+          </div>
+          <Button onClick={openCreateModal} className="bg-blue-600 hover:bg-blue-700 text-white shadow-sm font-bold h-11 px-6">
+            <Plus className="w-5 h-5 mr-2"/> Deploy New Project
+          </Button>
+        </div>
+
+        {/* SEARCH AND SMART FILTER */}
+        <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col sm:flex-row gap-4">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
+            <Input placeholder="Search project name or parameters..." className="pl-10 h-10 text-sm bg-slate-50 border-slate-200" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
+          </div>
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger className="h-10 w-full sm:w-[250px] bg-slate-50 border-slate-200 text-sm">
+              <Filter className="w-4 h-4 mr-2 text-slate-500"/>
+              <SelectValue placeholder="Filter by Status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="All">All Projects</SelectItem>
+              <SelectItem value="Active">Active</SelectItem>
+              <SelectItem value="Hold">On Hold</SelectItem>
+              <SelectItem value="Completed">Completed</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
         {loading ? <div className="flex justify-center p-20"><Loader2 className="w-10 h-10 animate-spin text-blue-600" /></div> : (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-            {projects.map(proj => {
+            {filteredProjects.map(proj => {
               const totalTasks = proj.tasks?.length || 0;
               const completedTasks = proj.tasks?.filter((t: any) => t.status === 'Completed').length || 0;
               const progress = totalTasks > 0 ? (completedTasks / totalTasks) * 100 : 0;
@@ -185,6 +272,12 @@ export default function AdminProjects() {
                         <div className="flex items-center justify-between text-xs text-slate-500 mb-2"><span className="flex items-center font-bold text-slate-700"><CheckSquare className="w-3.5 h-3.5 mr-1.5 text-blue-500"/> Task Progress</span><span className="font-bold">{progress.toFixed(0)}% ({completedTasks}/{totalTasks})</span></div>
                         <div className="w-full bg-slate-200 rounded-full h-2"><div className="bg-blue-600 h-2 rounded-full transition-all duration-500" style={{ width: `${progress}%` }}></div></div>
                       </div>
+                      
+                      {/* AI ROADMAP BUTTON */}
+                      <Button onClick={() => generateProjectRoadmap(proj)} disabled={isAiLoading} className="w-full bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold border border-indigo-200 h-9 text-xs">
+                        {isAiLoading ? <Loader2 className="w-3 h-3 mr-2 animate-spin"/> : <BrainCircuit className="w-3 h-3 mr-2"/>} Generate AI Roadmap
+                      </Button>
+
                       <div className="flex items-center justify-between text-xs font-medium text-slate-500 pt-2 border-t border-slate-100">
                         <span className="flex items-center"><UserCircle className="w-3.5 h-3.5 mr-1.5"/> TL: {proj.profiles?.name || 'Unassigned'}</span>
                         <span className="flex items-center"><Calendar className="w-3.5 h-3.5 mr-1.5"/> {new Date(proj.created_at).toLocaleDateString()}</span>
@@ -194,15 +287,17 @@ export default function AdminProjects() {
                 </Card>
               );
             })}
+            {filteredProjects.length === 0 && <div className="col-span-full p-12 text-center text-slate-500 font-bold">No projects match your search criteria.</div>}
           </div>
         )}
 
+        {/* CREATE / EDIT MODAL */}
         {isAssignModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
             <Card className="w-full max-w-lg shadow-2xl border-none animate-in zoom-in-95 duration-200">
               <CardContent className="p-6">
                 <div className="flex justify-between items-center mb-6 border-b border-slate-100 pb-3">
-                  <h2 className="text-2xl font-black text-slate-800">Project Configuration</h2>
+                  <h2 className="text-2xl font-black text-slate-800">{editingProject ? "Project Configuration" : "Create New Project"}</h2>
                   <button onClick={() => setIsAssignModalOpen(false)} className="text-slate-400 hover:bg-slate-100 p-1.5 rounded-full"><X className="w-5 h-5"/></button>
                 </div>
                 <form onSubmit={saveProjectChanges} className="space-y-4">
@@ -239,7 +334,10 @@ export default function AdminProjects() {
 
                   <div className="flex gap-3 pt-4 border-t border-slate-100 mt-4">
                     <Button type="submit" className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold shadow-sm">Save Configuration</Button>
-                    <Button type="button" onClick={deleteProject} variant="destructive" className="flex-none shadow-sm" title="Permanently Delete Project"><Trash2 className="w-4 h-4"/></Button>
+                    {/* ONLY SHOW DELETE IF EDITING EXISTING PROJECT */}
+                    {editingProject && (
+                      <Button type="button" onClick={deleteProject} variant="destructive" className="flex-none shadow-sm" title="Permanently Delete Project"><Trash2 className="w-4 h-4"/></Button>
+                    )}
                   </div>
                 </form>
               </CardContent>
@@ -247,6 +345,25 @@ export default function AdminProjects() {
           </div>
         )}
 
+        {/* AI ROADMAP MODAL */}
+        {aiRoadmap && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in">
+            <Card className="w-full max-w-3xl shadow-2xl border-none overflow-hidden flex flex-col max-h-[85vh]">
+              <div className="bg-indigo-600 p-6 flex justify-between items-center text-white">
+                <div>
+                  <h2 className="text-xl font-black flex items-center gap-2"><Sparkles className="w-5 h-5"/> AI Corporate Roadmap Strategy</h2>
+                  <p className="text-indigo-200 text-xs mt-1">Generated by FWC Neural Engine</p>
+                </div>
+                <button onClick={() => setAiRoadmap(null)} className="text-indigo-200 hover:text-white"><X className="w-6 h-6"/></button>
+              </div>
+              <CardContent className="p-6 overflow-y-auto custom-scrollbar">
+                <p className="whitespace-pre-wrap text-sm text-slate-700 leading-relaxed font-medium">{aiRoadmap}</p>
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
+        {/* EXISTING VIEW PROJECT ANALYTICS MODAL */}
         {viewProject && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
             <Card className="w-full max-w-4xl shadow-2xl border-none animate-in zoom-in-95 duration-200 overflow-hidden">

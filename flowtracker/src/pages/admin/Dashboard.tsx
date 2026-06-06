@@ -5,12 +5,14 @@ import { Button } from "@/components/ui/button";
 import { Users, Shield, UserCheck, Briefcase, TrendingUp, DollarSign, Loader2, Download, FileSpreadsheet, PieChart as PieChartIcon } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell, Legend } from "recharts";
+import { CareerPredictor } from "@/components/dashboard/CareerPredictor";
 
 export default function AdminDashboard() {
   const [stats, setStats] = useState({ employees: 0, leads: 0, admins: 0, total: 0 });
   const [departmentData, setDepartmentData] = useState<any[]>([]);
   const [financialData, setFinancialData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [userId, setUserId] = useState<string | null>(null);
 
   const PIE_COLORS = ['#10b981', '#3b82f6', '#6366f1', '#f59e0b'];
 
@@ -21,6 +23,9 @@ export default function AdminDashboard() {
   const fetchEnterpriseData = async () => {
     setLoading(true);
     try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) setUserId(user.id);
+
       // Fetch all core profiles dynamically
       const { data, error } = await supabase.from('profiles').select('role, department');
       if (error) throw error;
@@ -224,7 +229,7 @@ export default function AdminDashboard() {
               </Card>
             </div>
 
-            {/* NEW: FINANCIAL VALUATION & BALANCE SHEET CHARTS */}
+            {/* FINANCIAL VALUATION & BALANCE SHEET CHARTS */}
             {financialData && (
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
                 
@@ -281,6 +286,13 @@ export default function AdminDashboard() {
                   </CardContent>
                 </Card>
 
+              </div>
+            )}
+            
+            {/* NEW AI CAREER PREDICTOR WIDGET FOR ADMIN */}
+            {userId && (
+              <div className="mt-6 max-w-lg">
+                <CareerPredictor userId={userId} />
               </div>
             )}
           </>

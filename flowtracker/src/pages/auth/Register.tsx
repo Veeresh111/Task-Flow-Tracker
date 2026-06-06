@@ -22,7 +22,7 @@ export default function Register() {
     confirmPassword: "",
     phone: "",
     department: "",
-    role: "employee", // NEW: Added role field to capture multi-role registrations
+    role: "employee", 
     teamLeadId: "",
   });
   
@@ -30,10 +30,8 @@ export default function Register() {
   const [isLoading, setIsLoading] = useState(false);
   const [isSubmitted, setIsSubmitted] = useState(false);
   
-  // REAL Database Team Leads
   const [realTeamLeads, setRealTeamLeads] = useState<any[]>([]);
 
-  // Fetch REAL team leads from the database when the page loads
   useEffect(() => {
     const fetchLeads = async () => {
       const { data, error } = await supabase
@@ -66,7 +64,6 @@ export default function Register() {
     }
 
     try {
-      // The REAL Database Call
       await authService.signUp(formData);
       setIsSubmitted(true);
     } catch (error: any) {
@@ -113,7 +110,6 @@ export default function Register() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background via-background to-accent/30 p-4">
       <div className="w-full max-w-md animate-fade-in">
-        {/* Logo */}
         <div className="flex justify-center mb-8">
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 rounded-xl gradient-primary flex items-center justify-center shadow-lg">
@@ -133,7 +129,6 @@ export default function Register() {
               {step === 1 ? "Enter your personal details to get started" : "Select your team lead"}
             </CardDescription>
 
-            {/* Step Indicator */}
             <div className="flex items-center justify-center gap-2 pt-4">
               <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${step >= 1 ? "gradient-primary text-white" : "bg-muted text-muted-foreground"}`}>1</div>
               <div className={`w-12 h-1 rounded ${step >= 2 ? "bg-primary" : "bg-muted"}`} />
@@ -157,24 +152,26 @@ export default function Register() {
                     <Label htmlFor="phone">Phone Number</Label>
                     <Input id="phone" type="tel" placeholder="+1 (555) 000-0000" value={formData.phone} onChange={(e) => handleChange("phone", e.target.value)} required className="h-11" />
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="department">Department</Label>
-                    <Select value={formData.department} onValueChange={(value) => handleChange("department", value)}>
-                      <SelectTrigger className="h-11">
-                        <SelectValue placeholder="Select department" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="engineering">Engineering</SelectItem>
-                        <SelectItem value="design">Design</SelectItem>
-                        <SelectItem value="marketing">Marketing</SelectItem>
-                        <SelectItem value="sales">Sales</SelectItem>
-                        <SelectItem value="hr">Human Resources</SelectItem>
-                        <SelectItem value="finance">Finance</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
+                  
+                  {formData.role !== 'candidate' && (
+                    <div className="space-y-2">
+                      <Label htmlFor="department">Department</Label>
+                      <Select value={formData.department} onValueChange={(value) => handleChange("department", value)}>
+                        <SelectTrigger className="h-11">
+                          <SelectValue placeholder="Select department" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="engineering">Engineering</SelectItem>
+                          <SelectItem value="design">Design</SelectItem>
+                          <SelectItem value="marketing">Marketing</SelectItem>
+                          <SelectItem value="sales">Sales</SelectItem>
+                          <SelectItem value="hr">Human Resources</SelectItem>
+                          <SelectItem value="finance">Finance</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
 
-                  {/* NEW: Role Selection so the database captures 'hr', 'admin', etc. correctly */}
                   <div className="space-y-2">
                     <Label htmlFor="role">Account Role</Label>
                     <Select value={formData.role} onValueChange={(value) => handleChange("role", value)}>
@@ -182,6 +179,7 @@ export default function Register() {
                         <SelectValue placeholder="Select your role" />
                       </SelectTrigger>
                       <SelectContent>
+                        <SelectItem value="candidate" className="font-bold text-blue-600">Candidate / Applicant</SelectItem>
                         <SelectItem value="employee">Employee</SelectItem>
                         <SelectItem value="hr">Human Resources (HR)</SelectItem>
                         <SelectItem value="team_lead">Team Lead</SelectItem>
@@ -215,24 +213,26 @@ export default function Register() {
                     </p>
                   </div>
 
-                  <div className="space-y-3">
-                    {realTeamLeads.map((teamLead) => (
-                      <div
-                        key={teamLead.id}
-                        onClick={() => handleChange("teamLeadId", teamLead.id)}
-                        className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
-                          formData.teamLeadId === teamLead.id ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <p className="font-medium">{teamLead.name}</p>
-                            <p className="text-sm text-muted-foreground">{teamLead.email}</p>
+                  {formData.role === 'employee' && (
+                    <div className="space-y-3">
+                      {realTeamLeads.map((teamLead) => (
+                        <div
+                          key={teamLead.id}
+                          onClick={() => handleChange("teamLeadId", teamLead.id)}
+                          className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
+                            formData.teamLeadId === teamLead.id ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="font-medium">{teamLead.name}</p>
+                              <p className="text-sm text-muted-foreground">{teamLead.email}</p>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  )}
                 </>
               )}
             </CardContent>
@@ -247,7 +247,6 @@ export default function Register() {
                 <Button 
                   type="submit" 
                   className="flex-1 h-11 gradient-primary text-white font-medium" 
-                  // UPDATED: Doesn't force HR/Admins to select a team lead
                   disabled={isLoading || (step === 2 && realTeamLeads.length > 0 && !formData.teamLeadId && formData.role === 'employee')}
                 >
                   {isLoading ? (

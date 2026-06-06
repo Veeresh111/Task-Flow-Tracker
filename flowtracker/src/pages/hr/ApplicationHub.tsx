@@ -55,7 +55,7 @@ export default function ApplicationHub() {
     setAiScanning(true);
     toast({ title: "Global ATS Initialized", description: `Running deep AI analysis on ${unscoredApps.length} applications...` });
 
-    const apiKey = import.meta.env.VITE_GEMINI_API_KEY || "AQ.Ab8RN6KQXzJBhyAkPtzy70H-HJXV0zOvPoV6BjJ-ohgF3Cs_YQ";
+    const apiKey = import.meta.env.VITE_GEMINI_API_KEY ;
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
@@ -105,7 +105,7 @@ export default function ApplicationHub() {
     toast({ title: "Targeted ATS Initialized", description: `Analyzing candidate: ${app.candidate_name}...` });
 
     try {
-      const apiKey = import.meta.env.VITE_GEMINI_API_KEY || "AQ.Ab8RN6KQXzJBhyAkPtzy70H-HJXV0zOvPoV6BjJ-ohgF3Cs_YQ";
+      const apiKey = import.meta.env.VITE_GEMINI_API_KEY ;
       const genAI = new GoogleGenerativeAI(apiKey);
       const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 

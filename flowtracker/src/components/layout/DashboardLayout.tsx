@@ -6,10 +6,10 @@ import { supabase } from "@/lib/supabase";
 import { authService } from "@/lib/auth";
 import { 
   Menu, X, LogOut, Home, Users, Briefcase, MessageSquare, 
-  AlertCircle, CheckSquare, Clock, BarChart3, Bell, Settings, UserCircle, CheckCircle, Calendar, ClipboardList, Wallet, Sparkles, Timer, FileText, UserPlus, Loader2, Mail, Inbox
+  AlertCircle, CheckSquare, Clock, BarChart3, Bell, Settings, UserCircle, CheckCircle, Calendar, ClipboardList, Wallet, Sparkles, Timer, FileText, UserPlus, Loader2, Mail, Inbox, TrendingUp
 } from "lucide-react";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 
 let globalProfile: any = null;
 let globalClockedIn = false;
@@ -24,6 +24,7 @@ const navItems: any = {
   admin: [
     { title: "Dashboard", href: "/admin", icon: Home },
     { title: "AI Insights", href: "/admin/ai-insights", icon: Sparkles },
+    { title: "Performance Engine", href: "/admin/performance", icon: TrendingUp }, 
     { title: "Time & Presence", href: "/admin/presence", icon: Clock },
     { title: "HR Directory", href: "/admin/directory", icon: Users },
     { title: "Employees", href: "/admin/employees", icon: Users },
@@ -40,8 +41,9 @@ const navItems: any = {
   hr: [
     { title: "HR Dashboard", href: "/hr", icon: Home },
     { title: "AI Insights", href: "/hr/ai-insights", icon: Sparkles }, 
+    { title: "Performance Engine", href: "/hr/performance", icon: TrendingUp }, 
     { title: "AI ATS & Recruiting", href: "/hr/recruitment", icon: UserPlus },
-    { title: "Application Hub", href: "/hr/applications", icon: Inbox }, // NEW HR HUB FOR FORMS
+    { title: "Application Hub", href: "/hr/applications", icon: Inbox }, 
     { title: "Smart Inbox API", href: "/hr/smart-inbox", icon: Mail }, 
     { title: "HR Directory", href: "/hr/directory", icon: Users },
     { title: "Time & Presence", href: "/hr/presence", icon: Clock },
@@ -82,6 +84,11 @@ const navItems: any = {
     { title: "Complaints", href: "/employee/complaints", icon: AlertCircle },
     { title: "Notifications", href: "/employee/notifications", icon: Bell, badgeKey: 'notifications' },
     { title: "Settings", href: "/employee/settings", icon: Settings },
+  ],
+  candidate: [
+    { title: "Candidate Portal", href: "/candidate", icon: Home },
+    { title: "Office Chat", href: "/candidate/chat", icon: MessageSquare },
+    { title: "Settings", href: "/candidate/settings", icon: Settings },
   ]
 };
 
@@ -149,6 +156,7 @@ function DashboardLayoutCore({ children, role }: { children: React.ReactNode; ro
         else if (dbRole === 'EMPLOYEE' && !location.pathname.startsWith('/employee')) navigate('/employee');
         else if (dbRole === 'ADMIN' && !location.pathname.startsWith('/admin')) navigate('/admin');
         else if (dbRole === 'HR' && !location.pathname.startsWith('/hr')) navigate('/hr');
+        else if (dbRole === 'CANDIDATE' && !location.pathname.startsWith('/candidate')) navigate('/candidate');
         fetchBadgeCounts(globalProfile.role, globalProfile.id);
         return; 
       }
@@ -185,6 +193,7 @@ function DashboardLayoutCore({ children, role }: { children: React.ReactNode; ro
         else if (dbRole === 'EMPLOYEE' && !location.pathname.startsWith('/employee')) navigate('/employee');
         else if (dbRole === 'ADMIN' && !location.pathname.startsWith('/admin')) navigate('/admin');
         else if (dbRole === 'HR' && !location.pathname.startsWith('/hr')) navigate('/hr');
+        else if (dbRole === 'CANDIDATE' && !location.pathname.startsWith('/candidate')) navigate('/candidate');
       }
       
       const { data: activeLog } = await supabase.from('work_logs').select('id, work_location, clock_in, created_at').eq('user_id', user.id).eq('status', 'Active').maybeSingle();
@@ -336,9 +345,9 @@ function DashboardLayoutCore({ children, role }: { children: React.ReactNode; ro
       const taskCount = tasks?.length || 0;
       const taskList = tasks?.map(t => t.title).join(", ") || "Standard operational and structural duties";
 
-      const apiKey = import.meta.env.VITE_GEMINI_API_KEY || "AQ.Ab8RN6KQXzJBhyAkPtzy70H-HJXV0zOvPoV6BjJ-ohgF3Cs_YQ";
-      const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+      const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+      const genAI = new GoogleGenerativeAI(apiKey || "");
+      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
       const prompt = `Act as an elite FWC India HR Evaluation Engine. Employee: ${empName}. Hours Worked: ${hours.toFixed(2)}. Tasks Done: ${taskCount} (${taskList}). Write a 3-sentence performance review. Assign a "Competence Score" out of 100. CRITICAL INSTRUCTION: If Hours Worked is greater than 11.5 hours, you MUST severely penalize the Competence Score (drop it below 40) for 'suspicious time-theft' or 'extremely poor time management', and explicitly scold them for it in the review. No markdown.`;
 
@@ -348,7 +357,8 @@ function DashboardLayoutCore({ children, role }: { children: React.ReactNode; ro
       setDailyReportData({ hours: hours.toFixed(2), tasks: taskCount, report: aiResponse });
       await supabase.from('work_logs').update({ notes: `SYSTEM AI REPORT: ${aiResponse}` }).eq('id', logId);
     } catch (error) {
-      setDailyReportData({ hours: hours.toFixed(2), tasks: 0, report: "Shift recorded. AI evaluation engine offline." });
+      console.error("EndOfDay AI Error:", error);
+      setDailyReportData({ hours: hours.toFixed(2), tasks: 0, report: "Shift recorded. AI evaluation engine is currently offline." });
     }
     setGeneratingReport(false);
   };
@@ -436,7 +446,7 @@ function DashboardLayoutCore({ children, role }: { children: React.ReactNode; ro
         <nav className="flex-1 overflow-y-auto py-6 px-4 space-y-1.5 custom-scrollbar">
           {items.map((item: any) => {
             const Icon = item.icon;
-            const isBaseRoute = item.href === "/admin" || item.href === "/team-lead" || item.href === "/employee" || item.href === "/hr";
+            const isBaseRoute = item.href === "/admin" || item.href === "/team-lead" || item.href === "/employee" || item.href === "/hr" || item.href === "/candidate";
             const isActive = isBaseRoute ? location.pathname === item.href : location.pathname === item.href || location.pathname.startsWith(item.href + "/");
             
             const isCurrentBadgePath = item.badgeKey && location.pathname.includes(item.badgeKey);
@@ -466,19 +476,22 @@ function DashboardLayoutCore({ children, role }: { children: React.ReactNode; ro
           </div>
           
           <div className="flex items-center gap-4">
-            <span className="text-sm text-gray-500 font-medium hidden sm:block">{userProfile?.role?.replace('_', ' ').toUpperCase() || 'HR'}</span>
+            <span className="text-sm text-gray-500 font-medium hidden sm:block">{userProfile?.role?.replace('_', ' ').toUpperCase() || 'USER'}</span>
             
-            {!isClockedIn ? (
-              <div className="flex items-center gap-2">
-                <Button onClick={() => toggleClock('WFO')} className="bg-emerald-600 hover:bg-emerald-700 text-white rounded-full px-5 shadow-sm font-bold transition-all">🏢 WFO</Button>
-                <Button onClick={() => toggleClock('WFH')} className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-full px-5 shadow-sm font-bold transition-all">🏠 WFH</Button>
-              </div>
-            ) : (
-              <Button onClick={() => toggleClock()} variant="destructive" className="rounded-full px-6 font-bold shadow-sm transition-all flex items-center gap-2 group">
-                <Timer className="w-4 h-4 animate-pulse group-hover:hidden" /> <Clock className="w-4 h-4 hidden group-hover:block" /> 
-                <span className="w-16 text-center tracking-widest">{elapsedTimer}</span>
-                <span className="border-l border-red-400 pl-2">Clock Out</span>
-              </Button>
+            {/* CORPORATE FIX: Candidates DO NOT Clock In or Out */}
+            {currentRole !== 'candidate' && (
+              !isClockedIn ? (
+                <div className="flex items-center gap-2">
+                  <Button onClick={() => toggleClock('WFO')} className="bg-emerald-600 hover:bg-emerald-700 text-white rounded-full px-5 shadow-sm font-bold transition-all">🏢 WFO</Button>
+                  <Button onClick={() => toggleClock('WFH')} className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-full px-5 shadow-sm font-bold transition-all">🏠 WFH</Button>
+                </div>
+              ) : (
+                <Button onClick={() => toggleClock()} variant="destructive" className="rounded-full px-6 font-bold shadow-sm transition-all flex items-center gap-2 group">
+                  <Timer className="w-4 h-4 animate-pulse group-hover:hidden" /> <Clock className="w-4 h-4 hidden group-hover:block" /> 
+                  <span className="w-16 text-center tracking-widest">{elapsedTimer}</span>
+                  <span className="border-l border-red-400 pl-2">Clock Out</span>
+                </Button>
+              )
             )}
           </div>
         </header>

@@ -108,7 +108,7 @@ export default function EmployeeAIInsights() {
     if (!metrics) return;
     setGeneratingAI(true);
     try {
-      const apiKey = import.meta.env.VITE_GEMINI_API_KEY || "AQ.Ab8RN6KQXzJBhyAkPtzy70H-HJXV0zOvPoV6BjJ-ohgF3Cs_YQ";
+      const apiKey = import.meta.env.VITE_GEMINI_API_KEY ;
       const genAI = new GoogleGenerativeAI(apiKey);
       const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" }); 
       

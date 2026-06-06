@@ -23,6 +23,7 @@ import AdminSettings from "./pages/admin/SettingsPage";
 import AdminApprovals from "./pages/admin/approvals";
 import AdminPayroll from "./pages/admin/Payroll"; 
 import AdminAIInsights from "./pages/admin/AIInsights"; 
+import AdminPerformanceEngine from "./pages/admin/PerformanceEngine"; 
 
 // Team Lead Pages
 import TeamLeadDashboard from "./pages/team-lead/Dashboard";
@@ -62,7 +63,11 @@ import HRRecruitment from "./pages/hr/Recruitment";
 import HRPayroll from "./pages/hr/Payroll"; 
 import HRAIInsights from "./pages/hr/AIInsights"; 
 import SmartInbox from "./pages/hr/SmartInbox"; 
-import ApplicationHub from "./pages/hr/ApplicationHub"; // NEW HR HUB
+import ApplicationHub from "./pages/hr/ApplicationHub";
+import HRPerformanceEngine from "./pages/hr/PerformanceEngine";
+
+// CANDIDATE Pages (NEW)
+import CandidateDashboard from "./pages/candidate/Dashboard"; 
 
 export default function App() {
   return (
@@ -72,8 +77,15 @@ export default function App() {
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
         
-        {/* PUBLIC ROUTES (Candidates accessing the AI forms) */}
+        {/* PUBLIC ROUTES */}
         <Route path="/apply/:formId" element={<JobApplication />} />
+
+        {/* CANDIDATE SPA ROUTES (NEW) */}
+        <Route element={<DashboardLayout role="candidate"><Outlet /></DashboardLayout>}>
+          <Route path="/candidate" element={<CandidateDashboard />} />
+          <Route path="/candidate/chat" element={<EmployeeChat />} />
+          <Route path="/candidate/settings" element={<EmployeeSettings />} />
+        </Route>
 
         {/* ADMIN SPA ROUTES */}
         <Route element={<DashboardLayout role="admin"><Outlet /></DashboardLayout>}>
@@ -85,6 +97,7 @@ export default function App() {
           <Route path="/admin/analytics" element={<AdminAnalytics />} />
           <Route path="/admin/payroll" element={<AdminPayroll />} /> 
           <Route path="/admin/ai-insights" element={<AdminAIInsights />} />
+          <Route path="/admin/performance" element={<AdminPerformanceEngine />} />
           <Route path="/admin/chat" element={<AdminChat />} />
           <Route path="/admin/complaints" element={<AdminComplaints />} />
           <Route path="/admin/notifications" element={<AdminNotifications />} />
@@ -133,9 +146,10 @@ export default function App() {
         <Route element={<DashboardLayout role="hr"><Outlet /></DashboardLayout>}>
           <Route path="/hr" element={<HRDashboard />} />
           <Route path="/hr/ai-insights" element={<HRAIInsights />} /> 
+          <Route path="/hr/performance" element={<HRPerformanceEngine />} />
           <Route path="/hr/smart-inbox" element={<SmartInbox />} /> 
           <Route path="/hr/recruitment" element={<HRRecruitment />} />
-          <Route path="/hr/applications" element={<ApplicationHub />} /> {/* NEW: Form Submissions */}
+          <Route path="/hr/applications" element={<ApplicationHub />} />
           <Route path="/hr/directory" element={<AdminMasterDirectory />} />
           <Route path="/hr/presence" element={<AdminPresence />} />
           <Route path="/hr/payroll" element={<HRPayroll />} />

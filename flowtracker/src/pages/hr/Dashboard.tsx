@@ -6,11 +6,13 @@ import { Input } from "@/components/ui/input";
 import { supabase } from "@/lib/supabase";
 import { Loader2, Users, Wallet, AlertTriangle, UserCheck, Sparkles, TrendingDown, HeartPulse, DollarSign, Target } from "lucide-react";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { CareerPredictor } from "@/components/dashboard/CareerPredictor";
 
 export default function HRDashboard() {
   const [stats, setStats] = useState({ totalEmployees: 0, openComplaints: 0, pendingLeaves: 0 });
   const [employees, setEmployees] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [userId, setUserId] = useState<string | null>(null);
 
   // AI Feature States
   const [aiLoading, setAiLoading] = useState<string | null>(null);
@@ -26,6 +28,10 @@ export default function HRDashboard() {
 
   const fetchHRData = async () => {
     setLoading(true);
+    
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) setUserId(user.id);
+
     const { data: profs } = await supabase.from('profiles').select('*');
     const { count: cComp } = await supabase.from('complaints').select('*', { count: 'exact' }).eq('status', 'Open');
     const { count: cLeave } = await supabase.from('leaves').select('*', { count: 'exact' }).eq('status', 'Pending');
@@ -36,7 +42,7 @@ export default function HRDashboard() {
   };
 
   const callGemini = async (prompt: string) => {
-    const apiKey = import.meta.env.VITE_GEMINI_API_KEY || "AQ.Ab8RN6KQXzJBhyAkPtzy70H-HJXV0zOvPoV6BjJ-ohgF3Cs_YQ";
+    const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
     const result = await model.generateContent(prompt);
@@ -180,6 +186,12 @@ export default function HRDashboard() {
             </CardContent>
           </Card>
         </div>
+        
+        {userId && (
+          <div className="mt-8 max-w-lg">
+            <CareerPredictor userId={userId} />
+          </div>
+        )}
       </div>
     </DashboardLayout>
   );

@@ -12,6 +12,9 @@ export const authService = {
   signUp: async (formData: any) => {
     await supabase.auth.signOut(); // Wipes stuck sessions so it never crashes
     
+    // CORPORATE FIX: Safely route Candidate data to prevent Database Trigger 500 Errors
+    const safeDepartment = formData.role === 'candidate' ? 'Candidate Pool' : (formData.department || "Unassigned");
+
     const { data, error } = await supabase.auth.signUp({
       email: formData.email,
       password: formData.password,
@@ -19,7 +22,7 @@ export const authService = {
         data: { 
           name: formData.name, 
           phone: formData.phone || "N/A", 
-          department: formData.department || "Unassigned",
+          department: safeDepartment,
           role: formData.role || "employee" // The role is permanently saved in secure Auth Metadata
         } 
       }
@@ -52,6 +55,8 @@ export const authService = {
   },
 
   adminCreateUser: async (formData: any) => {
+    const safeDepartment = formData.role === 'candidate' ? 'Candidate Pool' : (formData.department || "Unassigned");
+
     const { data, error } = await adminSupabase.auth.signUp({
       email: formData.email,
       password: formData.password,
@@ -59,7 +64,7 @@ export const authService = {
         data: { 
           name: formData.name, 
           phone: formData.phone || "N/A", 
-          department: formData.department || "Unassigned",
+          department: safeDepartment,
           role: formData.role || "employee"
         } 
       }

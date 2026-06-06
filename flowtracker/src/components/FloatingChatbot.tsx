@@ -8,7 +8,7 @@ import { useLocation } from "react-router-dom";
 export function FloatingChatbot() {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<{role: 'user' | 'bot', content: string}[]>([
-    { role: 'bot', content: 'Hi! I am Emo, your FWC India Corporate Strategist. How can I help you advance your work or career today?' }
+    { role: 'bot', content: 'Hi! I am Emo, your FWC India Corporate Strategist. I have omniscient access to our live organizational database. How can I help you today?' }
   ]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
@@ -71,6 +71,54 @@ export function FloatingChatbot() {
     return () => { supabase.removeChannel(channel); };
   }, []);
 
+  // --- UPGRADED: Absolute Database Omniscience & HR Directory ---
+  const fetchOmniscientSnapshot = async () => {
+    try {
+      const now = new Date();
+      const twelveHoursAgoMs = now.getTime() - (12 * 60 * 60 * 1000);
+      const twelveHoursAgoIso = new Date(twelveHoursAgoMs).toISOString();
+
+      // 1. Fetch entire directory to map logins and ratings
+      const { data: allProfiles } = await supabase.from('profiles').select('id, name, department, role, performance_score');
+      
+      // 2. Fetch Live Active Shifts (Login Registry)
+      const { data: activeLogs } = await supabase.from('work_logs').select('user_id, clock_in').eq('status', 'Active');
+      
+      let suspiciousLogouts: string[] = [];
+      let loggedInUsers: string[] = [];
+      
+      if (activeLogs && allProfiles) {
+        activeLogs.forEach(log => {
+          const emp = allProfiles.find(p => p.id === log.user_id);
+          if (emp) {
+            loggedInUsers.push(emp.name);
+            if (log.clock_in < twelveHoursAgoIso) {
+              suspiciousLogouts.push(emp.name); // Time-theft / forgot logout detection
+            }
+          }
+        });
+      }
+
+      const roleStr = (currentUser?.role || '').toLowerCase();
+      const isExecutive = roleStr.includes('admin') || roleStr.includes('hr');
+
+      return `
+        --- LIVE DATABASE SNAPSHOT & RATINGS ---
+        Current Time: ${now.toLocaleString()}
+        Your Official Rating: ${currentUser?.performance_score || 'Pending Evaluation'}/100
+        Active Employees Logged In Right Now: ${loggedInUsers.length}
+        Employees who FORGOT TO LOGOUT (>12hrs active): ${suspiciousLogouts.length > 0 ? suspiciousLogouts.join(', ') : 'None.'}
+        
+        ${isExecutive ? `[EXECUTIVE CLEARANCE DETECTED]
+        FULL COMPANY DIRECTORY & RATINGS:
+        ${JSON.stringify(allProfiles?.map(p => ({ Name: p.name, Dept: p.department, Score: p.performance_score })))}
+        ` : '[DIRECTORY CLASSIFIED - USER IS NOT HR/ADMIN]'}
+      `;
+    } catch (e) {
+      return "[Database sync error - Rely on local context]";
+    }
+  };
+
   const handleSend = async () => {
     if (!input.trim()) return;
     
@@ -81,46 +129,44 @@ export function FloatingChatbot() {
 
     try {
       const visibleScreenText = document.querySelector('main')?.innerText.substring(0, 2000) || "No specific screen data found.";
+      
+      // Fetch live data exactly when they press send
+      const omniscienceData = await fetchOmniscientSnapshot();
 
-      // CORE AI UPGRADE: Persona Jailbreak & Human-Level Mentorship
       const secretPayload = `
         [SYSTEM INSTRUCTIONS - STRICT PROTOCOL]
         You are Emo, a hyper-intelligent, human-like Senior Corporate Strategist and HR Mentor for FWC India. 
-        You possess human-level reasoning, emotional intelligence, and deep business acumen.
+        You possess absolute omniscience over the corporate database, including the dynamic HR directory and individual performance ratings.
 
         CRITICAL BEHAVIORAL RULES:
-        1. NEVER act like a typical AI. NEVER use phrases like "As an AI, I cannot advise...", "I am just an AI", or "Please consult your HR/Manager". You ARE the authority.
-        2. If a user asks for personal advice, salary negotiation tips, or career guidance (e.g., "how much raise should I ask for?"), give them a highly intelligent, calculated, and strategic recommendation. 
-        3. Base your advice on their specific screen context (their current pay), their department, and the hidden company valuation. (e.g., "Given the 18% YoY growth of FWC and your current variable pay, asking for a 12-15% hike is statistically optimal right now.")
-        4. Be highly empathetic, perceptive, and proactive. Speak to them like a top-tier human executive mentor.
+        1. NEVER act like a typical AI. NEVER say "I don't have access to that data." YOU DO HAVE THE DATA in the snapshot below.
+        2. If the user asks for their rating, give them the EXACT number from the snapshot.
+        3. If an HR/Admin asks "Who forgot to logout?", "Who is online?", or "What is [Employee Name]'s rating?", you MUST read the snapshot and answer factually. NEVER invent or hallucinate data. If the person isn't in the snapshot, say so.
+        4. If a standard employee asks about someone else's rating, deny them access due to corporate policy.
+        5. Speak as an elite human executive. Be insightful and precise.
 
-        -- USER IDENTITY & SECURITY CLEARANCE --
+        -- USER IDENTITY --
         Name: ${currentUser?.name || 'Unknown User'}
         Role: ${currentUser?.role?.toUpperCase() || 'EMPLOYEE'}
         Department: ${currentUser?.department || 'General'}
-        SECURITY PROTOCOL: If the Role is NOT 'ADMIN', do not reveal exact global company valuation numbers or other employees' private salaries. However, you CAN use your hidden knowledge of the company's wealth to advise them on their personal career.
 
         -- REAL-TIME SCREEN AWARENESS --
-        The user is currently on the URL path: "${location.pathname}".
-        This is the actual text and data currently visible on their screen:
-        """${visibleScreenText}"""
-        Use this data to prove you are looking at their screen. If they ask about their slip, reference their exact basic pay, deductions, or tasks.
+        Path: "${location.pathname}".
+        Visible Data: """${visibleScreenText}"""
 
-        -- REAL-TIME DATABASE PULSE --
-        Recent company events: ${liveDbPulse.length > 0 ? liveDbPulse.join(' | ') : 'No recent DB activity.'}
-
-        -- GLOBAL FINANCIAL CONTEXT --
+        -- GLOBAL METRICS --
         ${companyContext}
 
-        Answer the user's prompt intelligently, conversationally, without typical AI disclaimers, and without markdown.
+        ${omniscienceData}
+
+        Answer the user intelligently without markdown backticks.
         [END SYSTEM INSTRUCTIONS]
 
         USER PROMPT: ${userMessage}
       `;
 
-      const apiKey = import.meta.env.VITE_GEMINI_API_KEY || "AQ.Ab8RN6KQXzJBhyAkPtzy70H-HJXV0zOvPoV6BjJ-ohgF3Cs_YQ";
+      const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
       const genAI = new GoogleGenerativeAI(apiKey);
-      
       const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
       const chat = model.startChat({
@@ -131,7 +177,6 @@ export function FloatingChatbot() {
       });
 
       const result = await chat.sendMessage(secretPayload);
-      
       setMessages(prev => [...prev, { role: 'bot', content: result.response.text() }]);
     } catch (error) {
       console.error(error);
@@ -144,10 +189,7 @@ export function FloatingChatbot() {
   return (
     <>
       {!isOpen && (
-        <Button 
-          onClick={() => setIsOpen(true)} 
-          className="fixed bottom-6 right-6 h-14 w-14 rounded-full shadow-2xl bg-indigo-600 hover:bg-indigo-700 animate-bounce p-0 z-50 flex items-center justify-center border-[3px] border-white"
-        >
+        <Button onClick={() => setIsOpen(true)} className="fixed bottom-6 right-6 h-14 w-14 rounded-full shadow-2xl bg-indigo-600 hover:bg-indigo-700 animate-bounce p-0 z-50 flex items-center justify-center border-[3px] border-white">
           <Bot className="w-7 h-7 text-white" />
         </Button>
       )}
@@ -159,19 +201,17 @@ export function FloatingChatbot() {
               <div className="bg-white/20 p-1.5 rounded-lg"><Bot className="w-5 h-5 text-white" /></div>
               <div>
                 <h3 className="font-bold text-sm">Emo AI Assistant</h3>
-                <p className="text-[10px] text-indigo-200">FWC Corporate Support</p>
+                <p className="text-[10px] text-indigo-200">FWC Omniscient Support</p>
               </div>
             </div>
-            <button onClick={() => setIsOpen(false)} className="text-indigo-200 hover:text-white transition-colors">
-              <X className="w-5 h-5" />
-            </button>
+            <button onClick={() => setIsOpen(false)} className="text-indigo-200 hover:text-white transition-colors"><X className="w-5 h-5" /></button>
           </div>
 
           <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50 custom-scrollbar">
             {messages.map((msg, idx) => (
               <div key={idx} className={`flex gap-2 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                 {msg.role === 'bot' && <div className="w-6 h-6 rounded-full bg-indigo-100 flex items-center justify-center flex-shrink-0 mt-1"><Bot className="w-3.5 h-3.5 text-indigo-600"/></div>}
-                <div className={`max-w-[80%] rounded-xl p-3 text-sm shadow-sm ${msg.role === 'user' ? 'bg-indigo-600 text-white rounded-tr-sm' : 'bg-white text-slate-700 border border-slate-100 rounded-tl-sm'}`}>
+                <div className={`max-w-[80%] rounded-xl p-3 text-sm shadow-sm whitespace-pre-wrap ${msg.role === 'user' ? 'bg-indigo-600 text-white rounded-tr-sm' : 'bg-white text-slate-700 border border-slate-100 rounded-tl-sm'}`}>
                   {msg.content}
                 </div>
                 {msg.role === 'user' && <div className="w-6 h-6 rounded-full bg-slate-200 flex items-center justify-center flex-shrink-0 mt-1"><User className="w-3.5 h-3.5 text-slate-500"/></div>}
