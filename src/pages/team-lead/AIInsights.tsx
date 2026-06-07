@@ -4,8 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, TrendingUp, DollarSign, Users, Clock, Sparkles, CheckSquare, BarChart3, CheckCircle2, AlertOctagon, Download } from "lucide-react";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { Loader2, DollarSign, Users, Clock, Sparkles, CheckSquare, BarChart3, CheckCircle2, AlertOctagon, Download } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell, Legend } from "recharts";
 
 export default function TeamLeadAIInsights() {
@@ -81,11 +80,9 @@ export default function TeamLeadAIInsights() {
       const teamRevenue = teamPayroll * 1.8; 
       const teamProfit = teamRevenue - teamPayroll;
 
-      // === NEW: MASSIVE ATTRIBUTE ENGINE ===
       const posAttrs: string[] = [];
       const negAttrs: string[] = [];
 
-      // Positive Leadership Attributes
       if (Number(tlProgress) >= 80) posAttrs.push("Exceptional Personal Execution");
       if (Number(teamProgress) >= 75) posAttrs.push("High Team Velocity & Output");
       if (teamProfit > 0) posAttrs.push("Strong Profit Center Manager");
@@ -94,7 +91,6 @@ export default function TeamLeadAIInsights() {
       if (daysInCompany > 365) posAttrs.push("Veteran Corporate Loyalty");
       if (tlPending === 0 && tlTasks.length > 0) posAttrs.push("Zero Personal Task Backlog");
       
-      // Negative/Risk Leadership Attributes
       if (Number(tlProgress) < 40 && tlTasks.length > 0) negAttrs.push("Personal Task Bottleneck");
       if (Number(teamProgress) < 50 && teamTasks.length > 0) negAttrs.push("Severe Team Productivity Lag");
       if (teamPending > teamCompleted) negAttrs.push("Critical Task Backlog Risk");
@@ -123,13 +119,12 @@ export default function TeamLeadAIInsights() {
     setLoading(false);
   };
 
+  // === UPGRADED: SECURE HUGGING FACE ROUTER WITH QWEN 3 PIPELINE ===
   const generateAISummary = async () => {
     if (!metrics) return;
     setGeneratingAI(true);
     try {
-      const apiKey = import.meta.env.VITE_GEMINI_API_KEY ;
-      const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" }); 
+      const HF_TOKEN = import.meta.env.VITE_HF_TOKEN || "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";
       
       const prompt = `Act as an elite AI Leadership Coach. Review this Team Lead's metrics: 
       TL Progress: ${metrics.tl.progress}% | Team Progress: ${metrics.team.progress}%.
@@ -138,16 +133,40 @@ export default function TeamLeadAIInsights() {
       Risk Factors: ${metrics.attributes.negative.join(', ')}.
       
       Write a highly professional, 2-paragraph analysis evaluating their leadership efficiency, output, and give actionable management advice based on their specific positive/negative traits. Do not use markdown.`;
-      
-      const result = await model.generateContent(prompt);
-      setAiSummary(result.response.text());
+
+      const response = await fetch("https://router.huggingface.co/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${HF_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "Qwen/Qwen3-32B:groq", 
+          messages: [
+            { role: "user", content: prompt }
+          ]
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error?.message || "Failed to reach Hugging Face endpoint.");
+      }
+
+      const aiResponseText = data.choices[0].message.content;
+      setAiSummary(aiResponseText);
     } catch (err: any) {
-      toast({ title: "AI Engine Error", description: "Could not generate summary.", variant: "destructive" });
+      console.error("AI Generation Failure:", err);
+      toast({ 
+        title: "AI Engine Server Error", 
+        description: err.message || "Failed to generate leadership data summary via Qwen 3.", 
+        variant: "destructive" 
+      });
     }
     setGeneratingAI(false);
   };
 
-  // UPDATED: Export now includes all newly generated attributes
   const exportReport = () => {
     let csvContent = `data:text/csv;charset=utf-8,TEAM LEAD INTELLIGENCE REPORT\n\n`;
     csvContent += `METRIC,VALUE\n`;
@@ -200,7 +219,7 @@ export default function TeamLeadAIInsights() {
         {aiSummary && (
           <Card className="bg-amber-50 border border-amber-100 shadow-sm">
             <CardContent className="p-6">
-              <h3 className="text-amber-800 font-black flex items-center gap-2 mb-2"><Sparkles className="w-5 h-5"/> Gemini AI Leadership Evaluation</h3>
+              <h3 className="text-amber-800 font-black flex items-center gap-2 mb-2"><Sparkles className="w-5 h-5"/> Qwen 3 Leadership Evaluation</h3>
               <p className="text-amber-900 leading-relaxed font-medium text-sm whitespace-pre-wrap">{aiSummary}</p>
             </CardContent>
           </Card>
@@ -236,7 +255,6 @@ export default function TeamLeadAIInsights() {
           </Card>
         </div>
 
-        {/* NEW: ATTRIBUTE SECTION */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <Card className="shadow-sm border-emerald-200 bg-emerald-50/30">
             <CardHeader className="border-b border-emerald-100 pb-3">

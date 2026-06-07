@@ -23,13 +23,16 @@ export default function Login() {
     setIsLoading(true);
     try {
       // 1. Authenticate with backend
-      await authService.signIn(email, password);
+      const { role } = await authService.signIn(email, password);
       
       // 2. ONLY show success if line above doesn't fail
       toast({ title: "Login Successful", description: "Welcome back to the dashboard!" });
       
-      // 3. NEW: Route directly to the secure gateway to evaluate live onboarding changes and roles
-      navigate("/auth/gateway");
+      // 3. Route precisely to the correct dashboard (Fixes the HR routing flaw)
+      if (role === 'admin') navigate("/admin");
+      else if (role === 'team_lead') navigate("/team-lead");
+      else if (role === 'hr') navigate("/hr"); // NEW: Explicit HR routing
+      else navigate("/employee");
       
     } catch (error: any) {
       // FIX: Show error popup, NEVER show success popup on fail

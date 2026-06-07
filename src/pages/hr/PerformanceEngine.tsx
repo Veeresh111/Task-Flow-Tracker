@@ -6,7 +6,6 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { supabase } from "@/lib/supabase";
 import { Loader2, BrainCircuit, TrendingUp } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export default function HRPerformanceEngine() {
   const [loading, setLoading] = useState(false);
@@ -28,10 +27,8 @@ export default function HRPerformanceEngine() {
     setLoading(true);
     toast({ title: "Global AI Evaluation Initiated", description: "Analyzing tasks, hours, and behaviors across the organization..." });
 
-    const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-    const genAI = new GoogleGenerativeAI(apiKey);
-    // SAFELY UPGRADED TO 2.5-FLASH
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+    // Pull from local .env or fallback safely to corporate token
+    const HF_TOKEN = import.meta.env.VITE_HF_TOKEN || "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";
 
     // Fetch raw operational data to feed the AI
     const { data: allTasks } = await supabase.from('tasks').select('*');
@@ -56,9 +53,45 @@ export default function HRPerformanceEngine() {
         Calculate a mathematically fair Performance Score (0-100).
         Output STRICTLY JSON. Format: {"score": 85, "reason": "Consistent task completion..."}`;
 
-        const result = await model.generateContent(prompt);
-        let cleanText = result.response.text().replace(/```[a-z]*\n?/gi, '').replace(/```/g, '').trim();
-        const parsed = JSON.parse(cleanText.substring(cleanText.indexOf('{'), cleanText.lastIndexOf('}') + 1));
+        // === UPGRADED: HUGGING FACE ROUTER WITH QWEN 3 PIPELINE ===
+        const response = await fetch("https://router.huggingface.co/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${HF_TOKEN}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model: "Qwen/Qwen3-32B:groq",
+            messages: [
+              { role: "user", content: prompt }
+            ],
+            temperature: 0.2 // Low temperature guarantees strict compliance with JSON schema format
+          })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data?.error?.message || "Failed to parse corporate analytics payload.");
+        }
+
+        let cleanText = data.choices[0].message.content;
+        
+        // Sanitize thinking tags if leaky streaming properties trigger them
+        cleanText = cleanText
+          .replace(/<think>[\s\S]*?<\/think>/gi, "")
+          .replace(/<thinking>[\s\S]*?<\/thinking>/gi, "")
+          .replace(/```json/gi, "")
+          .replace(/```/g, "")
+          .trim();
+
+        const startIdx = cleanText.indexOf('{');
+        const endIdx = cleanText.lastIndexOf('}');
+        if (startIdx !== -1 && endIdx !== -1) {
+          cleanText = cleanText.substring(startIdx, endIdx + 1);
+        }
+
+        const parsed = JSON.parse(cleanText);
 
         // Append to history array
         const currentHistory = emp.performance_history || [];
@@ -70,7 +103,7 @@ export default function HRPerformanceEngine() {
         }).eq('id', emp.id);
 
       } catch (err) {
-        console.error(`Failed evaluation for ${emp.name}`);
+        console.error(`Failed evaluation for ${emp.name}`, err);
       }
       
       if (i < profiles.length - 1) await sleep(4000); // API Limit Protection

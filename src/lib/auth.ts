@@ -12,9 +12,6 @@ export const authService = {
   signUp: async (formData: any) => {
     await supabase.auth.signOut(); // Wipes stuck sessions so it never crashes
     
-    // CORPORATE FIX: Safely route Candidate data to prevent Database Trigger 500 Errors
-    const safeDepartment = formData.role === 'candidate' ? 'Candidate Pool' : (formData.department || "Unassigned");
-
     const { data, error } = await supabase.auth.signUp({
       email: formData.email,
       password: formData.password,
@@ -22,7 +19,7 @@ export const authService = {
         data: { 
           name: formData.name, 
           phone: formData.phone || "N/A", 
-          department: safeDepartment,
+          department: formData.department || "Unassigned",
           role: formData.role || "employee" // The role is permanently saved in secure Auth Metadata
         } 
       }
@@ -37,34 +34,24 @@ export const authService = {
     const { data: authData, error: authError } = await supabase.auth.signInWithPassword({ email, password });
     if (authError) throw authError;
 
-    // 1. Live Database Query Check - This is the absolute corporate source of truth
-    const { data: profileData, error: profileError } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', authData.user.id)
-      .maybeSingle();
+    // THE BULLETPROOF FIX: Read the exact role you registered with from the secure Auth layer
+    const trueRole = authData.user.user_metadata?.role;
 
-    // 2. Read the registered metadata fallback parameter value
-    const metadataRole = authData.user.user_metadata?.role;
-    
-    // 3. Resolve the corporate role accurately
-    // If the database has an assigned profile role, prioritize it (resolving the candidate layout trap)
-    const finalCalculatedRole = profileData?.role || metadataRole || 'employee';
-
-    // 4. Securely keep metadata synchronized ONLY if the database row doesn't have an asset record yet
-    if (!profileData && metadataRole) {
-      await supabase.from('profiles').insert([{ id: authData.user.id, role: metadataRole }]);
+    // Self-Heal the database now that you are successfully authenticated
+    if (trueRole) {
+      await supabase.from('profiles').update({ role: trueRole }).eq('id', authData.user.id);
     }
 
+    const { data: profileData } = await supabase.from('profiles').select('role').eq('id', authData.user.id).single();
+    
+    // Always trust the True Role over a broken database value
     return { 
       user: authData.user, 
-      role: finalCalculatedRole 
+      role: trueRole || profileData?.role || 'employee' 
     };
   },
 
   adminCreateUser: async (formData: any) => {
-    const safeDepartment = formData.role === 'candidate' ? 'Candidate Pool' : (formData.department || "Unassigned");
-
     const { data, error } = await adminSupabase.auth.signUp({
       email: formData.email,
       password: formData.password,
@@ -72,7 +59,7 @@ export const authService = {
         data: { 
           name: formData.name, 
           phone: formData.phone || "N/A", 
-          department: safeDepartment,
+          department: formData.department || "Unassigned",
           role: formData.role || "employee"
         } 
       }

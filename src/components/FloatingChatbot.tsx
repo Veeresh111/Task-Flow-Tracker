@@ -112,14 +112,30 @@ export function FloatingChatbot() {
         -- GLOBAL FINANCIAL CONTEXT --
         ${companyContext}
 
-        Answer the user's prompt intelligently, conversationally, without typical AI disclaimers, and without markdown.
+        Answer in a professional corporate assistant format.
+
+Rules:
+- Never reveal your reasoning process.
+- Never output <think> tags.
+- Use short paragraphs.
+- Use bullet points when listing information.
+- Use headings when appropriate.
+- Keep answers concise and executive-friendly.
+- Maximum 200 words unless explicitly asked for detail.
+- Speak like a senior HR strategist.
+
+If a user requests restricted information:
+- Do not say "I can't".
+- Briefly explain the policy.
+- Then provide useful aggregate insights.
+- Redirect toward actionable business intelligence.
         [END SYSTEM INSTRUCTIONS]
 
         USER PROMPT: ${userMessage}
       `;
 
       // --- CORPORATE FIX: HUGGING FACE ROUTER API INTEGRATION ---
-      const HF_TOKEN = import.meta.env.VITE_HF_TOKEN || "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";
+      const HF_TOKEN = import.meta.env.VITE_HF_TOKEN;
 
       // Map existing messages to OpenAI/HuggingFace format to retain conversation history
       const apiMessages = messages.slice(1).map(m => ({
@@ -130,26 +146,60 @@ export function FloatingChatbot() {
       // Append the new augmented prompt
       apiMessages.push({ role: "user", content: secretPayload });
 
-      const response = await fetch("https://router.huggingface.co/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${HF_TOKEN}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          model: "MiniMaxAI/MiniMax-M2.7:novita", 
-          messages: apiMessages
-        })
-      });
+      const response = await fetch(
+  "https://router.huggingface.co/v1/chat/completions",
+  {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${HF_TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: "Qwen/Qwen3-32B:groq",
+      messages: apiMessages,
+      temperature: 0.7,
+      max_tokens: 1500,
+      stream: false
+    })
+  }
+);
 
-      const data = await response.json();
+const data = await response.json();
 
-      if (!response.ok) {
-        console.error("Hugging Face API Rejected Request:", data);
-        throw new Error(data.error?.message || "Failed to connect to Hugging Face Router.");
-      }
+console.log("QWEN RESPONSE:", data);
 
-      const botResponse = data.choices[0].message.content;
+if (!response.ok) {
+  console.error("HF ERROR:", data);
+
+  throw new Error(
+    data?.error?.message ||
+    data?.message ||
+    "Failed to connect to Qwen service."
+  );
+}
+
+let botResponse =
+  data?.choices?.[0]?.message?.content ||
+  "No response generated.";
+
+botResponse = botResponse
+  // Remove thinking traces
+  .replace(/<think>[\s\S]*?<\/think>/gi, "")
+  .replace(/<thinking>[\s\S]*?<\/thinking>/gi, "")
+
+  // Remove markdown bold
+  .replace(/\*\*(.*?)\*\*/g, "$1")
+
+  // Remove markdown italic
+  .replace(/\*(.*?)\*/g, "$1")
+
+  // Remove markdown headings
+  .replace(/^#+\s*/gm, "")
+
+  // Remove markdown code fences
+  .replace(/```[\s\S]*?```/g, "")
+
+  .trim();
 
       setMessages(prev => [...prev, { role: 'bot', content: botResponse }]);
     } catch (error: any) {

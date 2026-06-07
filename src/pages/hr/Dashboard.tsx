@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { supabase } from "@/lib/supabase";
 import { Loader2, Users, Wallet, AlertTriangle, UserCheck, Sparkles, TrendingDown, HeartPulse, DollarSign, Target } from "lucide-react";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import { CareerPredictor } from "@/components/dashboard/CareerPredictor";
 
 export default function HRDashboard() {
@@ -41,12 +40,44 @@ export default function HRDashboard() {
     setLoading(false);
   };
 
-  const callGemini = async (prompt: string) => {
-    const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-    const result = await model.generateContent(prompt);
-    return result.response.text();
+  // === MUTATED UNIFIED AI CORE: HUGGING FACE ROUTER GATEWAY (QWEN 3) ===
+  const callCorporateAI = async (prompt: string) => {
+    const HF_TOKEN = import.meta.env.VITE_HF_TOKEN || "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";
+
+    const response = await fetch("https://router.huggingface.co/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${HF_TOKEN}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: "Qwen/Qwen3-32B:groq",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.3 // Guaranteed formatting compliance bounds
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data?.error?.message || "Failed to complete FWC system node analysis.");
+    }
+
+    let rawOutput = data.choices[0].message.content || "";
+
+    // Comprehensive Sanitization Matrix: Remove thinking markers and raw markdown properties
+    return rawOutput
+      .replace(/<think>[\s\S]*?<\/think>/gi, "")
+      .replace(/<thinking>[\s\S]*?<\/thinking>/gi, "")
+      .replace(/<think>[\s\S]*/gi, "")
+      .replace(/<thinking>[\s\S]*/gi, "")
+      .replace(/<\/think>/gi, "")
+      .replace(/<\/thinking>/gi, "")
+      .replace(/\*\*/g, "")
+      .replace(/\*/g, "")
+      .replace(/`/g, "")
+      .replace(/^#+\s+/gm, "")
+      .trim();
   };
 
   // AI Feature 5: Flight Risk Predictor
@@ -58,9 +89,9 @@ export default function HRDashboard() {
       const { data: logs } = await supabase.from('work_logs').select('*').eq('user_id', emp.id).limit(10);
       const { data: leaves } = await supabase.from('leaves').select('*').eq('user_id', emp.id);
       
-      const prompt = `Act as an HR Attrition AI. Analyze this employee: Role: ${emp.role}, Dept: ${emp.department}. Recent logs count: ${logs?.length}. Leaves requested: ${leaves?.length}. Predict their flight risk (Low/Medium/High) and give a 2-sentence retention strategy. No markdown.`;
-      setFlightRiskScore(await callGemini(prompt));
-    } catch (e) { setFlightRiskScore("Error analyzing data."); }
+      const prompt = `Act as an HR Attrition AI. Analyze this employee: Role: ${emp.role}, Dept: ${emp.department}. Recent logs count: ${logs?.length}. Leaves requested: ${leaves?.length}. Predict their flight risk (Low/Medium/High) and give a 2-sentence retention strategy. Plain text only sentence by sentence. No markdown. No asterisks.`;
+      setFlightRiskScore(await callCorporateAI(prompt));
+    } catch (e) { setFlightRiskScore("Error analyzing system organizational data."); }
     setAiLoading(null);
   };
 
@@ -70,9 +101,9 @@ export default function HRDashboard() {
     try {
       const { data: comps } = await supabase.from('complaints').select('title, description, severity').limit(20);
       const dump = JSON.stringify(comps);
-      const prompt = `Act as an HR Morale AI. Read these recent company complaints: ${dump}. Calculate an overall Org Sentiment Score (1-100) and summarize the main cultural issues in 3 bullet points. No markdown.`;
-      setOrgSentiment(await callGemini(prompt));
-    } catch (e) { setOrgSentiment("Error analyzing data."); }
+      const prompt = `Act as an HR Morale AI. Read these recent company complaints: ${dump}. Calculate an overall Org Sentiment Score (1-100) and summarize the main cultural issues in 3 clean bullet points. Plain text sentence by sentence. No markdown. No asterisks.`;
+      setOrgSentiment(await callCorporateAI(prompt));
+    } catch (e) { setOrgSentiment("Error extracting cultural metrics."); }
     setAiLoading(null);
   };
 
@@ -81,9 +112,9 @@ export default function HRDashboard() {
     if (!compRole) return;
     setAiLoading('comp');
     try {
-      const prompt = `Act as a Global Compensation AI. Provide the current market salary range (in INR) for the role "${compRole}" in India for 2026. Give Low, Median, and High brackets, and 2 key skills driving top pay. No markdown.`;
-      setCompResult(await callGemini(prompt));
-    } catch (e) { setCompResult("Error fetching market data."); }
+      const prompt = `Act as a Global Compensation AI. Provide the current market salary range (in INR) for the role "${compRole}" in India for 2026. Give Low, Median, and High brackets, and 2 key skills driving top pay. Plain text organized line by line. No markdown. No asterisks.`;
+      setCompResult(await callCorporateAI(prompt));
+    } catch (e) { setCompResult("Error fetching market financial data."); }
     setAiLoading(null);
   };
 
@@ -92,9 +123,9 @@ export default function HRDashboard() {
     if (!onboardRole) return;
     setAiLoading('onboard');
     try {
-      const prompt = `Act as an HR Enablement AI. Generate a concise Day 1 to Day 30 onboarding plan for a new "${onboardRole}". Include exactly 4 milestones. No markdown.`;
-      setOnboardResult(await callGemini(prompt));
-    } catch (e) { setOnboardResult("Error generating plan."); }
+      const prompt = `Act as an HR Enablement AI. Generate a concise Day 1 to Day 30 onboarding plan for a new "${onboardRole}". Include exactly 4 milestones. Plain text step by step. No markdown. No asterisks.`;
+      setOnboardResult(await callCorporateAI(prompt));
+    } catch (e) { setOnboardResult("Error generating strategic roadmap."); }
     setAiLoading(null);
   };
 
@@ -130,7 +161,7 @@ export default function HRDashboard() {
           {/* AI Feature 5 */}
           <Card className="shadow-sm bg-gradient-to-br from-red-50 to-white border-red-100">
             <CardHeader className="pb-3 border-b border-red-100/50">
-              <CardTitle className="text-lg text-red-900 flex items-center gap-2"><TrendingDown className="w-5 h-5 text-red-600"/> AI Flight Risk Predictor</CardTitle>
+              <ThemeRiskTitle />
             </CardHeader>
             <CardContent className="p-5 space-y-4">
               <select className="w-full p-2 border rounded text-sm bg-white" value={selectedEmp} onChange={e=>setSelectedEmp(e.target.value)}>
@@ -140,7 +171,7 @@ export default function HRDashboard() {
               <Button onClick={analyzeFlightRisk} disabled={!selectedEmp || aiLoading === 'flight'} className="w-full bg-red-600 hover:bg-red-700 text-white font-bold">
                 {aiLoading === 'flight' ? <Loader2 className="w-4 h-4 animate-spin"/> : <Sparkles className="w-4 h-4 mr-2"/>} Predict Attrition Risk
               </Button>
-              {flightRiskScore && <div className="p-3 bg-white border border-red-200 rounded text-sm text-slate-700">{flightRiskScore}</div>}
+              {flightRiskScore && <div className="p-3 bg-white border border-red-200 rounded text-sm text-slate-700 whitespace-pre-wrap">{flightRiskScore}</div>}
             </CardContent>
           </Card>
 
@@ -194,5 +225,13 @@ export default function HRDashboard() {
         )}
       </div>
     </DashboardLayout>
+  );
+}
+
+function ThemeRiskTitle() {
+  return (
+    <CardTitle className="text-lg text-red-900 flex items-center gap-2">
+      <TrendingDown className="w-5 h-5 text-red-600"/> AI Flight Risk Predictor
+    </CardTitle>
   );
 }

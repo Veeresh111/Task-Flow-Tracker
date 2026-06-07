@@ -5,9 +5,6 @@ import Login from "./pages/auth/Login";
 import Register from "./pages/auth/Register";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 
-// NEW standalone enterprise authentication interceptor routing gate
-import RoleRoutingGateway from "./pages/auth/RoleRoutingGateway";
-
 // PUBLIC ROUTES (No auth required)
 import JobApplication from "./pages/public/JobApplication"; 
 
@@ -26,7 +23,6 @@ import AdminSettings from "./pages/admin/SettingsPage";
 import AdminApprovals from "./pages/admin/approvals";
 import AdminPayroll from "./pages/admin/Payroll"; 
 import AdminAIInsights from "./pages/admin/AIInsights"; 
-import AdminPerformanceEngine from "./pages/admin/PerformanceEngine"; 
 
 // Team Lead Pages
 import TeamLeadDashboard from "./pages/team-lead/Dashboard";
@@ -66,35 +62,20 @@ import HRRecruitment from "./pages/hr/Recruitment";
 import HRPayroll from "./pages/hr/Payroll"; 
 import HRAIInsights from "./pages/hr/AIInsights"; 
 import SmartInbox from "./pages/hr/SmartInbox"; 
-import ApplicationHub from "./pages/hr/ApplicationHub";
-import HRPerformanceEngine from "./pages/hr/PerformanceEngine";
-import HRCandidates from "./pages/hr/Candidates"; 
-import HRDocumentVault from "./pages/hr/DocumentVault"; 
-
-// CANDIDATE Pages
-import CandidateDashboard from "./pages/candidate/Dashboard"; 
-import CandidateChat from "./pages/candidate/Chat"; // NEW SECURE IMPORT
+import ApplicationHub from "./pages/hr/ApplicationHub"; // NEW HR HUB
 
 export default function App() {
   return (
     <Router>
       <Routes>
-        {/* Dynamic Entry point: Directs users instantly to their specific dashboard on status updates */}
-        <Route path="/" element={<RoleRoutingGateway />} />
-        <Route path="/auth/gateway" element={<RoleRoutingGateway />} />
-        
+        <Route path="/" element={<Navigate to="/login" replace />} />
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
         
+        {/* PUBLIC ROUTES (Candidates accessing the AI forms) */}
         <Route path="/apply/:formId" element={<JobApplication />} />
 
-        {/* CANDIDATE SPA ROUTES: Strictly Walled Off from Internal */}
-        <Route element={<DashboardLayout role="candidate"><Outlet /></DashboardLayout>}>
-          <Route path="/candidate" element={<CandidateDashboard />} />
-          <Route path="/candidate/chat" element={<CandidateChat />} /> {/* REPLACED */}
-          <Route path="/candidate/settings" element={<EmployeeSettings />} />
-        </Route>
-
+        {/* ADMIN SPA ROUTES */}
         <Route element={<DashboardLayout role="admin"><Outlet /></DashboardLayout>}>
           <Route path="/admin" element={<AdminDashboard />} />
           <Route path="/admin/presence" element={<AdminPresence />} />
@@ -104,7 +85,6 @@ export default function App() {
           <Route path="/admin/analytics" element={<AdminAnalytics />} />
           <Route path="/admin/payroll" element={<AdminPayroll />} /> 
           <Route path="/admin/ai-insights" element={<AdminAIInsights />} />
-          <Route path="/admin/performance" element={<AdminPerformanceEngine />} />
           <Route path="/admin/chat" element={<AdminChat />} />
           <Route path="/admin/complaints" element={<AdminComplaints />} />
           <Route path="/admin/notifications" element={<AdminNotifications />} />
@@ -113,6 +93,7 @@ export default function App() {
           <Route path="/admin/directory" element={<AdminMasterDirectory />} />
         </Route>
 
+        {/* TEAM LEAD SPA ROUTES */}
         <Route element={<DashboardLayout role="team_lead"><Outlet /></DashboardLayout>}>
           <Route path="/team-lead" element={<TeamLeadDashboard />} />
           <Route path="/team-lead/presence" element={<TeamLeadPresence />} />
@@ -131,6 +112,7 @@ export default function App() {
           <Route path="/team-lead/leaves" element={<TeamLeadLeaves />} />
         </Route>
 
+        {/* EMPLOYEE SPA ROUTES */}
         <Route element={<DashboardLayout role="employee"><Outlet /></DashboardLayout>}>
           <Route path="/employee" element={<EmployeeDashboard />} />
           <Route path="/employee/presence" element={<EmployeePresence />} />
@@ -147,16 +129,14 @@ export default function App() {
           <Route path="/employee/leaves" element={<EmployeeLeaves />} />
         </Route>
 
+        {/* HR SPA ROUTES */}
         <Route element={<DashboardLayout role="hr"><Outlet /></DashboardLayout>}>
           <Route path="/hr" element={<HRDashboard />} />
           <Route path="/hr/ai-insights" element={<HRAIInsights />} /> 
-          <Route path="/hr/performance" element={<HRPerformanceEngine />} />
           <Route path="/hr/smart-inbox" element={<SmartInbox />} /> 
           <Route path="/hr/recruitment" element={<HRRecruitment />} />
-          <Route path="/hr/applications" element={<ApplicationHub />} />
+          <Route path="/hr/applications" element={<ApplicationHub />} /> {/* NEW: Form Submissions */}
           <Route path="/hr/directory" element={<AdminMasterDirectory />} />
-          <Route path="/hr/candidates" element={<HRCandidates />} />
-          <Route path="/hr/documents" element={<HRDocumentVault />} />
           <Route path="/hr/presence" element={<AdminPresence />} />
           <Route path="/hr/payroll" element={<HRPayroll />} />
           <Route path="/hr/analytics" element={<AdminAnalytics />} />
@@ -166,8 +146,7 @@ export default function App() {
           <Route path="/hr/settings" element={<AdminSettings />} />
         </Route>
         
-        {/* Wildcard Fallback routing path runs through the active verification engine */}
-        <Route path="*" element={<RoleRoutingGateway />} />
+        <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
       <Toaster />
       <FloatingChatbot />
