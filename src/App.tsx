@@ -4,8 +4,9 @@ import { Toaster } from "@/components/ui/toaster";
 import Login from "./pages/auth/Login";
 import Register from "./pages/auth/Register";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
-import CandidateDashboard from "./pages/candidate/Dashboard";
-import OnboardingCenter from "./pages/hr/OnboardingCenter";
+
+// NEW standalone enterprise authentication interceptor routing gate
+import RoleRoutingGateway from "./pages/auth/RoleRoutingGateway";
 
 // PUBLIC ROUTES (No auth required)
 import JobApplication from "./pages/public/JobApplication"; 
