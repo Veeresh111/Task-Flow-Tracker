@@ -3,7 +3,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Loader2, TrendingUp, AlertTriangle, Sparkles, Target, Clock, CheckCircle2, TrendingDown, BookOpen } from "lucide-react";
 import { supabase } from "@/lib/supabase";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from "recharts";
 import { useToast } from "@/hooks/use-toast";
 
@@ -75,13 +74,14 @@ export function CareerPredictor({ userId }: { userId: string }) {
     setFetchingData(false);
   };
 
+  // === UPGRADED: HUGGING FACE ROUTER WITH QWEN 3 PIPELINE ===
   const generateDeepPrediction = async () => {
+    if (!profile || !taskData) return;
     setLoading(true);
     toast({ title: "AI Analytics Started", description: "Crunching login patterns, task velocity, and historical ratings..." });
+    
     try {
-      const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-      const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+      const HF_TOKEN = import.meta.env.VITE_HF_TOKEN || "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";
 
       const prompt = `Act as an Elite MNC Predictive HR Algorithm. You must mathematically analyze the following exact database metrics for this employee.
       
@@ -95,16 +95,53 @@ export function CareerPredictor({ userId }: { userId: string }) {
       {
         "promotion_verdict": "Deserves Promotion" or "Demotion Recommended" or "Maintain Current Level",
         "raise_verdict": "Deserves Raise", "Lower Salary", or "Hold Steady",
-        "dry_promotion_chance": 85, // Integer percentage 0-100
-        "layoff_risk": 15, // Integer percentage 0-100
-        "training_required": true, // boolean
+        "dry_promotion_chance": 85, 
+        "layoff_risk": 15, 
+        "training_required": true, 
         "training_topic": "If true, name a specific skill based on data, else 'None'",
         "overall_analysis": "3 sentences detailing their contribution rate vs hours logged."
       }`;
 
-      const result = await model.generateContent(prompt);
-      let cleanText = result.response.text().replace(/```[a-z]*\n?/gi, '').replace(/```/g, '').trim();
-      const parsed = JSON.parse(cleanText.substring(cleanText.indexOf('{'), cleanText.lastIndexOf('}') + 1));
+      const response = await fetch("https://router.huggingface.co/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${HF_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "Qwen/Qwen3-32B:groq",
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0.1
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.error?.message || "Failed to process target workspace packet.");
+      }
+
+      let cleanText = data.choices[0].message.content || "";
+
+      // CLEANING PARSING PIPELINE: Wipes out reasoning layers and markdown fencings safely
+      cleanText = cleanText
+        .replace(/<think>[\s\S]*?<\/think>/gi, "")
+        .replace(/<thinking>[\s\S]*?<\/thinking>/gi, "")
+        .replace(/<think>[\s\S]*/gi, "")
+        .replace(/<thinking>[\s\S]*/gi, "")
+        .replace(/<\/think>/gi, "")
+        .replace(/<\/thinking>/gi, "")
+        .replace(/```json/gi, "")
+        .replace(/```/g, "")
+        .trim();
+
+      const startIdx = cleanText.indexOf('{');
+      const endIdx = cleanText.lastIndexOf('}');
+      if (startIdx !== -1 && endIdx !== -1) {
+        cleanText = cleanText.substring(startIdx, endIdx + 1);
+      }
+
+      const parsed = JSON.parse(cleanText);
 
       setPrediction(parsed);
       await supabase.from('profiles').update({ ai_career_prediction: parsed }).eq('id', userId);
@@ -264,7 +301,7 @@ export function CareerPredictor({ userId }: { userId: string }) {
               
               {/* Overall AI Analysis Row */}
               <div className="col-span-2 md:col-span-4 bg-indigo-50 border border-indigo-100 rounded-xl p-5 shadow-inner mt-2">
-                 <h4 className="text-xs font-black text-indigo-800 uppercase tracking-widest flex items-center gap-2 mb-2"><Sparkles className="w-4 h-4"/> AI Executive Summary</h4>
+                 <h4 className="text-xs font-black text-indigo-800 uppercase tracking-widest flex items-center gap-2 mb-2"><Sparkles className="w-4 h-4"/> AI Executive Summary (Qwen 3)</h4>
                  <p className="text-sm font-medium text-indigo-900 leading-relaxed">{prediction.overall_analysis}</p>
               </div>
             </div>

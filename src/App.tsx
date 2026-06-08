@@ -4,6 +4,8 @@ import { Toaster } from "@/components/ui/toaster";
 import Login from "./pages/auth/Login";
 import Register from "./pages/auth/Register";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
+import CandidateDashboard from "./pages/candidate/Dashboard";
+import OnboardingCenter from "./pages/hr/OnboardingCenter";
 
 // PUBLIC ROUTES (No auth required)
 import JobApplication from "./pages/public/JobApplication"; 
@@ -63,6 +65,7 @@ import HRPayroll from "./pages/hr/Payroll";
 import HRAIInsights from "./pages/hr/AIInsights"; 
 import SmartInbox from "./pages/hr/SmartInbox"; 
 import ApplicationHub from "./pages/hr/ApplicationHub"; // NEW HR HUB
+import CandidateChat from "./pages/candidate/Chat";
 
 export default function App() {
   return (
@@ -129,6 +132,14 @@ export default function App() {
           <Route path="/employee/leaves" element={<EmployeeLeaves />} />
         </Route>
 
+        {/* CANDIDATE SPA ROUTES */}
+<Route element={<DashboardLayout role="candidate"><Outlet /></DashboardLayout>}>
+  <Route path="/candidate" element={<CandidateDashboard />} />
+   <Route path="/candidate/chat" element={<CandidateChat />} />
+   <Route path="/candidate/onboarding" element={<OnboardingCenter />} />
+</Route>
+
+
         {/* HR SPA ROUTES */}
         <Route element={<DashboardLayout role="hr"><Outlet /></DashboardLayout>}>
           <Route path="/hr" element={<HRDashboard />} />
@@ -138,6 +149,7 @@ export default function App() {
           <Route path="/hr/applications" element={<ApplicationHub />} /> {/* NEW: Form Submissions */}
           <Route path="/hr/directory" element={<AdminMasterDirectory />} />
           <Route path="/hr/presence" element={<AdminPresence />} />
+          <Route path="/hr/onboarding" element={<OnboardingCenter />} />
           <Route path="/hr/payroll" element={<HRPayroll />} />
           <Route path="/hr/analytics" element={<AdminAnalytics />} />
           <Route path="/hr/approvals" element={<AdminApprovals />} />

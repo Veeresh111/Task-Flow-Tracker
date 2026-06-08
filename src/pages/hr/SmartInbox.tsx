@@ -7,7 +7,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, Mail, BrainCircuit, ExternalLink, ShieldCheck, Database, Search, LogOut, CheckCircle2 } from "lucide-react";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import { supabase } from "@/lib/supabase";
 
 export default function SmartInbox() {
@@ -27,7 +26,6 @@ export default function SmartInbox() {
 
   // 1. Automated OAuth 2.0 Initialization and Verification
   useEffect(() => {
-    // Check if Google just redirected us back with a token in the URL hash
     const hash = window.location.hash;
     if (hash && hash.includes("access_token")) {
       const params = new URLSearchParams(hash.substring(1));
@@ -35,12 +33,10 @@ export default function SmartInbox() {
       if (token) {
         setOauthToken(token);
         localStorage.setItem("fwc_gmail_token", token);
-        // Securely wipe the token from the URL bar to prevent leakage
         window.history.replaceState(null, "", window.location.pathname);
         verifyAndFetchProfile(token);
       }
     } else {
-      // Check for an existing saved session
       const savedToken = localStorage.getItem("fwc_gmail_token");
       if (savedToken) {
         setOauthToken(savedToken);
@@ -55,7 +51,6 @@ export default function SmartInbox() {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (!res.ok) {
-        // Token is expired or invalid, clear the session
         handleDisconnect();
         return;
       }
@@ -72,8 +67,6 @@ export default function SmartInbox() {
     }
     localStorage.setItem("fwc_google_client_id", googleClientId);
     
-    // Official Google OAuth 2.0 Implicit Flow URL
-    // Forces account selection so HR can change emails at any time
     const redirectUri = window.location.origin + window.location.pathname;
     const scope = "https://www.googleapis.com/auth/gmail.readonly";
     const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${googleClientId}&redirect_uri=${redirectUri}&response_type=token&scope=${scope}&prompt=select_account`;
@@ -89,7 +82,7 @@ export default function SmartInbox() {
     toast({ title: "Workspace Disconnected", description: "Your Google session has been securely cleared." });
   };
 
-  // 2. Fetch Real Emails via Google Workspace API
+  // 2. Fetch Real Emails via Google Workspace API & Analyze with Qwen 3
   const fetchRealEmails = async () => {
     if (!oauthToken || !connectedEmail) return toast({ title: "Authentication Required", description: "Please connect your Google Workspace account.", variant: "destructive" });
     if (!jdText) return toast({ title: "JD Required", description: "Provide the Job Description for the AI to score against.", variant: "destructive" });
@@ -115,9 +108,7 @@ export default function SmartInbox() {
 
       // Step B: Download & Decode Real Email Bodies
       const analyzedCandidates = [];
-      const apiKey = import.meta.env.VITE_GEMINI_API_KEY ;
-      const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+      const HF_TOKEN = import.meta.env.VITE_HF_TOKEN || "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";
 
       for (const msg of searchData.messages) {
         const msgRes = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.id}`, {
@@ -133,15 +124,54 @@ export default function SmartInbox() {
         // Decode Base64url email snippet/body (Real Data)
         let bodyText = msgData.snippet || "";
         
-        // Step C: Send REAL text to AI for analysis
+        // Step C: Send REAL text to Qwen 3 via Hugging Face Router
         const prompt = `Act as an enterprise ATS Analyzer. I am providing you with the REAL extracted text of an email sent by a candidate.
         Read this real email text: "${bodyText}"
         Compare it to this Job Description: "${jdText}"
         Extract the candidate's name (guess from the 'From' field: ${from} if missing), score their match (0-100), and state their missing skills.
-        Output strictly as JSON: {"name": "Extracted Name", "score": 85, "missing": "Skill1", "verdict": "Hire/Reject"}`;
+        Output strictly as a single clean JSON object. No markdown fencings or headers. Format:
+        {"name": "Extracted Name", "score": 85, "missing": "Skill1", "verdict": "Hire/Reject"}`;
 
-        const aiRes = await model.generateContent(prompt);
-        const parsed = JSON.parse(aiRes.response.text().replace(/```json/g, '').replace(/```/g, '').trim());
+        const aiResponse = await fetch("https://router.huggingface.co/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${HF_TOKEN}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model: "Qwen/Qwen3-32B:groq",
+            messages: [{ role: "user", content: prompt }],
+            temperature: 0.1
+          })
+        });
+
+        const aiData = await aiResponse.json();
+
+        if (!aiResponse.ok) {
+          throw new Error(aiData?.error?.message || "Failed to parse corporate analytics pipeline response.");
+        }
+
+        let cleanText = aiData.choices[0].message.content || "";
+
+        // SYSTEMATIC CLEANING PIPELINE: Safely scrub all thinking wrappers and formatting markers
+        cleanText = cleanText
+          .replace(/<think>[\s\S]*?<\/think>/gi, "")
+          .replace(/<thinking>[\s\S]*?<\/thinking>/gi, "")
+          .replace(/<think>[\s\S]*/gi, "")
+          .replace(/<thinking>[\s\S]*/gi, "")
+          .replace(/<\/think>/gi, "")
+          .replace(/<\/thinking>/gi, "")
+          .replace(/```json/gi, "")
+          .replace(/```/g, "")
+          .trim();
+
+        const startIdx = cleanText.indexOf('{');
+        const endIdx = cleanText.lastIndexOf('}');
+        if (startIdx !== -1 && endIdx !== -1) {
+          cleanText = cleanText.substring(startIdx, endIdx + 1);
+        }
+
+        const parsed = JSON.parse(cleanText);
 
         const candidateRecord = {
           id: msg.id,
@@ -240,7 +270,6 @@ export default function SmartInbox() {
                     </Button>
                   </div>
                 )}
-                {/* --------------------------------- */}
 
                 <div className="space-y-2">
                   <label className="text-xs font-bold text-slate-500 uppercase">Target Job Description</label>
@@ -292,7 +321,7 @@ export default function SmartInbox() {
                             <p className="text-[10px] text-slate-500 mt-1">Missing: {email.missing_skills}</p>
                           </TableCell>
                           <TableCell>
-                             <span className={`text-xl font-black ${email.match_score >= 75 ? 'text-emerald-600' : email.match_score >= 50 ? 'text-amber-600' : 'text-red-600'}`}>{email.match_score}%</span>
+                             <span className={`text-xl font-black ${email.match_score >= 75 ? 'text-emerald-600' : email.match_score >= 50 ? 'text-amber-500' : 'text-red-600'}`}>{email.match_score}%</span>
                              <div className="mt-1"><span className="text-[10px] font-bold uppercase border px-1 rounded">{email.verdict}</span></div>
                           </TableCell>
                           <TableCell>

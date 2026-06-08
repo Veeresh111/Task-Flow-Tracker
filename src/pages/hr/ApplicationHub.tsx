@@ -5,10 +5,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { supabase } from "@/lib/supabase";
-import { Loader2, Inbox, Eye, Calendar, Sparkles, BrainCircuit, ExternalLink, Search, Filter } from "lucide-react";
+import { Loader2, Inbox, Eye, Calendar, Sparkles, BrainCircuit, ExternalLink, Search, Filter, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export default function ApplicationHub() {
   const [loading, setLoading] = useState(true);
@@ -36,7 +35,6 @@ export default function ApplicationHub() {
 
     if (!error && data) {
       setApplications(data);
-      // If an app is currently selected, update its data (e.g. after a scan)
       if (selectedApp) {
         const updatedApp = data.find(a => a.id === selectedApp.id);
         if (updatedApp) setSelectedApp(updatedApp);
@@ -47,7 +45,7 @@ export default function ApplicationHub() {
 
   const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-  // --- 1. GLOBAL ATS SCANNER (Batch Processing) ---
+  // --- 1. GLOBAL ATS SCANNER (Batch Processing via Qwen 3) ---
   const runATSScanner = async () => {
     const unscoredApps = applications.filter(app => app.match_score == null);
     if (unscoredApps.length === 0) return toast({ title: "Queue Empty", description: "All applications have already been scored by the AI." });
@@ -55,9 +53,7 @@ export default function ApplicationHub() {
     setAiScanning(true);
     toast({ title: "Global ATS Initialized", description: `Running deep AI analysis on ${unscoredApps.length} applications...` });
 
-    const apiKey = import.meta.env.VITE_GEMINI_API_KEY ;
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const HF_TOKEN = import.meta.env.VITE_HF_TOKEN || "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";
 
     for (let i = 0; i < unscoredApps.length; i++) {
       const app = unscoredApps[i];
@@ -70,12 +66,43 @@ export default function ApplicationHub() {
         Output STRICTLY a JSON object. No markdown. Format:
         {"score": 85, "verdict": "Hire"} OR {"score": 40, "verdict": "Reject"}`;
 
-        const result = await model.generateContent(prompt);
-        let cleanText = result.response.text().replace(/```[a-z]*\n?/gi, '').replace(/```/g, '').trim();
+        const response = await fetch("https://router.huggingface.co/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${HF_TOKEN}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model: "Qwen/Qwen3-32B:groq",
+            messages: [{ role: "user", content: prompt }],
+            temperature: 0.1
+          })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data?.error?.message || "Failed to route segment packet.");
+        }
+
+        let cleanText = data.choices[0].message.content || "";
+        
+        // Advanced structural purification framework
+        cleanText = cleanText
+          .replace(/<think>[\s\S]*?<\/think>/gi, "")
+          .replace(/<thinking>[\s\S]*?<\/thinking>/gi, "")
+          .replace(/<think>[\s\S]*/gi, "")
+          .replace(/<thinking>[\s\S]*/gi, "")
+          .replace(/```json/gi, "")
+          .replace(/```/g, "")
+          .trim();
+
         const startIdx = cleanText.indexOf('{');
         const endIdx = cleanText.lastIndexOf('}');
-        if (startIdx !== -1 && endIdx !== -1) cleanText = cleanText.substring(startIdx, endIdx + 1);
-        
+        if (startIdx !== -1 && endIdx !== -1) {
+          cleanText = cleanText.substring(startIdx, endIdx + 1);
+        }
+
         const parsed = JSON.parse(cleanText);
 
         await supabase.from('job_applications').update({ 
@@ -88,7 +115,6 @@ export default function ApplicationHub() {
         console.error(`AI failed for app ${app.id}`, e);
       }
       
-      // Mandatory API Throttle
       if (i < unscoredApps.length - 1) await sleep(4000);
     }
 
@@ -97,7 +123,7 @@ export default function ApplicationHub() {
     setAiScanning(false);
   };
 
-  // --- 2. INDIVIDUAL ATS SCANNER (Single Candidate Processing) ---
+  // --- 2. INDIVIDUAL ATS SCANNER (Single Candidate Processing via Qwen 3) ---
   const runSingleATSScanner = async (app: any) => {
     if (app.match_score != null) return toast({ title: "Already Scanned", description: "This candidate has already been evaluated." });
 
@@ -105,9 +131,7 @@ export default function ApplicationHub() {
     toast({ title: "Targeted ATS Initialized", description: `Analyzing candidate: ${app.candidate_name}...` });
 
     try {
-      const apiKey = import.meta.env.VITE_GEMINI_API_KEY ;
-      const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+      const HF_TOKEN = import.meta.env.VITE_HF_TOKEN || "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";
 
       const prompt = `Act as an elite Corporate ATS. 
       Job Description: "${app.job_forms?.jd_text || 'Corporate Role'}"
@@ -117,12 +141,42 @@ export default function ApplicationHub() {
       Output STRICTLY a JSON object. No markdown. Format:
       {"score": 85, "verdict": "Hire"} OR {"score": 40, "verdict": "Reject"}`;
 
-      const result = await model.generateContent(prompt);
-      let cleanText = result.response.text().replace(/```[a-z]*\n?/gi, '').replace(/```/g, '').trim();
+      const response = await fetch("https://router.huggingface.co/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${HF_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "Qwen/Qwen3-32B:groq",
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0.1
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.error?.message || "Failed to route pipeline packet.");
+      }
+
+      let cleanText = data.choices[0].message.content || "";
+      
+      cleanText = cleanText
+        .replace(/<think>[\s\S]*?<\/think>/gi, "")
+        .replace(/<thinking>[\s\S]*?<\/thinking>/gi, "")
+        .replace(/<think>[\s\S]*/gi, "")
+        .replace(/<thinking>[\s\S]*/gi, "")
+        .replace(/```json/gi, "")
+        .replace(/```/g, "")
+        .trim();
+
       const startIdx = cleanText.indexOf('{');
       const endIdx = cleanText.lastIndexOf('}');
-      if (startIdx !== -1 && endIdx !== -1) cleanText = cleanText.substring(startIdx, endIdx + 1);
-      
+      if (startIdx !== -1 && endIdx !== -1) {
+        cleanText = cleanText.substring(startIdx, endIdx + 1);
+      }
+
       const parsed = JSON.parse(cleanText);
 
       const { error } = await supabase.from('job_applications').update({ 
@@ -134,7 +188,7 @@ export default function ApplicationHub() {
       if (error) throw error;
 
       toast({ title: "Analysis Complete", description: `${app.candidate_name} scored ${parsed.score}% and updated in database.` });
-      fetchApplications(); // Refreshes table and the opened dossier
+      fetchApplications();
 
     } catch (e: any) {
       console.error(`AI failed for app ${app.id}`, e);

@@ -37,14 +37,18 @@ export default function CandidateDashboard() {
 
       // Fetch Docs based on Role (Candidate sees own, HR sees all)
       if (currentRole === 'hr' || currentRole === 'admin') {
-        const { data: allDocs } = await supabase.from('background_verifications').select('*, profiles(name)').order('created_at', { ascending: false });
+        const { data: allDocs } = await supabase
+          .from('background_verifications')
+          .select('*, profiles(name)')
+          .order('uploaded_at', { ascending: false });
+
         if (allDocs) setAllCandidatesDocs(allDocs);
       } else {
         const { data: myDocs } = await supabase.from('background_verifications').select('*').eq('candidate_id', user.id);
         if (myDocs) setBgcDocs(myDocs);
       }
       
-      // Fetch Available Assessments (Untouched existing logic)
+      // Fetch Available Assessments
       const { data: tests } = await supabase.from('assessments').select('*').eq('status', 'Active');
       if (tests) setAssessments(tests);
     }
@@ -54,7 +58,6 @@ export default function CandidateDashboard() {
   const handleBgcUpload = async (e: React.ChangeEvent<HTMLInputElement>, docType: string) => {
     if (!e.target.files || !e.target.files[0]) return;
     
-    // Direct operational verification to avoid react state asynchronous delay errors
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
       toast({ title: "Session Expired", description: "Please re-authenticate to upload records.", variant: "destructive" });
@@ -74,26 +77,45 @@ export default function CandidateDashboard() {
       
       const { data: { publicUrl } } = supabase.storage.from('bgc_docs').getPublicUrl(fileName);
 
-      // 2. Perform AI Document KYC Scanning via Hugging Face Router
+      // 2. Perform AI Document KYC Scanning via Hugging Face Router (Qwen 3 Core Engine)
       const HF_TOKEN = import.meta.env.VITE_HF_TOKEN || "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";
       const prompt = `Act as an AI KYC Engine. A candidate just uploaded a document for "${docType}". Please assume it passes visual inspection and output: "Document Verified: Authentic ${docType} format detected."`;
 
-      const aiResponse = await fetch("https://router.huggingface.co/v1/chat/completions", {
+      const response = await fetch("https://router.huggingface.co/v1/chat/completions", {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${HF_TOKEN}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          model: "openai/gpt-oss-120b:groq",
-          messages: [{ role: "user", content: prompt }]
+          model: "Qwen/Qwen3-32B:groq",
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0.1
         })
       });
       
-      const aiData = await aiResponse.json();
-      const aiAnalysisText = aiData.choices?.[0]?.message?.content || "Document uploaded successfully.";
+      const aiData = await response.json();
 
-      // 3. Upsert to Database (Explicitly using direct session user instances)
+      if (!response.ok) {
+        throw new Error(aiData?.error?.message || "Failed to process target system node pipeline.");
+      }
+
+      let aiAnalysisText = aiData.choices?.[0]?.message?.content || "Document uploaded successfully.";
+
+      aiAnalysisText = aiAnalysisText
+        .replace(/<think>[\s\S]*?<\/think>/gi, "")
+        .replace(/<thinking>[\s\S]*?<\/thinking>/gi, "")
+        .replace(/<think>[\s\S]*/gi, "")
+        .replace(/<thinking>[\s\S]*/gi, "")
+        .replace(/<\/think>/gi, "")
+        .replace(/<\/thinking>/gi, "")
+        .replace(/\*\*/g, "")
+        .replace(/\*/g, "")
+        .replace(/`/g, "")
+        .replace(/^#+\s+/gm, "")
+        .trim();
+
+      // 3. Upsert to Database
       const { data: existingDoc } = await supabase.from('background_verifications').select('id').eq('candidate_id', user.id).eq('document_type', docType).maybeSingle();
 
       if (existingDoc) {
@@ -103,13 +125,20 @@ export default function CandidateDashboard() {
           ai_analysis: aiAnalysisText
         }).eq('id', existingDoc.id);
       } else {
-        await supabase.from('background_verifications').insert([{
-          candidate_id: user.id,
-          document_type: docType,
-          file_url: publicUrl,
-          verification_status: 'AI Verified',
-          ai_analysis: aiAnalysisText
-        }]);
+        const { error: insertError } = await supabase
+          .from('background_verifications')
+          .insert([{
+            candidate_id: user.id,
+            document_type: docType,
+            file_url: publicUrl,
+            status: 'Submitted',
+            remarks: aiAnalysisText
+          }]);
+
+        if (insertError) {
+          console.error("INSERT ERROR:", insertError);
+          throw insertError;
+        }
       }
 
       toast({ title: "Upload Successful", description: "Document uploaded and verified by Corporate AI." });
@@ -155,7 +184,7 @@ export default function CandidateDashboard() {
                       <TableCell className="text-slate-600">{doc.document_type}</TableCell>
                       <TableCell>
                         <span className="bg-emerald-50 text-emerald-700 px-2 py-1 rounded text-xs font-bold border border-emerald-200">
-                          {doc.verification_status}
+                          {doc.status || doc.verification_status}
                         </span>
                       </TableCell>
                       <TableCell className="text-right">
@@ -201,11 +230,12 @@ export default function CandidateDashboard() {
                             <div className="space-y-3">
                               <div className="flex items-center gap-2 text-emerald-600 bg-emerald-50 p-2 rounded border border-emerald-200">
                                 <CheckCircle2 className="w-4 h-4"/>
-                                <span className="text-xs font-bold uppercase">{existingDoc.verification_status}</span>
+                                <span className="text-xs font-bold uppercase">{existingDoc.status || existingDoc.verification_status}</span>
                               </div>
-                              <p className="text-[10px] text-slate-500 italic">{existingDoc.ai_analysis}</p>
+                              <p className="text-[10px] text-slate-500 italic">{existingDoc.remarks || existingDoc.ai_analysis}</p>
                               <div className="relative mt-2">
                                 <input type="file" onChange={(e) => handleBgcUpload(e, docType)} disabled={uploadingDoc} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                                {/* FIXED VIA SNIPPET AUDIT: Wiped unmapped variable token reference */}
                                 <Button disabled={uploadingDoc} variant="outline" size="sm" className="w-full text-xs">Update Document</Button>
                               </div>
                             </div>
