@@ -6,8 +6,8 @@ import Register from "./pages/auth/Register";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import CandidateDashboard from "@/pages/candidate/Dashboard";
 
-// NEW standalone enterprise authentication interceptor routing gate
-
+// === FIX: APPREHENDED CRITICAL ROUTER IMPORT REGISTRATION INDEX ===
+import OnboardingCenter from "@/pages/hr/OnboardingCenter";
 
 // PUBLIC ROUTES (No auth required)
 import JobApplication from "./pages/public/JobApplication"; 
@@ -135,12 +135,11 @@ export default function App() {
         </Route>
 
         {/* CANDIDATE SPA ROUTES */}
-<Route element={<DashboardLayout role="candidate"><Outlet /></DashboardLayout>}>
-  <Route path="/candidate" element={<CandidateDashboard />} />
-   <Route path="/candidate/chat" element={<CandidateChat />} />
-   <Route path="/candidate/onboarding" element={<OnboardingCenter />} />
-</Route>
-
+        <Route element={<DashboardLayout role="candidate"><Outlet /></DashboardLayout>}>
+          <Route path="/candidate" element={<CandidateDashboard />} />
+          <Route path="/candidate/chat" element={<CandidateChat />} />
+          <Route path="/candidate/onboarding" element={<OnboardingCenter />} />
+        </Route>
 
         {/* HR SPA ROUTES */}
         <Route element={<DashboardLayout role="hr"><Outlet /></DashboardLayout>}>
@@ -148,7 +147,7 @@ export default function App() {
           <Route path="/hr/ai-insights" element={<HRAIInsights />} /> 
           <Route path="/hr/smart-inbox" element={<SmartInbox />} /> 
           <Route path="/hr/recruitment" element={<HRRecruitment />} />
-          <Route path="/hr/applications" element={<ApplicationHub />} /> {/* NEW: Form Submissions */}
+          <Route path="/hr/applications" element={<ApplicationHub />} /> 
           <Route path="/hr/directory" element={<AdminMasterDirectory />} />
           <Route path="/hr/presence" element={<AdminPresence />} />
           <Route path="/hr/onboarding" element={<OnboardingCenter />} />

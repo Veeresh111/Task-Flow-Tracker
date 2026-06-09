@@ -22,44 +22,29 @@ export default function Login() {
     e.preventDefault();
     setIsLoading(true);
     try {
-      // 1. Authenticate with backend
-<<<<<<< Updated upstream
+      // 1. Authenticate with backend database tracking nodes
       const result = await authService.signIn(email, password);
 
-console.log("LOGIN RESULT:", result);
-console.log("ROLE RETURNED:", result.role);
+      console.log("LOGIN RESULT:", result);
+      console.log("ROLE RETURNED:", result?.role);
 
-const role = result.role;
-=======
-      const { role } = await authService.signIn(email, password);
->>>>>>> Stashed changes
+      const role = result?.role;
       
       // 2. ONLY show success if line above doesn't fail
       toast({ title: "Login Successful", description: "Welcome back to the dashboard!" });
       
-      // 3. Route precisely to the correct dashboard (Fixes the HR routing flaw)
-<<<<<<< Updated upstream
+      // 3. Route precisely to the correct dashboard (Fixes the HR and Candidate routing flaws)
       if (role === 'admin') {
-  navigate("/admin");
-}
-else if (role === 'team_lead') {
-  navigate("/team-lead");
-}
-else if (role === 'hr') {
-  navigate("/hr");
-}
-else if (role === 'candidate') {
-  navigate("/candidate");
-}
-else {
-  navigate("/employee");
-}
-=======
-      if (role === 'admin') navigate("/admin");
-      else if (role === 'team_lead') navigate("/team-lead");
-      else if (role === 'hr') navigate("/hr"); // NEW: Explicit HR routing
-      else navigate("/employee");
->>>>>>> Stashed changes
+        navigate("/admin");
+      } else if (role === 'team_lead') {
+        navigate("/team-lead");
+      } else if (role === 'hr') {
+        navigate("/hr"); // Explicit HR routing index
+      } else if (role === 'candidate') {
+        navigate("/candidate"); // Explicit Candidate routing index
+      } else {
+        navigate("/employee");
+      }
       
     } catch (error: any) {
       // FIX: Show error popup, NEVER show success popup on fail

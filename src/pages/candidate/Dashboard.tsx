@@ -115,15 +115,17 @@ export default function CandidateDashboard() {
         .replace(/^#+\s+/gm, "")
         .trim();
 
-      // 3. Upsert to Database
+      // 3. Upsert to Database - Enforcing Strict Data Schema Consistency (status and remarks)
       const { data: existingDoc } = await supabase.from('background_verifications').select('id').eq('candidate_id', user.id).eq('document_type', docType).maybeSingle();
 
       if (existingDoc) {
-        await supabase.from('background_verifications').update({
+        const { error: updateError } = await supabase.from('background_verifications').update({
           file_url: publicUrl,
-          verification_status: 'AI Verified',
-          ai_analysis: aiAnalysisText
+          status: 'Submitted',
+          remarks: aiAnalysisText
         }).eq('id', existingDoc.id);
+        
+        if (updateError) throw updateError;
       } else {
         const { error: insertError } = await supabase
           .from('background_verifications')
@@ -184,7 +186,7 @@ export default function CandidateDashboard() {
                       <TableCell className="text-slate-600">{doc.document_type}</TableCell>
                       <TableCell>
                         <span className="bg-emerald-50 text-emerald-700 px-2 py-1 rounded text-xs font-bold border border-emerald-200">
-                          {doc.status || doc.verification_status}
+                          {doc.status || 'Submitted'}
                         </span>
                       </TableCell>
                       <TableCell className="text-right">
@@ -230,12 +232,11 @@ export default function CandidateDashboard() {
                             <div className="space-y-3">
                               <div className="flex items-center gap-2 text-emerald-600 bg-emerald-50 p-2 rounded border border-emerald-200">
                                 <CheckCircle2 className="w-4 h-4"/>
-                                <span className="text-xs font-bold uppercase">{existingDoc.status || existingDoc.verification_status}</span>
+                                <span className="text-xs font-bold uppercase">{existingDoc.status || 'Submitted'}</span>
                               </div>
-                              <p className="text-[10px] text-slate-500 italic">{existingDoc.remarks || existingDoc.ai_analysis}</p>
+                              <p className="text-[10px] text-slate-500 italic">{existingDoc.remarks || 'No remarks available.'}</p>
                               <div className="relative mt-2">
                                 <input type="file" onChange={(e) => handleBgcUpload(e, docType)} disabled={uploadingDoc} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-                                {/* FIXED VIA SNIPPET AUDIT: Wiped unmapped variable token reference */}
                                 <Button disabled={uploadingDoc} variant="outline" size="sm" className="w-full text-xs">Update Document</Button>
                               </div>
                             </div>

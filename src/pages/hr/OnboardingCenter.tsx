@@ -40,7 +40,9 @@ import {
   Building,
   DollarSign,
   UserCircle,
-  Loader2
+  Loader2,
+  Check,
+  AlertTriangle
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -61,6 +63,7 @@ export default function OnboardingCenter() {
   const [assignedPayroll, setAssignedPayroll] = useState("");
   const [processingOnboard, setProcessingOnboard] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [verifyingDocId, setVerifyingDocId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchInitialData();
@@ -84,14 +87,14 @@ export default function OnboardingCenter() {
     setLoading(false);
   };
 
-  // Exact corporate candidate pool filtering engine
   const fetchCandidates = async () => {
     try {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("profiles")
         .select("*")
         .eq("role", "candidate");
 
+      if (error) throw error;
       setCandidates(data || []);
       setFiltered(data || []);
     } catch (err) {
@@ -101,24 +104,24 @@ export default function OnboardingCenter() {
 
   const fetchActiveTeamLeads = async () => {
     try {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("profiles")
         .select("id, name, department")
         .eq("role", "team_lead");
+      
+      if (error) throw error;
       setTeamLeads(data || []);
     } catch (err) {
       console.error("Failed to query active team leads:", err);
     }
   };
 
-  // === EXACT SPECIFIED CODE UNIT: REVIEW BUTTON ACTION LOGIC INTERCEPTOR ===
   const fetchCandidateDocuments = async (candidate: any) => {
     try {
       const { data, error } = await supabase
         .from("background_verifications")
         .select("*")
-        .eq("candidate_id", candidate.id)
-        .order("uploaded_at", { ascending: false });
+        .eq("candidate_id", candidate.id);
 
       if (error) throw error;
 
@@ -132,7 +135,24 @@ export default function OnboardingCenter() {
     }
   };
 
-  // === STRATEGIC ENTERPRISE CONVERSION PIPELINE FOR MNC ARCHITECTURES ===
+  const handleVerifyDocumentStatus = async (docId: string, nextStatus: 'Verified' | 'Rejected') => {
+    setVerifyingDocId(docId);
+    try {
+      const { error } = await supabase
+        .from("background_verifications")
+        .update({ status: nextStatus })
+        .eq("id", docId);
+
+      if (error) throw error;
+
+      setDocuments(prev => prev.map(d => d.id === docId ? { ...d, status: nextStatus } : d));
+      toast({ title: `Document ${nextStatus}`, description: "The validation matrix has updated successfully." });
+    } catch (err: any) {
+      toast({ title: "Verification Failed", description: err.message, variant: "destructive" });
+    }
+    setVerifyingDocId(null);
+  };
+
   const handleOnboardCandidate = async () => {
     if (!selectedCandidate) return;
     if (!selectedDepartment) {
@@ -147,7 +167,7 @@ export default function OnboardingCenter() {
 
     setProcessingOnboard(true);
     try {
-      // Step A: Trigger transactional role transformation profile mutate step
+      // Step 1: Elevate candidate role profile values cleanly inside profiles table
       const { error: profileError } = await supabase
         .from("profiles")
         .update({
@@ -161,13 +181,20 @@ export default function OnboardingCenter() {
 
       if (profileError) throw profileError;
 
-      // Step B: Record auditable record track parameters directly into candidate_onboarding
+      // Step 2: CORRECTED BACKEND ONBOARDING INSERTS AND CONSTRAINTS VIA EXACT KEY SCHEMAS
       const { error: onboardingRecordError } = await supabase
         .from("candidate_onboarding")
-        .insert({
+        .upsert({
           candidate_id: selectedCandidate.id,
-          status: "completed",
-          department: selectedDepartment
+          onboarding_stage: "completed",
+          completion_percentage: 100,
+          department: selectedDepartment,
+          manager_id: selectedTeamLead,
+          salary: Number(assignedPayroll),
+          employee_code: `EMP-${Date.now()}`,
+          asset_status: "pending",
+          payroll_status: "active",
+          onboarding_completed: true
         });
 
       if (onboardingRecordError) throw onboardingRecordError;
@@ -181,14 +208,16 @@ export default function OnboardingCenter() {
       setSelectedDepartment("");
       setSelectedTeamLead("");
       setAssignedPayroll("");
+      setDocuments([]);
       
-      // Step C: Hot-reload active grids. Candidate will automatically disappear because of the row role transition query bounds.
+      // Step 3: Hot-reload active grids.
       await fetchCandidates();
     } catch (err: any) {
       console.error("Critical onboarding chain failure:", err);
       toast({ title: "Onboarding Aborted", description: err.message || "Failed to finalize database conversion.", variant: "destructive" });
+    } finally {
+      setProcessingOnboard(false);
     }
-    setProcessingOnboard(false);
   };
 
   const totalCandidates = candidates.length;
@@ -282,10 +311,12 @@ export default function OnboardingCenter() {
                     </Badge>
                   </TableCell>
                   <TableCell className="text-right">
-                    {/* === EXACT MOUNTED REQUESTED BUTTON HANDLER MATRIX === */}
                     <Button
                       size="sm"
-                      onClick={() => fetchCandidateDocuments(candidate)}
+                      onClick={() => {
+                        setDocuments([]);
+                        fetchCandidateDocuments(candidate);
+                      }}
                     >
                       Review
                     </Button>
@@ -326,38 +357,61 @@ export default function OnboardingCenter() {
                 </CardContent>
               </Card>
 
-              {/* === EXACT SPECIFIED HOOK DISPLAY DATA RENDERING MATRIX BLOCK === */}
-              {documents.length > 0 ? (
-                documents.map((doc) => (
-                  <Card key={doc.id} className="mb-3">
-                    <CardContent className="p-4">
-                      <p className="font-semibold">{doc.document_type}</p>
+              {/* Uploaded Documents List */}
+              <div className="space-y-2">
+                <h3 className="text-xs font-black uppercase text-slate-400 tracking-wider">Uploaded Documents</h3>
+                {documents.length > 0 ? (
+                  documents.map((doc) => (
+                    <Card key={doc.id} className="mb-3 border-slate-200 shadow-sm">
+                      <CardContent className="p-4 flex flex-col justify-between sm:flex-row sm:items-center gap-4">
+                        <div className="space-y-1">
+                          <p className="font-semibold text-slate-800">{doc.document_type}</p>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-slate-500">Status:</span>
+                            <Badge 
+                              variant={doc.status === 'Verified' ? 'default' : doc.status === 'Rejected' ? 'destructive' : 'secondary'}
+                              className="text-[10px] py-0 px-2 font-bold uppercase tracking-wide"
+                            >
+                              {doc.status || 'Submitted'}
+                            </Badge>
+                          </div>
+                          {doc.remarks && <p className="text-[11px] italic text-slate-500 max-w-sm">Note: {doc.remarks}</p>}
+                        </div>
 
-                      <p className="text-sm text-slate-500">
-                        Status: {doc.status}
-                      </p>
-
-                      <Button
-                        asChild
-                        size="sm"
-                        className="mt-2"
-                      >
-                        <a
-                          href={doc.file_url}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          View Document
-                        </a>
-                      </Button>
-                    </CardContent>
-                  </Card>
-                ))
-              ) : (
-                <p className="text-red-500">
-                  No documents found.
-                </p>
-              )}
+                        <div className="flex sm:flex-col gap-2 shrink-0">
+                          <Button asChild size="sm" variant="outline" className="h-8 text-xs">
+                            <a href={doc.file_url} target="_blank" rel="noreferrer">View File</a>
+                          </Button>
+                          <div className="flex gap-1">
+                            <Button 
+                              size="sm" 
+                              variant="outline" 
+                              disabled={verifyingDocId === doc.id}
+                              className="h-8 px-2 text-emerald-600 hover:bg-emerald-50 border-emerald-200"
+                              onClick={() => handleVerifyDocumentStatus(doc.id, 'Verified')}
+                            >
+                              <Check className="w-3.5 h-3.5"/>
+                            </Button>
+                            <Button 
+                              size="sm" 
+                              variant="outline" 
+                              disabled={verifyingDocId === doc.id}
+                              className="h-8 px-2 text-rose-600 hover:bg-rose-50 border-rose-200"
+                              onClick={() => handleVerifyDocumentStatus(doc.id, 'Rejected')}
+                            >
+                              <AlertTriangle className="w-3.5 h-3.5"/>
+                            </Button>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))
+                ) : (
+                  <p className="text-red-500 text-sm bg-red-50 border border-red-100 rounded-lg p-3">
+                    No documents found for this candidate.
+                  </p>
+                )}
+              </div>
 
               {/* MNC METRICS CONFIGURATION STRUCTURE PARAMETERS MODULE */}
               <div className="space-y-4 border-t border-slate-200 pt-4">
@@ -408,7 +462,7 @@ export default function OnboardingCenter() {
                     placeholder="E.g. 75000"
                     value={assignedPayroll}
                     onChange={(e) => setAssignedPayroll(e.target.value)}
-                    className="h-10 text-sm bg-white border-slate-200 font-medium text-slate-800"
+                    className="h-10 text-sm bg-white"
                   />
                 </div>
               </div>
@@ -417,7 +471,7 @@ export default function OnboardingCenter() {
               <div className="pt-4 border-t">
                 <Button 
                   onClick={handleOnboardCandidate}
-                  disabled={processingOnboard || documents.length === 0}
+                  disabled={processingOnboard}
                   className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold h-12 rounded-xl text-sm flex items-center justify-center gap-2"
                 >
                   {processingOnboard ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <UserCheck className="w-4 h-4 mr-2"/>}
