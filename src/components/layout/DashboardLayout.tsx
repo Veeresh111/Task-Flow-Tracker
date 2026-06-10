@@ -43,6 +43,7 @@ const navItems: any = {
     { title: "Application Hub", href: "/hr/applications", icon: Inbox }, 
     { title: "Onboarding Center", href: "/hr/onboarding", icon: FileCheck },
     { title: "Smart Inbox API", href: "/hr/smart-inbox", icon: Mail }, 
+    { title: "Candidate Messages", href: "/hr/messages", icon: MessageSquare }, 
     { title: "HR Directory", href: "/hr/directory", icon: Users },
     { title: "Time & Presence", href: "/hr/presence", icon: Clock },
     { title: "Payroll Management", href: "/hr/payroll", icon: Wallet }, 
@@ -85,7 +86,9 @@ const navItems: any = {
   ],
   candidate: [
     { title: "Dashboard", href: "/candidate", icon: Home },
-    { title: "Office Chat", href: "/candidate/chat", icon: MessageSquare }
+    { title: "Corporate Careers", href: "/candidate/careers", icon: Briefcase },    
+    { title: "HR Correspondence", href: "/candidate/messages", icon: MessageSquare }
+    // === REMOVED THE UNMAPPED "Office Chat" OBJECT FROM CANDIDATE NAVIGATION GRID ===
   ]
 };
 
@@ -129,7 +132,7 @@ function DashboardLayoutCore({ children, role }: { children: React.ReactNode; ro
     return localStorage.getItem(`last_viewed_${userId}_${key}`) || new Date(0).toISOString();
   };
 
-  const setStoredTime = (userId: string, key: string) => {
+  const StoredTime = (userId: string, key: string) => {
     const now = new Date();
     now.setSeconds(now.getSeconds() + 1); 
     localStorage.setItem(`last_viewed_${userId}_${key}`, now.toISOString());
@@ -138,10 +141,10 @@ function DashboardLayoutCore({ children, role }: { children: React.ReactNode; ro
   useEffect(() => {
     if (!userProfile?.id) return;
     let cleared = false;
-    if (location.pathname.includes('/notifications')) { setStoredTime(userProfile.id, 'notifications'); globalBadges.notifications = 0; cleared = true; }
-    if (location.pathname.includes('/approvals')) { setStoredTime(userProfile.id, 'approvals'); globalBadges.approvals = 0; cleared = true; }
-    if (location.pathname.includes('/complaints')) { setStoredTime(userProfile.id, 'complaints'); globalBadges.complaints = 0; cleared = true; }
-    if (location.pathname.includes('/tasks')) { setStoredTime(userProfile.id, 'tasks'); globalBadges.tasks = 0; cleared = true; }
+    if (location.pathname.includes('/notifications')) { StoredTime(userProfile.id, 'notifications'); globalBadges.notifications = 0; cleared = true; }
+    if (location.pathname.includes('/approvals')) { StoredTime(userProfile.id, 'approvals'); globalBadges.approvals = 0; cleared = true; }
+    if (location.pathname.includes('/complaints')) { StoredTime(userProfile.id, 'complaints'); globalBadges.complaints = 0; cleared = true; }
+    if (location.pathname.includes('/tasks')) { StoredTime(userProfile.id, 'tasks'); globalBadges.tasks = 0; cleared = true; }
     if (cleared) setBadges({ ...globalBadges });
   }, [location.pathname, userProfile?.id]);
 
@@ -429,10 +432,10 @@ function DashboardLayoutCore({ children, role }: { children: React.ReactNode; ro
       }
     }
 
-    if (window.location.pathname.includes('/notifications')) { bNotif = 0; setStoredTime(userId, 'notifications'); }
-    if (window.location.pathname.includes('/approvals')) { bApp = 0; setStoredTime(userId, 'approvals'); }
-    if (window.location.pathname.includes('/complaints')) { bComp = 0; setStoredTime(userId, 'complaints'); }
-    if (window.location.pathname.includes('/tasks')) { bTasks = 0; setStoredTime(userId, 'tasks'); }
+    if (window.location.pathname.includes('/notifications')) { bNotif = 0; StoredTime(userId, 'notifications'); }
+    if (window.location.pathname.includes('/approvals')) { bApp = 0; StoredTime(userId, 'approvals'); }
+    if (window.location.pathname.includes('/complaints')) { bComp = 0; StoredTime(userId, 'complaints'); }
+    if (window.location.pathname.includes('/tasks')) { bTasks = 0; StoredTime(userId, 'tasks'); }
 
     const newBadges = { complaints: bComp, approvals: bApp, notifications: bNotif, tasks: bTasks };
     globalBadges = newBadges;
@@ -503,7 +506,6 @@ function DashboardLayoutCore({ children, role }: { children: React.ReactNode; ro
           <div className="flex items-center gap-4">
             <span className="text-sm text-gray-500 font-medium hidden sm:block">{userProfile?.role?.replace('_', ' ').toUpperCase() || 'HR'}</span>
             
-            {/* Candidates are walled off from clocking operations */}
             {currentRole !== 'candidate' && (
               !isClockedIn ? (
                 <div className="flex items-center gap-2">

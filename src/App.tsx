@@ -4,15 +4,12 @@ import { Toaster } from "@/components/ui/toaster";
 import Login from "./pages/auth/Login";
 import Register from "./pages/auth/Register";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
-import CandidateDashboard from "@/pages/candidate/Dashboard";
 
-// === FIX: APPREHENDED CRITICAL ROUTER IMPORT REGISTRATION INDEX ===
-import OnboardingCenter from "@/pages/hr/OnboardingCenter";
-
-// PUBLIC ROUTES (No auth required)
+// Public Modules (Anonymous Access Points)
 import JobApplication from "./pages/public/JobApplication"; 
+import AssessmentAccess from "./pages/public/AssessmentAccess"; 
 
-// Admin Pages
+// Admin Modules
 import AdminDashboard from "./pages/admin/Dashboard";
 import AdminEmployees from "./pages/admin/Employees";
 import AdminMasterDirectory from "./pages/admin/MasterDirectory";
@@ -28,7 +25,7 @@ import AdminApprovals from "./pages/admin/approvals";
 import AdminPayroll from "./pages/admin/Payroll"; 
 import AdminAIInsights from "./pages/admin/AIInsights"; 
 
-// Team Lead Pages
+// Team Lead Modules
 import TeamLeadDashboard from "./pages/team-lead/Dashboard";
 import TeamLeadMyTeam from "./pages/team-lead/MyTeam";
 import TeamLeadProjects from "./pages/team-lead/Projects";
@@ -42,10 +39,9 @@ import TeamLeadSettings from "./pages/team-lead/SettingsPage";
 import TeamLeadLeaves from "./pages/team-lead/leaves"; 
 import TeamLeadPresence from "./pages/team-lead/Presence"; 
 import TeamLeadWorkLogs from "./pages/team-lead/WorkLogs"; 
-import TeamLeadPayroll from "./pages/admin/Payroll"; 
 import TeamLeadAIInsights from "./pages/team-lead/AIInsights"; 
 
-// Employee Pages
+// Employee Modules
 import EmployeeDashboard from "./pages/employee/Dashboard";
 import EmployeeProjects from "./pages/employee/Projects";
 import EmployeeTasks from "./pages/employee/Tasks";
@@ -57,30 +53,37 @@ import EmployeeNotifications from "./pages/employee/Notifications";
 import EmployeeSettings from "./pages/employee/SettingsPage";
 import EmployeeLeaves from "./pages/employee/leaves"; 
 import EmployeePresence from "./pages/employee/Presence"; 
-import EmployeePayroll from "./pages/admin/Payroll"; 
 import EmployeeAIInsights from "./pages/employee/AIInsights"; 
 
-// HR Pages
+// HR Modules
 import HRDashboard from "./pages/hr/Dashboard";
 import HRRecruitment from "./pages/hr/Recruitment";
 import HRPayroll from "./pages/hr/Payroll"; 
 import HRAIInsights from "./pages/hr/AIInsights"; 
 import SmartInbox from "./pages/hr/SmartInbox"; 
-import ApplicationHub from "./pages/hr/ApplicationHub"; // NEW HR HUB
-import CandidateChat from "./pages/candidate/Chat";
+import ApplicationHub from "./pages/hr/ApplicationHub";
+import OnboardingCenter from "@/pages/hr/OnboardingCenter";
+import HRCandidateMessages from "@/pages/hr/recruitment/CandidateMessages"; // ✅ Added HR side Chat Desk
+
+// Candidate Dashboard Modules
+import CandidateDashboard from "@/pages/candidate/Dashboard";
+import CandidateCareers from "@/pages/candidate/Careers";               // ✅ Added Corporate Careers Board
+import CandidateMessages from "@/pages/candidate/Messages";             // ✅ Added Candidate side Relations Desk
 
 export default function App() {
   return (
     <Router>
       <Routes>
+        {/* BASE REDIRECT CONFIG */}
         <Route path="/" element={<Navigate to="/login" replace />} />
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
         
-        {/* PUBLIC ROUTES (Candidates accessing the AI forms) */}
+        {/* PUBLIC CARRIER TRAFFIC PORTS */}
         <Route path="/apply/:formId" element={<JobApplication />} />
+        <Route path="/assessment/:assessmentId" element={<AssessmentAccess />} />
 
-        {/* ADMIN SPA ROUTES */}
+        {/* ADMIN ENTERPRISE CONTEXT */}
         <Route element={<DashboardLayout role="admin"><Outlet /></DashboardLayout>}>
           <Route path="/admin" element={<AdminDashboard />} />
           <Route path="/admin/presence" element={<AdminPresence />} />
@@ -98,7 +101,7 @@ export default function App() {
           <Route path="/admin/directory" element={<AdminMasterDirectory />} />
         </Route>
 
-        {/* TEAM LEAD SPA ROUTES */}
+        {/* TEAM LEAD CONTEXT */}
         <Route element={<DashboardLayout role="team_lead"><Outlet /></DashboardLayout>}>
           <Route path="/team-lead" element={<TeamLeadDashboard />} />
           <Route path="/team-lead/presence" element={<TeamLeadPresence />} />
@@ -108,7 +111,7 @@ export default function App() {
           <Route path="/team-lead/tasks" element={<TeamLeadTasks />} />
           <Route path="/team-lead/approvals" element={<TeamLeadApprovals />} />
           <Route path="/team-lead/analytics" element={<TeamLeadAnalytics />} />
-          <Route path="/team-lead/payroll" element={<TeamLeadPayroll />} /> 
+          <Route path="/team-lead/payroll" element={<AdminPayroll />} /> {/* Shared component fallback */}
           <Route path="/team-lead/ai-insights" element={<TeamLeadAIInsights />} /> 
           <Route path="/team-lead/chat" element={<TeamLeadChat />} />
           <Route path="/team-lead/complaints" element={<TeamLeadComplaints />} />
@@ -117,7 +120,7 @@ export default function App() {
           <Route path="/team-lead/leaves" element={<TeamLeadLeaves />} />
         </Route>
 
-        {/* EMPLOYEE SPA ROUTES */}
+        {/* EMPLOYEE CONTEXT */}
         <Route element={<DashboardLayout role="employee"><Outlet /></DashboardLayout>}>
           <Route path="/employee" element={<EmployeeDashboard />} />
           <Route path="/employee/presence" element={<EmployeePresence />} />
@@ -125,7 +128,7 @@ export default function App() {
           <Route path="/employee/projects" element={<EmployeeProjects />} />
           <Route path="/employee/tasks" element={<EmployeeTasks />} />
           <Route path="/employee/analytics" element={<EmployeeAnalytics />} />
-          <Route path="/employee/payroll" element={<EmployeePayroll />} /> 
+          <Route path="/employee/payroll" element={<AdminPayroll />} /> {/* Shared component fallback */}
           <Route path="/employee/ai-insights" element={<EmployeeAIInsights />} /> 
           <Route path="/employee/chat" element={<EmployeeChat />} />
           <Route path="/employee/complaints" element={<EmployeeComplaints />} />
@@ -134,20 +137,22 @@ export default function App() {
           <Route path="/employee/leaves" element={<EmployeeLeaves />} />
         </Route>
 
-        {/* CANDIDATE SPA ROUTES */}
+        {/* VERIFIED CANDIDATE CONTEXT */}
         <Route element={<DashboardLayout role="candidate"><Outlet /></DashboardLayout>}>
           <Route path="/candidate" element={<CandidateDashboard />} />
-          <Route path="/candidate/chat" element={<CandidateChat />} />
+          <Route path="/candidate/careers" element={<CandidateCareers />} />
+          <Route path="/candidate/messages" element={<CandidateMessages />} />
           <Route path="/candidate/onboarding" element={<OnboardingCenter />} />
         </Route>
 
-        {/* HR SPA ROUTES */}
+        {/* HUMAN RESOURCES CONTEXT */}
         <Route element={<DashboardLayout role="hr"><Outlet /></DashboardLayout>}>
           <Route path="/hr" element={<HRDashboard />} />
           <Route path="/hr/ai-insights" element={<HRAIInsights />} /> 
           <Route path="/hr/smart-inbox" element={<SmartInbox />} /> 
           <Route path="/hr/recruitment" element={<HRRecruitment />} />
           <Route path="/hr/applications" element={<ApplicationHub />} /> 
+          <Route path="/hr/messages" element={<HRCandidateMessages />} />
           <Route path="/hr/directory" element={<AdminMasterDirectory />} />
           <Route path="/hr/presence" element={<AdminPresence />} />
           <Route path="/hr/onboarding" element={<OnboardingCenter />} />
@@ -159,6 +164,7 @@ export default function App() {
           <Route path="/hr/settings" element={<AdminSettings />} />
         </Route>
         
+        {/* WILDCARD FALLBACK */}
         <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
       <Toaster />
