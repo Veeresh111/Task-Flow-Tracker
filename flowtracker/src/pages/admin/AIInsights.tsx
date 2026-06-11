@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, TrendingUp, TrendingDown, DollarSign, Users, Briefcase, Building, Download, Sparkles } from "lucide-react";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+
 
 export default function AdminAIInsights() {
   const { toast } = useToast();
@@ -160,24 +160,54 @@ export default function AdminAIInsights() {
   };
 
   const generateAISummary = async () => {
-    if (!metrics) return;
-    setGeneratingAI(true);
-    try {
-      const genAI = new GoogleGenerativeAI(import.meta.env.VITE_GEMINI_API_KEY);
-      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" }); 
-      
-      const prompt = `Act as an elite Enterprise Financial Analyst. Review this corporate data: ${JSON.stringify(metrics.global)}. 
-      Write a highly professional, 2-paragraph executive summary detailing the company's growth, ROI, and valuation trajectory compared to the previous period. Do not use markdown.`;
-      
-      const result = await model.generateContent(prompt);
-      setAiSummary(result.response.text());
-    } catch (err: any) {
-      console.error(err);
-      toast({ title: "AI Engine Error", description: "API Key rejected or invalid model string. Please check console.", variant: "destructive" });
-    }
-    setGeneratingAI(false);
-  };
+  if (!metrics) return;
 
+  setGeneratingAI(true);
+
+  try {
+    const response = await fetch(
+      "https://router.huggingface.co/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${import.meta.env.VITE_HF_TOKEN}`,
+        },
+        body: JSON.stringify({
+          model: "Qwen/Qwen3-32B:groq",
+          messages: [
+            {
+              role: "user",
+              content: `Act as an elite Enterprise Financial Analyst. Review this corporate data:
+              ${JSON.stringify(metrics.global)}
+
+              Write a highly professional, 2-paragraph executive summary detailing the company's growth, ROI, and valuation trajectory compared to the previous period. Do not use markdown.`,
+            },
+          ],
+          temperature: 0.7,
+          max_tokens: 500,
+        }),
+      }
+    );
+
+    const data = await response.json();
+
+    setAiSummary(
+      data?.choices?.[0]?.message?.content ||
+      "Unable to generate AI summary."
+    );
+  } catch (err) {
+    console.error(err);
+
+    toast({
+      title: "AI Engine Error",
+      description: "Failed to generate summary using Qwen 3.",
+      variant: "destructive",
+    });
+  }
+
+  setGeneratingAI(false);
+};
   const exportReport = () => {
     const csvRows = ["DEPARTMENT,HEADCOUNT,AVG_PERFORMANCE,EXPENDED,PROFIT_GAINED,ROI_PERCENTAGE"];
     metrics.departments.forEach((d: any) => {

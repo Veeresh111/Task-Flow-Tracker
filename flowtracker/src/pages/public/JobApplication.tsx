@@ -1,172 +1,471 @@
 import { useState, useEffect } from "react";
-import { useParams } from "react-router-dom";
-import { supabase } from "@/lib/supabase";
+import { useParams, useNavigate } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Briefcase, CheckCircle2, UploadCloud, FileText } from "lucide-react";
+import { Loader2, ShieldCheck, FileText, UploadCloud, CheckCircle2, AlertCircle, User, Mail, Phone, Briefcase, Sparkles } from "lucide-react";
+import { supabase } from "@/lib/supabase";
 
 export default function JobApplication() {
-  const { formId } = useParams();
+  const { formId } = useParams<{ formId: string }>();
   const { toast } = useToast();
+  const navigate = useNavigate();
+
+  // Lifecycle & Form Metadata States
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [success, setSuccess] = useState(false);
-  const [formData, setFormData] = useState<any>(null);
-  const [answers, setAnswers] = useState<Record<string, any>>({});
-  const [uploadingFile, setUploadingFile] = useState<string | null>(null);
+  const [formMeta, setFormMeta] = useState<any>(null);
+  const [filteredSchema, setFilteredSchema] = useState<any[]>([]);
+  const [submissionComplete, setSubmissionComplete] = useState(false);
+
+  // Core Applicant Information Inputs
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [experienceYears, setExperienceYears] = useState("");
+  
+  // Custom Dynamic Structural Questionnaire Fields Answer Map
+  const [customAnswers, setCustomAnswers] = useState<Record<string, string>>({});
+  
+  // Resume Upload Document Reference Node
+  const [resumeFile, setResumeFile] = useState<File | null>(null);
 
   useEffect(() => {
-    const fetchForm = async () => {
-      if (!formId) return;
-      const { data, error } = await supabase.from('job_forms').select('*').eq('id', formId).single();
-      if (!error && data) {
-        setFormData(data);
-      }
-      setLoading(false);
-    };
-    fetchForm();
+    fetchJobFormMetadata();
   }, [formId]);
 
-  const handleInputChange = (id: string, value: any) => {
-    setAnswers(prev => ({ ...prev, [id]: value }));
-  };
-
-  // AUTOMATED FLAW FIX: Supabase Storage File Upload integration
-  const handleFileUpload = async (id: string, file: File) => {
-    setUploadingFile(id);
+  const fetchJobFormMetadata = async () => {
+    if (!formId) return;
     try {
-      const fileExt = file.name.split('.').pop();
-      const fileName = `candidate_${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
-      
-      const { data, error } = await supabase.storage.from('resumes').upload(fileName, file);
-      
+      const { data, error } = await supabase
+        .from("job_forms")
+        .select("*")
+        .eq("id", formId)
+        .maybeSingle();
+
       if (error) throw error;
+      if (!data) {
+        toast({
+          title: "Form Unavailable",
+          description: "The requested job requisition application link has been deactivated or removed.",
+          variant: "destructive"
+        });
+        return;
+      }
+      setFormMeta(data);
+
+      let questionsList: any[] = [];
+      if (data.form_schema) {
+        try {
+          questionsList = typeof data.form_schema === "string" 
+            ? JSON.parse(data.form_schema) 
+            : data.form_schema;
+        } catch (e) {
+          console.error("Schema parse exception:", e);
+          questionsList = [];
+        }
+      }
+
+      const verifiedQuestions = Array.isArray(questionsList) ? questionsList : [];
       
-      const { data: { publicUrl } } = supabase.storage.from('resumes').getPublicUrl(fileName);
-      
-      handleInputChange(id, publicUrl);
-      toast({ title: "File Uploaded", description: `${file.name} attached successfully.` });
+      // Filter out standard baseline keys from the dynamic loop using field.id strings
+      const isolatedSchema = verifiedQuestions.filter((field: any) => {
+        const fieldKey = String(field.id || field.label || "").toLowerCase().trim();
+        return !["full_name", "full name", "email", "email address", "phone", "phone number", "experience_years", "experience"].includes(fieldKey);
+      });
+
+      setFilteredSchema(isolatedSchema);
+
+      // Pre-map storage keys directly using field.id to protect against label changes breaking historical indices
+      const preMappedAnswers: Record<string, string> = {};
+      isolatedSchema.forEach((q: any, idx: number) => {
+        const questionKey = q.id || `custom_field_${idx + 1}`;
+        preMappedAnswers[questionKey] = "";
+      });
+      setCustomAnswers(preMappedAnswers);
+
     } catch (err: any) {
-      toast({ title: "Upload Failed", description: err.message, variant: "destructive" });
+      console.error("Failed to fetch public job application form requirements:", err);
+    } finally {
+      setLoading(false);
     }
-    setUploadingFile(null);
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleFileChangeSelection = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      if (file.size > 10 * 1024 * 1024) {
+        toast({
+          title: "File Size Restriction",
+          description: "MNC Data Compliance: Maximum allowable size threshold for resume vectors is 10MB.",
+          variant: "destructive"
+        });
+        return;
+      }
+      setResumeFile(file);
+    }
+  };
+
+  const handleCustomAnswerChange = (questionKey: string, value: string) => {
+    setCustomAnswers(prev => ({ ...prev, [questionKey]: value }));
+  };
+
+  const handleFormSubmissionPipeline = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSubmitting(true);
-    try {
-      const candidateName = answers['name'] || answers['full_name'] || answers['fullName'] || 'Candidate';
-      const candidateEmail = answers['email'] || answers['corporate_email'] || answers['candidate_email'] || 'No Email Provided';
+    if (!formMeta || submitting) return;
 
-      const { error } = await supabase.from('job_applications').insert([{
-        form_id: formId,
-        candidate_name: candidateName,
-        candidate_email: candidateEmail,
-        answers: answers,
-        status: 'Pending'
-      }]);
-
-      if (error) throw error;
-      setSuccess(true);
-    } catch (error: any) {
-      toast({ title: "Submission Failed", description: error.message, variant: "destructive" });
+    if (!resumeFile) {
+      return toast({
+        title: "Resume Required",
+        description: "Please attach your official curriculum vitae file to satisfy eligibility parameters.",
+        variant: "destructive"
+      });
     }
-    setSubmitting(false);
+
+    setSubmitting(true);
+    toast({ title: "Processing Intake", description: "Invoking automated AI screening engine protocols..." });
+
+    try {
+      const cleanEmail = email.trim().toLowerCase();
+
+      // 1. Resolve or provision master profile within public.candidates ledger
+      let candidateRecordId = null;
+      const { data: existingCandidate, error: matchErr } = await supabase
+        .from("candidates")
+        .select("id")
+        .eq("email", cleanEmail)
+        .maybeSingle();
+
+      if (matchErr) throw matchErr;
+
+      if (!existingCandidate) {
+        const { data: newCand, error: createErr } = await supabase
+          .from("candidates")
+          .insert([{
+            full_name: fullName.trim(),
+            email: cleanEmail,
+            phone: phone.trim(),
+            experience_years: Number(experienceYears) || 0,
+            stage: "Screening"
+          }])
+          .select("id")
+          .single();
+
+        if (createErr) throw createErr;
+        candidateRecordId = newCand.id;
+      } else {
+        candidateRecordId = existingCandidate.id;
+
+        // Check for pre-existing records to avoid pipeline duplicates
+        const { data: existingApplication, error: appCheckErr } = await supabase
+          .from("candidate_applications")
+          .select("id, status")
+          .eq("candidate_id", candidateRecordId)
+          .eq("job_form_id", formMeta.id)
+          .maybeSingle();
+
+        if (appCheckErr) throw appCheckErr;
+
+        if (existingApplication) {
+          toast({
+            title: "Application Already Exists",
+            description: `MNC Guard: You have already logged a submission for this position vacancy. Current Status: [${existingApplication.status}].`,
+            variant: "destructive"
+          });
+          setSubmitting(false);
+          return;
+        }
+
+        await supabase
+          .from("candidates")
+          .update({ experience_years: Number(experienceYears) || 0, stage: "Screening" })
+          .eq("id", candidateRecordId);
+      }
+
+      // 2. Stream binary document payload directly into public object storage buckets
+      const fileExtension = resumeFile.name.split('.').pop();
+      const storageFilePath = `${candidateRecordId}/${crypto.randomUUID()}.${fileExtension}`;
+      
+      const { error: uploadError } = await supabase.storage
+        .from("resumes")
+        .upload(storageFilePath, resumeFile, { cacheControl: '3600', upsert: true });
+
+      if (uploadError) throw uploadError;
+
+      const { data: urlData } = supabase.storage
+        .from("resumes")
+        .getPublicUrl(storageFilePath);
+
+      const computedResumePublicUrl = urlData.publicUrl;
+
+      await supabase
+        .from("candidates")
+        .update({ resume_url: computedResumePublicUrl })
+        .eq("id", candidateRecordId);
+
+      // 3. PHASE 2 REALIZED: Invoke client-side HuggingFace proxy to compute structural matching score
+      const hfToken = import.meta.env.VITE_HF_TOKEN;
+      let calculatedAIScore = 60;
+      let calculatedAIVerdict = "Pending human review parameters.";
+
+      if (hfToken) {
+        try {
+          const targetJD = formMeta.jd_text || 'Corporate Requisition Role Profile';
+          const prompt = `Act as an elite Corporate ATS evaluation processor. 
+          Job Description: "${targetJD}"
+          Candidate Questionnaire Answers: ${JSON.stringify(customAnswers)}
+          Output STRICTLY a valid raw JSON object matching this structure (no markdown wrapper backticks): {"score": 85, "verdict": "Candidate displays adequate domain alignment."}`;
+
+          const response = await fetch("https://router.huggingface.co/v1/chat/completions", {
+            method: "POST",
+            headers: { "Authorization": `Bearer ${hfToken}`, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model: "Qwen/Qwen3-32B:groq",
+              messages: [{ role: "user", content: prompt }],
+              temperature: 0.1
+            })
+          });
+
+          if (response.ok) {
+            const resData = await response.json();
+            let cleanText = resData.choices?.[0]?.message?.content || "{}";
+            cleanText = cleanText.replace(/```json/gi, "").replace(/```/g, "").trim();
+            const parsed = JSON.parse(cleanText);
+            calculatedAIScore = Math.max(0, Math.min(100, Number(parsed.score || 60)));
+            calculatedAIVerdict = parsed.verdict || calculatedAIVerdict;
+          }
+        } catch (aiExc) {
+          console.warn("Background AI pre-screening exception bypassed safely:", aiExc);
+        }
+      }
+
+      const passThresholdGated = calculatedAIScore >= 75;
+      const initialStatusValue = passThresholdGated ? "Shortlisted" : "Screening";
+
+      // 4. Commit application payload cleanly to public.job_applications single source of truth
+      const { data: applicationRow, error: applicationErr } = await supabase
+        .from("job_applications")
+        .insert([{
+          form_id: formMeta.id,
+          candidate_id: candidateRecordId,
+          candidate_name: fullName.trim(),
+          candidate_email: cleanEmail,
+          answers: customAnswers,
+          resume_url: computedResumePublicUrl,
+          match_score: calculatedAIScore,
+          ai_verdict: calculatedAIVerdict,
+          status: initialStatusValue
+        }])
+        .select()
+        .single();
+
+      if (applicationErr) throw applicationErr;
+
+      // 5. PHASE 3 REALIZED: Dynamic screening invitation workflow validation logic
+      let tokenIssuedAlert = false;
+      let finalPipelineStatus = initialStatusValue;
+
+      if (formMeta.requires_assessment && passThresholdGated) {
+        const { data: targetAssessment } = await supabase
+          .from("assessments")
+          .select("id")
+          .eq("job_form_id", formMeta.id)
+          .eq("status", "Active")
+          .limit(1)
+          .maybeSingle();
+
+        if (targetAssessment) {
+          const secureUUIDToken = crypto.randomUUID();
+          
+          // Commit token invite to assessment_tokens with a 48-hour expiration window
+          const { error: tokenInsertErr } = await supabase
+            .from("assessment_tokens")
+            .insert([{
+              assessment_id: targetAssessment.id,
+              candidate_id: candidateRecordId,
+              token: secureUUIDToken,
+              status: "Active",
+              expires_at: new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString()
+            }]);
+
+          if (!tokenInsertErr) {
+            tokenIssuedAlert = true;
+            finalPipelineStatus = "Assessment Assigned";
+            
+            // Push direct candidate notification (Simulating automated outreach mailer dispatch)
+            await supabase
+              .from("candidate_notifications")
+              .insert([{
+                candidate_id: candidateRecordId,
+                title: "Pre-Exam Invitation Granted",
+                message: `Congratulations! Your screening index has passed our AI threshold score model criteria. Your unique access token is [ ${secureUUIDToken} ]. Navigate to the portal, input this hash string, and start your exam window within 48 hours.`
+              }]);
+
+            // Update primary job applications status row to match timeline change
+            await supabase
+              .from("job_applications")
+              .update({ status: "Assessment Assigned" })
+              .eq("id", applicationRow.id);
+          }
+        }
+      }
+
+      // 6. Push synchronized status record to candidate_applications master tracking boards
+      const { error: trackingError } = await supabase
+        .from("candidate_applications")
+        .insert([{
+          candidate_id: candidateRecordId,
+          job_form_id: formMeta.id,
+          job_application_id: applicationRow.id,
+          status: finalPipelineStatus,
+          ai_score: calculatedAIScore,
+          interview_status: "Pending",
+          offer_status: "Pending"
+        }]);
+
+      if (trackingError) throw trackingError;
+
+      // Keep master candidate profile state synchronized
+      await supabase
+        .from("candidates")
+        .update({ stage: finalPipelineStatus })
+        .eq("id", candidateRecordId);
+
+      setSubmissionComplete(true);
+      toast({ title: "Dossier Transmitted", description: "Application files successfully written onto corporate ledgers." });
+    } catch (err: any) {
+      toast({
+        title: "Submission Stream Failed",
+        description: err.message || "An exception occurred during database updates.",
+        variant: "destructive"
+      });
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  if (loading) return <div className="min-h-screen flex items-center justify-center bg-slate-50"><Loader2 className="w-12 h-12 animate-spin text-indigo-600"/></div>;
-  if (!formData) return <div className="min-h-screen flex items-center justify-center bg-slate-50 text-slate-500 font-bold text-xl">404 - Corporate Job Application Not Found</div>;
-
-  if (success) return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 p-6 text-center">
-      <div className="bg-white p-12 rounded-3xl shadow-2xl flex flex-col items-center max-w-lg border border-slate-100 animate-in zoom-in-95">
-        <CheckCircle2 className="w-24 h-24 text-emerald-500 mb-6" />
-        <h1 className="text-3xl font-black text-slate-800 mb-4">Application Secured!</h1>
-        <p className="text-slate-500 font-medium text-lg">Your profile has been successfully uploaded to the ATS for the <span className="text-indigo-600 font-bold">{formData.job_title}</span> position.</p>
-        <p className="text-slate-400 mt-6 text-sm">Our HR Operations team will review your submission shortly.</p>
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <Loader2 className="w-10 h-10 animate-spin text-indigo-600" />
       </div>
-    </div>
-  );
-
-  const isModern = formData.form_style === 'Modern Tech';
-  const isCreative = formData.form_style === 'Creative';
-
-  const themeClasses = isModern ? "bg-slate-900 text-white" : isCreative ? "bg-gradient-to-br from-fuchsia-600 to-indigo-600 text-white" : "bg-indigo-700 text-white";
-  const cardClasses = isModern ? "border-slate-800 bg-slate-950 text-white" : "bg-white text-slate-900";
+    );
+  }
 
   return (
-    <div className={`min-h-screen py-12 px-4 sm:px-6 lg:px-8 font-sans transition-colors ${isModern ? 'bg-[#0a0a0a]' : 'bg-slate-100'}`}>
-      <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-8">
-        
-        <div className={`p-10 rounded-3xl shadow-2xl flex flex-col md:flex-row items-start md:items-center gap-6 ${themeClasses} relative overflow-hidden`}>
-          <div className="absolute top-0 right-0 -mt-16 -mr-16 w-64 h-64 bg-white opacity-5 rounded-full blur-3xl"></div>
-          <Briefcase className="w-16 h-16 opacity-90"/>
-          <div className="z-10">
-            <p className="text-sm font-bold opacity-80 uppercase tracking-widest flex items-center gap-2">Official Career Portal</p>
-            <h1 className="text-4xl md:text-5xl font-black mt-2 leading-tight">{formData.job_title}</h1>
-          </div>
-        </div>
-
-        <form onSubmit={handleSubmit}>
-          <Card className={`shadow-2xl border-0 overflow-hidden rounded-3xl ${cardClasses}`}>
-            <CardHeader className={`${isModern ? "border-b border-slate-800" : "bg-slate-50 border-b border-slate-100"} p-8`}>
-              <CardTitle className="text-2xl font-black flex items-center gap-2">Candidate Dossier <span className="text-sm font-bold bg-indigo-100 text-indigo-700 px-3 py-1 rounded-full ml-auto">Required</span></CardTitle>
-            </CardHeader>
-            <CardContent className="p-8 md:p-12 space-y-8">
-              {formData.form_schema.map((field: any, idx: number) => (
-                <div key={idx} className="space-y-3 group">
-                  <label className={`text-sm font-black uppercase tracking-wider ${isModern ? 'text-slate-400 group-focus-within:text-indigo-400' : 'text-slate-600 group-focus-within:text-indigo-600'} transition-colors`}>
-                    {field.label} {field.required && <span className="text-red-500">*</span>}
-                  </label>
-                  
-                  {field.type === 'textarea' ? (
-                    <Textarea required={field.required} onChange={(e) => handleInputChange(field.id, e.target.value)} className={`min-h-[120px] text-sm p-4 rounded-xl focus:ring-2 focus:ring-indigo-500 transition-all ${isModern ? 'bg-slate-900 border-slate-800 focus:bg-slate-800' : 'bg-slate-50 border-slate-200 focus:bg-white'}`} placeholder={`Provide a detailed response...`} />
-                  ) : field.type === 'select' ? (
-                    <Select onValueChange={(val) => handleInputChange(field.id, val)} required={field.required}>
-                      <SelectTrigger className={`h-12 rounded-xl text-sm px-4 focus:ring-2 focus:ring-indigo-500 transition-all ${isModern ? 'bg-slate-900 border-slate-800' : 'bg-slate-50 border-slate-200'}`}>
-                        <SelectValue placeholder="Select from dropdown..." />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {field.options?.map((opt: string) => <SelectItem key={opt} value={opt}>{opt}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
-                  ) : field.type === 'file' ? (
-                    <div className={`border-2 border-dashed rounded-xl p-8 flex flex-col items-center justify-center text-center transition-all cursor-pointer relative overflow-hidden ${isModern ? 'border-slate-700 bg-slate-900 hover:border-indigo-500 hover:bg-slate-800' : 'border-slate-300 bg-slate-50 hover:border-indigo-500 hover:bg-indigo-50'}`}>
-                      {uploadingFile === field.id ? (
-                        <div className="flex flex-col items-center gap-2"><Loader2 className="w-8 h-8 animate-spin text-indigo-500"/><span className="font-bold text-sm">Encrypting & Uploading to ATS...</span></div>
-                      ) : answers[field.id] ? (
-                        <div className="flex flex-col items-center gap-2 text-emerald-600"><FileText className="w-10 h-10"/><span className="font-black text-sm">Resume Attached Securely</span><span className="text-[10px] text-slate-500 underline">Click to replace</span></div>
-                      ) : (
-                        <>
-                          <UploadCloud className={`w-10 h-10 mb-3 ${isModern ? 'text-slate-500' : 'text-slate-400'}`}/>
-                          <span className="text-base font-black">Drag & Drop or Click to Upload</span>
-                          <span className="text-xs font-medium text-slate-400 mt-1">Supports PDF, DOCX (Max 5MB)</span>
-                        </>
-                      )}
-                      <input type="file" required={field.required && !answers[field.id]} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" onChange={(e) => { if(e.target.files?.[0]) handleFileUpload(field.id, e.target.files[0]); }} />
-                    </div>
-                  ) : (
-                    <Input type={field.type || 'text'} required={field.required} onChange={(e) => handleInputChange(field.id, e.target.value)} className={`h-12 rounded-xl text-sm px-4 focus:ring-2 focus:ring-indigo-500 transition-all ${isModern ? 'bg-slate-900 border-slate-800 focus:bg-slate-800' : 'bg-slate-50 border-slate-200 focus:bg-white'}`} placeholder={`Enter ${field.label.toLowerCase()}`} />
-                  )}
-                </div>
-              ))}
-
-              <div className="pt-6">
-                <Button type="submit" disabled={submitting || uploadingFile !== null} className={`w-full h-16 text-lg font-black rounded-xl shadow-lg hover:scale-[1.01] transition-all ${themeClasses}`}>
-                  {submitting ? <Loader2 className="w-6 h-6 animate-spin mr-3"/> : <CheckCircle2 className="w-6 h-6 mr-3"/>}
-                  Submit Official Application
-                </Button>
-                <p className="text-center text-[10px] font-bold text-slate-400 mt-4 uppercase tracking-widest">Secured by FWC Enterprise ATS</p>
+    <div className="min-h-screen bg-slate-50/50 py-12 px-4 sm:px-6 lg:px-8 font-sans">
+      {!submissionComplete ? (
+        <div className="max-w-3xl mx-auto grid md:grid-cols-3 gap-6 animate-fade-in items-start">
+          
+          <div className="md:col-span-1 space-y-4">
+            <Card className="border-slate-200 bg-white shadow-md rounded-xl overflow-hidden">
+              <div className="bg-slate-900 p-4 text-white">
+                <span className="bg-indigo-600 text-[9px] font-black uppercase px-2 py-0.5 rounded tracking-wider">FWC India Vacancy</span>
+                <h2 className="text-sm font-black tracking-tight mt-1">{formMeta.job_title}</h2>
               </div>
-            </CardContent>
-          </Card>
-        </form>
-      </div>
+              <CardContent className="p-4 text-xs font-medium text-slate-500 leading-relaxed text-justify max-h-[300px] overflow-y-auto">
+                <p className="font-bold text-slate-700 uppercase tracking-wider mb-1.5 text-[10px]">Position Overview:</p>
+                {formMeta.jd_text || "No public overview attached to this portal node definition."}
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="md:col-span-2">
+            <Card className="shadow-xl border-slate-200 bg-white rounded-xl overflow-hidden">
+              <div className="border-b bg-slate-50 p-4">
+                <h1 className="text-sm font-black text-slate-800 uppercase tracking-wider flex items-center gap-2"><FileText className="w-4 h-4 text-indigo-600"/> Candidate Intake Form</h1>
+              </div>
+              <CardContent className="p-6">
+                <form onSubmit={handleFormSubmissionPipeline} className="space-y-5">
+                  
+                  <div className="grid sm:grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black tracking-wider text-slate-500 uppercase flex items-center gap-1"><User className="w-3 h-3"/> Full Legal Name</label>
+                      <Input required type="text" placeholder="John Smith" value={fullName} onChange={e => setFullName(e.target.value)} className="h-10 text-sm border-slate-200 focus-visible:ring-indigo-500" />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black tracking-wider text-slate-500 uppercase flex items-center gap-1"><Mail className="w-3 h-3"/> Email Address</label>
+                      <Input required type="email" placeholder="john.smith@example.com" value={email} onChange={e => setEmail(e.target.value)} className="h-10 text-sm border-slate-200 focus-visible:ring-indigo-500" />
+                    </div>
+                  </div>
+
+                  <div className="grid sm:grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black tracking-wider text-slate-500 uppercase flex items-center gap-1"><Phone className="w-3 h-3"/> Contact Phone Number</label>
+                      <Input required type="tel" placeholder="+91 98765 43210" value={phone} onChange={e => setPhone(e.target.value)} className="h-10 text-sm border-slate-200 focus-visible:ring-indigo-500" />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black tracking-wider text-slate-500 uppercase flex items-center gap-1"><Briefcase className="w-3 h-3"/> Total Experience (Years)</label>
+                      <Input required type="number" min="0" max="50" placeholder="5" value={experienceYears} onChange={e => setExperienceYears(e.target.value)} className="h-10 text-sm border-slate-200 focus-visible:ring-indigo-500" />
+                    </div>
+                  </div>
+
+                  {filteredSchema.length > 0 && (
+                    <div className="space-y-4 pt-2 border-t border-slate-100">
+                      <h3 className="text-[10px] font-black text-indigo-600 uppercase tracking-wider">Position Custom Metrics Questionnaire</h3>
+                      {filteredSchema.map((q: any, idx: number) => {
+                        const questionKey = q.id || `custom_field_${idx + 1}`;
+                        const questionLabel = q.label || q.question || questionKey;
+                        return (
+                          <div key={idx} className="space-y-1">
+                            <label className="text-[10px] font-black text-slate-700 leading-normal block">{questionLabel}</label>
+                            <Textarea required placeholder="Provide comprehensive response context..." className="min-h-[80px] text-xs leading-relaxed border-slate-200 bg-slate-50/30 p-2.5 resize-none" value={customAnswers[questionKey] || ""} onChange={e => handleCustomAnswerChange(questionKey, e.target.value)} />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  <div className="space-y-1.5 pt-2 border-t border-slate-100">
+                    <label className="text-[10px] font-black tracking-wider text-slate-500 uppercase">Curriculum Vitae Document File (PDF / DOCX)</label>
+                    <div className="border-2 border-dashed border-slate-200 hover:border-indigo-500 transition-colors bg-slate-50/50 rounded-xl p-6 relative flex flex-col items-center justify-center text-center group">
+                      <input type="file" required accept=".pdf,.docx,.doc" onChange={handleFileChangeSelection} className="absolute inset-0 opacity-0 cursor-pointer w-full h-full" />
+                      <UploadCloud className="w-10 h-10 text-slate-400 group-hover:text-indigo-600 transition-colors mb-2" />
+                      {resumeFile ? (
+                        <div className="space-y-1">
+                          <p className="text-xs font-bold text-slate-800 truncate max-w-xs">{resumeFile.name}</p>
+                          <p className="text-[10px] font-mono text-indigo-600">{(resumeFile.size / (1024 * 1024)).toFixed(2)} MB • File Payload Locked</p>
+                        </div>
+                      ) : (
+                        <div>
+                          <p className="text-xs font-bold text-slate-700">Click or drag your CV document here to attach</p>
+                          <p className="text-[10px] text-slate-400 font-medium mt-0.5">Supports layout sizes up to 10MB</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <Button type="submit" disabled={submitting} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs uppercase tracking-widest h-12 shadow-lg rounded-xl mt-4">
+                    {submitting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <ShieldCheck className="w-4 h-4 mr-2" />}
+                    Dispatch Recruitment Dossier
+                  </Button>
+                </form>
+              </CardContent>
+            </Card>
+          </div>
+
+        </div>
+      ) : (
+        <Card className="max-w-md mx-auto shadow-2xl border-slate-200 bg-white overflow-hidden text-center rounded-xl animate-scale-in">
+          <div className="bg-emerald-600 p-8 text-white">
+            <CheckCircle2 className="w-16 h-16 mx-auto mb-2" />
+            <h1 className="text-xl font-black tracking-tight uppercase">Dossier Transmitted</h1>
+            <p className="text-xs text-white/80 font-medium mt-1">Information stream safely securely persisted to corporate logs.</p>
+          </div>
+          <CardContent className="p-6 pt-8 space-y-4">
+            <div className="bg-slate-50 border p-4 rounded-xl text-left flex gap-3 items-start max-w-sm mx-auto">
+              <Sparkles className="w-5 h-5 text-indigo-600 mt-0.5 shrink-0 animate-pulse" />
+              <div>
+                <p className="text-[11px] font-black text-slate-400 uppercase">Automated ATS Screening Notice</p>
+                <p className="text-xs font-medium text-slate-600 leading-relaxed mt-1">Your intake responses are currently being evaluated by our AI pre-screening matrix layers. If your objective match score meets our technical criteria threshold, an **Individualized Examination Token link** will be dispatched to your email notifications directory shortly.</p>
+              </div>
+            </div>
+            <Button onClick={() => navigate("/login")} variant="outline" className="h-10 text-xs font-bold w-full max-w-xs mt-2">Return to Careers Portal</Button>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

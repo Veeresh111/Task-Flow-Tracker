@@ -5,10 +5,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { supabase } from "@/lib/supabase";
-import { Loader2, Inbox, Eye, Calendar, Sparkles, BrainCircuit, ExternalLink, Search, Filter } from "lucide-react";
+import { Loader2, Inbox, Eye, Calendar, Sparkles, BrainCircuit, ExternalLink, Search, Filter, CheckCircle2, FileText, RefreshCw, XCircle, DollarSign, PieChart, Award } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export default function ApplicationHub() {
   const [loading, setLoading] = useState(true);
@@ -17,230 +16,448 @@ export default function ApplicationHub() {
   const [applications, setApplications] = useState<any[]>([]);
   const [selectedApp, setSelectedApp] = useState<any>(null);
   
-  // Search & Filter States
+  // Financial Metrics
+  const [totalPayrollExpenditure, setTotalPayrollExpenditure] = useState<number>(0);
+  const [averageEmployeeComp, setAverageEmployeeComp] = useState<number>(0);
+  
   const [searchQuery, setSearchQuery] = useState("");
   const [filterJob, setFilterJob] = useState("All");
-  
+  const [filterStatus, setFilterStatus] = useState("All");
+
+  // Assessment Assignment
+  const [assigningAssessment, setAssigningAssessment] = useState<string | null>(null);
+  const [availableAssessments, setAvailableAssessments] = useState<any[]>([]);
+  const [selectedAssessmentId, setSelectedAssessmentId] = useState<string>("");
+
   const { toast } = useToast();
 
   useEffect(() => {
     fetchApplications();
+    fetchLivePayrollMetrics();
+    fetchAvailableAssessments();
+
+    const channel = supabase
+      .channel("job-applications-live-sync")
+      .on("postgres_changes", { event: "*", schema: "public", table: "job_applications" }, fetchApplications)
+      .subscribe();
+
+    return () => supabase.removeChannel(channel);
   }, []);
 
-  const fetchApplications = async () => {
-    setLoading(true);
-    const { data, error } = await supabase
-      .from('job_applications')
-      .select('*, job_forms(job_title, jd_text)')
-      .order('created_at', { ascending: false });
-
-    if (!error && data) {
-      setApplications(data);
-      // If an app is currently selected, update its data (e.g. after a scan)
-      if (selectedApp) {
-        const updatedApp = data.find(a => a.id === selectedApp.id);
-        if (updatedApp) setSelectedApp(updatedApp);
-      }
+  const fetchAvailableAssessments = async () => {
+    try {
+      const { data } = await supabase
+        .from('assessments')
+        .select('id, title, difficulty, passing_score, duration_minutes')
+        .eq('status', 'Active')
+        .order('created_at', { ascending: false });
+      setAvailableAssessments(data || []);
+    } catch (e) {
+      console.error("Failed to load assessments", e);
     }
-    setLoading(false);
   };
 
-  const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-  // --- 1. GLOBAL ATS SCANNER (Batch Processing) ---
-  const runATSScanner = async () => {
-    const unscoredApps = applications.filter(app => app.match_score == null);
-    if (unscoredApps.length === 0) return toast({ title: "Queue Empty", description: "All applications have already been scored by the AI." });
-
-    setAiScanning(true);
-    toast({ title: "Global ATS Initialized", description: `Running deep AI analysis on ${unscoredApps.length} applications...` });
-
-    const apiKey = import.meta.env.VITE_GEMINI_API_KEY ;
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-
-    for (let i = 0; i < unscoredApps.length; i++) {
-      const app = unscoredApps[i];
-      try {
-        const prompt = `Act as an elite Corporate ATS. 
-        Job Description: "${app.job_forms?.jd_text || 'Corporate Role'}"
-        Candidate Submitted Answers: ${JSON.stringify(app.answers)}
-        
-        Analyze all the candidate's answers deeply against the Job Description.
-        Output STRICTLY a JSON object. No markdown. Format:
-        {"score": 85, "verdict": "Hire"} OR {"score": 40, "verdict": "Reject"}`;
-
-        const result = await model.generateContent(prompt);
-        let cleanText = result.response.text().replace(/```[a-z]*\n?/gi, '').replace(/```/g, '').trim();
-        const startIdx = cleanText.indexOf('{');
-        const endIdx = cleanText.lastIndexOf('}');
-        if (startIdx !== -1 && endIdx !== -1) cleanText = cleanText.substring(startIdx, endIdx + 1);
-        
-        const parsed = JSON.parse(cleanText);
-
-        await supabase.from('job_applications').update({ 
-          match_score: parsed.score, 
-          ai_verdict: parsed.verdict,
-          status: parsed.score >= 75 ? 'Shortlisted' : 'Rejected'
-        }).eq('id', app.id);
-
-      } catch (e) {
-        console.error(`AI failed for app ${app.id}`, e);
-      }
+  const fetchLivePayrollMetrics = async () => {
+    try {
+      const { data } = await supabase
+        .from("payroll_ledger")
+        .select("net_payroll_pay");
       
-      // Mandatory API Throttle
-      if (i < unscoredApps.length - 1) await sleep(4000);
+      if (data && data.length > 0) {
+        const globalSum = data.reduce((acc, row) => acc + Number(row.net_payroll_pay || 0), 0);
+        setTotalPayrollExpenditure(globalSum);
+        setAverageEmployeeComp(parseFloat((globalSum / data.length).toFixed(2)));
+      }
+    } catch (e) {
+      console.warn("Payroll metrics fallback:", e);
+    }
+  };
+
+  const fetchApplications = async () => {
+    try {
+      setLoading(true);
+      const { data: rawApps } = await supabase
+        .from('job_applications')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      const { data: rawForms } = await supabase
+        .from('job_forms')
+        .select('id, job_title, jd_text');
+
+      const localizedJoinedApplications = (rawApps || []).map((app: any) => {
+        const targetFormId = app.form_id || app.job_form_id;
+        const matchingForm = rawForms?.find((f: any) => f.id === targetFormId) || null;
+        return {
+          ...app,
+          job_forms: matchingForm ? {
+            job_title: matchingForm.job_title,
+            jd_text: matchingForm.jd_text
+          } : { job_title: "Position Context Unresolved", jd_text: "" }
+        };
+      });
+
+      setApplications(localizedJoinedApplications);
+      if (selectedApp) {
+        const updated = localizedJoinedApplications.find(a => a.id === selectedApp.id);
+        if (updated) setSelectedApp(updated);
+      }
+    } catch (err: any) {
+      console.error("APP ERROR FULL:", err);
+      toast({ title: "Pipeline Error", description: "Failed to read application records.", variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // === FIXED ASSESSMENT ASSIGNMENT (Matches your real schema) ===
+  const assignAssessment = async (app: any) => {
+    if (!app.candidate_id) {
+      return toast({ 
+        title: "Data Missing", 
+        description: "This application is missing candidate_id. Please fix the database row.", 
+        variant: "destructive" 
+      });
+    }
+    if (!selectedAssessmentId) {
+      return toast({ title: "Selection Required", description: "Please select an assessment first.", variant: "destructive" });
     }
 
-    toast({ title: "Batch Scan Complete", description: "All queued candidates have been evaluated." });
+    setAssigningAssessment(app.id);
+    try {
+      // Duplicate protection
+      const { data: existing } = await supabase
+        .from("assessment_tokens")
+        .select("id")
+        .eq("candidate_id", app.candidate_id)
+        .eq("used", false);
+
+      if (existing && existing.length > 0) {
+        return toast({ 
+          title: "Already Assigned", 
+          description: "This candidate already has an active assessment token.", 
+          variant: "destructive" 
+        });
+      }
+
+      const newToken = crypto.randomUUID();
+      const selectedAssessment = availableAssessments.find(a => a.id === selectedAssessmentId);
+
+      // === assessment_tokens insert (matches your schema) ===
+      const { error: tokenErr } = await supabase
+        .from("assessment_tokens")
+        .insert([{
+          candidate_id: app.candidate_id,
+          assessment_id: selectedAssessmentId,
+          token: newToken,
+          used: false
+        }]);
+
+      if (tokenErr) {
+        console.error("TOKEN INSERT ERROR:", tokenErr);
+        throw tokenErr;
+      }
+
+      // === candidate_assessments insert (matches your schema) ===
+      await supabase
+        .from("candidate_assessments")
+        .insert([{
+          candidate_id: app.candidate_id,
+          job_form_id: app.form_id || app.job_form_id,
+          assessment_token: newToken,
+          status: "Assigned",
+          expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+        }]);
+
+      // Enhanced notification
+      await supabase
+        .from("candidate_notifications")
+        .insert([{
+          candidate_id: app.candidate_id,
+          title: "Assessment Assigned",
+          message: `You have been assigned "${selectedAssessment?.title}" assessment.\nDuration: ${selectedAssessment?.duration_minutes} minutes\nPassing Score: ${selectedAssessment?.passing_score}%\nToken: ${newToken}`,
+          read: false
+        }]);
+
+      // Update application status
+      await supabase
+        .from('job_applications')
+        .update({ status: "Assessment Assigned" })
+        .eq('id', app.id);
+
+      await supabase
+        .from('candidate_applications')
+        .update({ status: "Assessment Assigned" })
+        .eq('candidate_id', app.candidate_id)
+        .eq('job_form_id', app.form_id || app.job_form_id);
+
+      toast({ 
+        title: "✅ Assessment Assigned", 
+        description: `Token: ${newToken} sent to ${app.candidate_name}` 
+      });
+
+      fetchApplications();
+      setSelectedAssessmentId("");
+    } catch (err: any) {
+      console.error("ASSIGNMENT FULL ERROR:", err);
+      toast({ title: "Assignment Failed", description: err.message, variant: "destructive" });
+    } finally {
+      setAssigningAssessment(null);
+    }
+  };
+
+  // === ATS Scanner Functions (unchanged) ===
+  const syncWithCandidateApplications = async (app: any, score: number, workflowStatus: string) => {
+    const targetCandidateId = app.candidate_id;
+    const targetFormId = app.form_id || app.job_form_id;
+    if (!targetCandidateId || !targetFormId) return;
+
+    try {
+      await supabase
+        .from('candidate_applications')
+        .update({
+          ai_score: score,
+          status: workflowStatus,
+          updated_at: new Date().toISOString()
+        })
+        .eq('candidate_id', targetCandidateId)
+        .eq('job_form_id', targetFormId);
+    } catch (e) {
+      console.error("Sync failed:", e);
+    }
+  };
+
+  const runATSScanner = async (processAll = false) => {
+    const appsToProcess = processAll ? applications : applications.filter(app => app.match_score == null);
+    if (appsToProcess.length === 0) {
+      return toast({ title: "Queue Settled", description: "No applications found matching processing targets." });
+    }
+
+    setAiScanning(true);
+    toast({ title: "Secure ATS Active", description: `Processing ${appsToProcess.length} applications...` });
+
+    for (let i = 0; i < appsToProcess.length; i++) {
+      const app = appsToProcess[i];
+      try {
+        const targetJD = app.job_forms?.jd_text || 'Corporate Requisition Role Profile';
+        
+        const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ats-screen`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`
+          },
+          body: JSON.stringify({
+            jobDescription: targetJD,
+            answers: app.answers || {}
+          })
+        });
+
+        if (!response.ok) throw new Error(`Edge function error: ${response.status}`);
+        const parsed = await response.json();
+
+        const calculatedStatus = parsed.score >= 75 ? 'Shortlisted' : 'Rejected';
+
+        await supabase
+          .from('job_applications')
+          .update({
+            match_score: parsed.score,
+            ai_verdict: parsed.verdict,
+            status: calculatedStatus
+          })
+          .eq('id', app.id);
+
+        await syncWithCandidateApplications(app, parsed.score, calculatedStatus);
+      } catch (e) {
+        console.error(`Scanner failed for app ${app.id}:`, e);
+      }
+      if (i < appsToProcess.length - 1) await new Promise(r => setTimeout(r, 1500));
+    }
+
+    toast({ title: "Scan Completed", description: "All applications processed." });
     fetchApplications();
     setAiScanning(false);
   };
 
-  // --- 2. INDIVIDUAL ATS SCANNER (Single Candidate Processing) ---
   const runSingleATSScanner = async (app: any) => {
-    if (app.match_score != null) return toast({ title: "Already Scanned", description: "This candidate has already been evaluated." });
-
     setIndividualScanning(app.id);
-    toast({ title: "Targeted ATS Initialized", description: `Analyzing candidate: ${app.candidate_name}...` });
-
     try {
-      const apiKey = import.meta.env.VITE_GEMINI_API_KEY ;
-      const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-
-      const prompt = `Act as an elite Corporate ATS. 
-      Job Description: "${app.job_forms?.jd_text || 'Corporate Role'}"
-      Candidate Submitted Answers: ${JSON.stringify(app.answers)}
+      const targetJD = app.job_forms?.jd_text || 'Corporate Requisition Role Profile';
       
-      Analyze all the candidate's answers deeply against the Job Description.
-      Output STRICTLY a JSON object. No markdown. Format:
-      {"score": 85, "verdict": "Hire"} OR {"score": 40, "verdict": "Reject"}`;
+      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ats-screen`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`
+        },
+        body: JSON.stringify({
+          jobDescription: targetJD,
+          answers: app.answers || {}
+        })
+      });
 
-      const result = await model.generateContent(prompt);
-      let cleanText = result.response.text().replace(/```[a-z]*\n?/gi, '').replace(/```/g, '').trim();
-      const startIdx = cleanText.indexOf('{');
-      const endIdx = cleanText.lastIndexOf('}');
-      if (startIdx !== -1 && endIdx !== -1) cleanText = cleanText.substring(startIdx, endIdx + 1);
-      
-      const parsed = JSON.parse(cleanText);
+      if (!response.ok) throw new Error("Edge function failed");
+      const parsed = await response.json();
 
-      const { error } = await supabase.from('job_applications').update({ 
-        match_score: parsed.score, 
-        ai_verdict: parsed.verdict,
-        status: parsed.score >= 75 ? 'Shortlisted' : 'Rejected'
-      }).eq('id', app.id);
+      const calculatedStatus = parsed.score >= 75 ? 'Shortlisted' : 'Rejected';
 
-      if (error) throw error;
+      await supabase
+        .from('job_applications')
+        .update({
+          match_score: parsed.score,
+          ai_verdict: parsed.verdict,
+          status: calculatedStatus
+        })
+        .eq('id', app.id);
 
-      toast({ title: "Analysis Complete", description: `${app.candidate_name} scored ${parsed.score}% and updated in database.` });
-      fetchApplications(); // Refreshes table and the opened dossier
+      await syncWithCandidateApplications(app, parsed.score, calculatedStatus);
 
-    } catch (e: any) {
-      console.error(`AI failed for app ${app.id}`, e);
-      toast({ title: "Scan Failed", description: "AI encountered an error analyzing this candidate.", variant: "destructive" });
+      toast({ title: "Analysis Complete", description: `${app.candidate_name} scored ${parsed.score}%` });
+      fetchApplications();
+    } catch (e) {
+      toast({ title: "Scan Failed", variant: "destructive" });
+    } finally {
+      setIndividualScanning(null);
     }
-    setIndividualScanning(null);
   };
 
-  // --- SMART FILTER LOGIC ---
   const uniqueJobs = ["All", ...Array.from(new Set(applications.map(a => a.job_forms?.job_title).filter(Boolean)))];
+  const uniqueStatuses = ["All", "Applied", "Shortlisted", "Rejected", "Assessment Assigned", "Interview Scheduled"];
 
   const filteredApplications = applications.filter(app => {
-    const matchesSearch = app.candidate_name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                          app.candidate_email.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesJob = filterJob === "All" || app.job_forms?.job_title === filterJob;
-    return matchesSearch && matchesJob;
+    const searchMatch = (app.candidate_name?.toLowerCase() || "").includes(searchQuery.toLowerCase()) ||
+                        (app.candidate_email?.toLowerCase() || "").includes(searchQuery.toLowerCase());
+    const jobMatch = filterJob === "All" || app.job_forms?.job_title === filterJob;
+    const statusMatch = filterStatus === "All" || app.status === filterStatus;
+    return searchMatch && jobMatch && statusMatch;
   });
 
   return (
     <DashboardLayout role="hr">
       <div className="max-w-7xl mx-auto space-y-6 animate-fade-in pb-12">
         
-        {/* HEADER SECTION */}
-        <div className="bg-slate-900 p-8 rounded-xl shadow-xl text-white flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-          <div>
-            <h1 className="text-3xl font-black flex items-center gap-3"><Inbox className="text-emerald-400 w-8 h-8"/> Central Application Hub</h1>
-            <p className="text-slate-300 mt-2 font-medium max-w-2xl">
-              Securely review all inbound job applications from your public corporate forms.
-            </p>
-          </div>
-          <Button onClick={runATSScanner} disabled={aiScanning || loading} className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold h-12 px-6 shadow-lg whitespace-nowrap">
-            {aiScanning ? <Loader2 className="w-5 h-5 animate-spin mr-2"/> : <BrainCircuit className="w-5 h-5 mr-2"/>}
-            Push All to ATS Scanner
-          </Button>
+        {/* Payroll Metrics */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <Card className="border-slate-200 bg-white p-4 flex items-center gap-4 shadow-sm">
+            <div className="p-3 bg-emerald-50 text-emerald-600 rounded-xl"><DollarSign className="w-6 h-6" /></div>
+            <div>
+              <span className="text-[10px] uppercase font-black tracking-wider text-slate-400 block">Total Ledger Expenditures</span>
+              <span className="text-xl font-black text-slate-900 font-mono">₹{totalPayrollExpenditure.toLocaleString('en-IN')}</span>
+            </div>
+          </Card>
+          <Card className="border-slate-200 bg-white p-4 flex items-center gap-4 shadow-sm">
+            <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl"><PieChart className="w-6 h-6" /></div>
+            <div>
+              <span className="text-[10px] uppercase font-black tracking-wider text-slate-400 block">Average Comp Metrics</span>
+              <span className="text-xl font-black text-slate-900 font-mono">₹{averageEmployeeComp.toLocaleString('en-IN')}</span>
+            </div>
+          </Card>
         </div>
 
-        <div className="grid md:grid-cols-3 gap-6">
-          <div className="md:col-span-2 space-y-4">
-            
-            {/* SEARCH AND FILTER BAR */}
-            <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-col sm:flex-row gap-4">
+        <div className="bg-slate-900 p-8 rounded-xl shadow-xl text-white flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border border-slate-800">
+          <div>
+            <h1 className="text-3xl font-black flex items-center gap-3"><Inbox className="text-emerald-400 w-8 h-8"/> Central Application Hub</h1>
+            <p className="text-slate-300 mt-2">Unified live ATS scoring engine tracking active vacancy applications pipeline</p>
+          </div>
+          <div className="flex gap-2 w-full md:w-auto">
+            <Button onClick={() => runATSScanner(false)} disabled={aiScanning || loading} variant="outline" className="text-white border-slate-700 bg-slate-800 hover:bg-slate-700 text-xs font-bold flex-1 md:flex-none">
+              {aiScanning ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <BrainCircuit className="w-4 h-4 mr-1" />}
+              Scan Pending
+            </Button>
+            <Button onClick={() => runATSScanner(true)} disabled={aiScanning || loading} className="bg-emerald-600 hover:bg-emerald-700 text-xs font-black uppercase tracking-wider flex-1 md:flex-none">
+              {aiScanning ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <RefreshCw className="w-4 h-4 mr-1" />}
+              Force Re-scan All
+            </Button>
+          </div>
+        </div>
+
+        <div className="grid lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2 space-y-4">
+            {/* Search & Filters */}
+            <div className="bg-white p-4 rounded-xl shadow-sm border flex flex-col sm:flex-row gap-4">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
-                <Input 
-                  placeholder="Search candidate name or email..." 
-                  className="pl-10 h-10 text-sm bg-slate-50 border-slate-200" 
-                  value={searchQuery} 
-                  onChange={(e) => setSearchQuery(e.target.value)} 
-                />
+                <Input placeholder="Search applicant names or email strings..." className="pl-10 h-10 text-sm" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
               </div>
-              <Select value={filterJob} onValueChange={setFilterJob}>
-                <SelectTrigger className="h-10 w-full sm:w-[250px] bg-slate-50 border-slate-200 text-sm">
-                  <Filter className="w-4 h-4 mr-2 text-slate-500"/>
-                  <SelectValue placeholder="Filter by Role" />
-                </SelectTrigger>
-                <SelectContent>
-                  {uniqueJobs.map((job: any) => <SelectItem key={job} value={job}>{job}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              <div className="flex gap-2 sm:w-[400px]">
+                <Select value={filterJob} onValueChange={setFilterJob}>
+                  <SelectTrigger className="w-full text-xs h-10 font-medium">
+                    <SelectValue placeholder="Position Filter" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {uniqueJobs.map(job => <SelectItem key={job} value={job}>{job}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <Select value={filterStatus} onValueChange={setFilterStatus}>
+                  <SelectTrigger className="w-full text-xs h-10 font-medium">
+                    <SelectValue placeholder="Status Filter" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {uniqueStatuses.map(st => <SelectItem key={st} value={st}>{st}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
 
-            {/* APPLICATIONS TABLE */}
-            <Card className="shadow-sm border-slate-200 h-full">
-              <CardHeader className="bg-slate-50 border-b pb-4">
-                <CardTitle className="text-lg text-slate-800">Inbound Applications ({filteredApplications.length})</CardTitle>
+            {/* Main Table */}
+            <Card className="border-slate-200 shadow-sm bg-white overflow-hidden">
+              <CardHeader className="bg-slate-50 border-b p-4">
+                <CardTitle className="text-xs font-black text-slate-700 uppercase tracking-wider">Inbound Requisition Pipe Queue ({filteredApplications.length})</CardTitle>
               </CardHeader>
               <CardContent className="p-0">
-                <div className="max-h-[500px] overflow-y-auto">
+                <div className="max-h-[520px] overflow-auto">
                   <Table>
-                    <TableHeader className="bg-slate-50 sticky top-0">
+                    <TableHeader className="sticky top-0 bg-slate-50 z-10 border-b">
                       <TableRow>
-                        <TableHead className="font-bold">Candidate</TableHead>
-                        <TableHead className="font-bold">Target Role</TableHead>
-                        <TableHead className="font-bold">ATS Score</TableHead>
-                        <TableHead className="font-bold text-right">Action</TableHead>
+                        <TableHead className="font-black text-xs">Candidate</TableHead>
+                        <TableHead className="font-black text-xs">Vacancy</TableHead>
+                        <TableHead className="font-black text-xs">ATS Score</TableHead>
+                        <TableHead className="font-black text-xs text-center">Status</TableHead>
+                        <TableHead className="font-black text-xs text-right">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {loading ? (
-                        <TableRow><TableCell colSpan={4} className="text-center p-12"><Loader2 className="w-8 h-8 animate-spin mx-auto text-indigo-600"/></TableCell></TableRow>
-                      ) : filteredApplications.map((app) => (
-                        <TableRow key={app.id} className={`cursor-pointer transition-colors ${selectedApp?.id === app.id ? 'bg-indigo-50 border-l-4 border-l-indigo-600' : 'hover:bg-slate-50'}`} onClick={() => setSelectedApp(app)}>
+                        <TableRow><TableCell colSpan={5} className="text-center py-12"><Loader2 className="mx-auto animate-spin h-8 w-8 text-indigo-600" /></TableCell></TableRow>
+                      ) : filteredApplications.map(app => (
+                        <TableRow key={app.id} className={`cursor-pointer hover:bg-slate-50/80 transition-colors ${selectedApp?.id === app.id ? 'bg-indigo-50/50 border-l-4 border-indigo-600' : ''}`} onClick={() => setSelectedApp(app)}>
                           <TableCell>
-                            <p className="font-bold text-slate-800">{app.candidate_name}</p>
-                            <p className="text-xs text-slate-500">{app.candidate_email}</p>
-                            <p className="text-[10px] text-slate-400 mt-1">{new Date(app.created_at).toLocaleDateString()}</p>
+                            <div className="font-bold text-slate-900">{app.candidate_name}</div>
+                            <div className="text-xs text-slate-500 font-mono">{app.candidate_email}</div>
                           </TableCell>
-                          <TableCell className="font-medium text-indigo-700">{app.job_forms?.job_title}</TableCell>
+                          <TableCell className="text-indigo-700 font-medium">{app.job_forms?.job_title}</TableCell>
                           <TableCell>
-                            {app.match_score != null ? (
-                              <div>
-                                <span className={`text-xl font-black ${app.match_score >= 75 ? 'text-emerald-600' : app.match_score >= 50 ? 'text-amber-500' : 'text-red-500'}`}>{app.match_score}%</span>
-                                <div className="text-[10px] font-bold uppercase mt-1">{app.ai_verdict}</div>
-                              </div>
-                            ) : (
-                              <span className="text-xs text-slate-400 font-bold bg-slate-100 px-2 py-1 rounded">Pending Scan</span>
+                            {app.match_score !== null ? (
+                              <span className={`text-xl font-black ${app.match_score >= 75 ? 'text-emerald-600' : 'text-amber-500'}`}>{app.match_score}%</span>
+                            ) : <span className="text-slate-400 text-xs">Pending Scan</span>}
+                          </TableCell>
+                          <TableCell className="text-center">
+                            <span className={`text-[10px] font-black uppercase px-3 py-1 rounded border tracking-wider ${
+                              app.status === 'Assessment Assigned' || app.status === 'Assessment Passed' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 
+                              app.status === 'Rejected' ? 'bg-red-50 text-red-700 border-red-200' : 'bg-blue-50 text-blue-700 border-blue-200'
+                            }`}>
+                              {app.status || 'Applied'}
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-right space-x-2">
+                            <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); setSelectedApp(app); }}>
+                              <Eye className="h-4 w-4" />
+                            </Button>
+                            {app.status !== "Assessment Assigned" && (
+                              <Button 
+                                variant="outline" 
+                                size="sm" 
+                                className="text-emerald-700 border-emerald-200"
+                                onClick={(e) => { e.stopPropagation(); assignAssessment(app); }}
+                                disabled={assigningAssessment === app.id}
+                              >
+                                {assigningAssessment === app.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Award className="w-3 h-3 mr-1" />}
+                                Assign
+                              </Button>
                             )}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <Button variant="ghost" size="sm" className="text-indigo-600"><Eye className="w-4 h-4 mr-2"/> Review</Button>
                           </TableCell>
                         </TableRow>
                       ))}
-                      {filteredApplications.length === 0 && !loading && (
-                        <TableRow><TableCell colSpan={4} className="text-center p-12 text-slate-500">No applications match your search filters.</TableCell></TableRow>
-                      )}
                     </TableBody>
                   </Table>
                 </div>
@@ -248,62 +465,86 @@ export default function ApplicationHub() {
             </Card>
           </div>
 
-          <div className="md:col-span-1">
+          {/* FULL DOSSIER SIDE PANEL */}
+          <div className="lg:col-span-1">
             {selectedApp ? (
-              <Card className="shadow-2xl border-indigo-100 bg-white sticky top-24">
-                <CardHeader className="bg-indigo-600 text-white rounded-t-xl flex flex-row justify-between items-center">
-                  <CardTitle className="text-lg">Candidate Dossier</CardTitle>
-                  {selectedApp.match_score != null && (
-                    <div className="bg-white/20 px-3 py-1 rounded-full text-sm font-black flex items-center gap-1"><Sparkles className="w-4 h-4"/> ATS: {selectedApp.match_score}%</div>
-                  )}
+              <Card className="sticky top-24 shadow-xl border-slate-200 bg-white overflow-hidden rounded-xl">
+                <CardHeader className="bg-indigo-600 text-white p-4">
+                  <CardTitle className="text-xs font-black uppercase tracking-wider flex items-center gap-2"><FileText className="w-4 h-4"/> Candidate Dossier</CardTitle>
                 </CardHeader>
-                <CardContent className="p-6 space-y-4 max-h-[600px] overflow-y-auto custom-scrollbar flex flex-col">
-                  <div className="border-b pb-4">
-                    <h3 className="text-xl font-black text-slate-800">{selectedApp.candidate_name}</h3>
-                    <p className="text-sm text-indigo-600 font-bold">{selectedApp.candidate_email}</p>
-                    <p className="text-xs text-slate-500 mt-2 flex items-center gap-1"><Calendar className="w-3 h-3"/> Applied: {new Date(selectedApp.created_at).toLocaleString()}</p>
-                  </div>
-                  
-                  <div className="space-y-4 flex-1">
-                    <h4 className="text-xs font-black uppercase text-slate-400 tracking-widest">Submitted Data</h4>
-                    {Object.entries(selectedApp.answers).map(([key, value]) => {
-                      const strVal = String(value);
-                      const isLink = strVal.startsWith('http');
-                      return (
-                        <div key={key} className="bg-slate-50 p-3 rounded-lg border border-slate-100">
-                          <p className="text-xs font-bold text-slate-600 capitalize mb-1">{key.replace(/_/g, ' ')}</p>
-                          {isLink ? (
-                            <a href={strVal} target="_blank" rel="noreferrer" className="text-sm font-bold text-blue-600 flex items-center gap-1 hover:underline"><ExternalLink className="w-3 h-3"/> View Document / Resume</a>
-                          ) : (
-                            <p className="text-sm text-slate-900 whitespace-pre-wrap">{strVal}</p>
-                          )}
-                        </div>
-                      );
-                    })}
+                <CardContent className="p-5 space-y-6 max-h-[calc(100vh-120px)] overflow-y-auto">
+
+                  <div>
+                    <h3 className="text-xl font-black text-slate-900">{selectedApp.candidate_name}</h3>
+                    <p className="text-sm text-indigo-600">{selectedApp.candidate_email}</p>
                   </div>
 
-                  {/* INDIVIDUAL ATS SCANNER BUTTON */}
-                  <div className="pt-4 border-t border-slate-100">
-                    {selectedApp.match_score == null ? (
-                      <Button 
-                        onClick={() => runSingleATSScanner(selectedApp)} 
-                        disabled={individualScanning === selectedApp.id || aiScanning}
-                        className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold h-12"
-                      >
-                        {individualScanning === selectedApp.id ? <Loader2 className="w-5 h-5 animate-spin mr-2"/> : <BrainCircuit className="w-5 h-5 mr-2"/>}
-                        Run Individual AI Analysis
+                  {/* Resume Link with multiple fallbacks */}
+                  {(() => {
+                    const resumeLink = selectedApp.resume_url || 
+                                      selectedApp.answers?.resume_url || 
+                                      selectedApp.answers?.resume || 
+                                      selectedApp.answers?.cv || 
+                                      selectedApp.answers?.cv_link;
+                    return resumeLink && (
+                      <Button onClick={() => window.open(resumeLink, '_blank')} variant="outline" className="w-full">
+                        <ExternalLink className="w-4 h-4 mr-2" /> View Resume / CV
                       </Button>
-                    ) : (
-                      <Button disabled className="w-full bg-slate-100 text-slate-400 font-bold h-12">
-                        <CheckCircle2 className="w-5 h-5 mr-2"/> AI Analysis Complete
-                      </Button>
-                    )}
+                    );
+                  })()}
+
+                  {/* Submitted Answers */}
+                  {selectedApp.answers && Object.keys(selectedApp.answers).length > 0 && (
+                    <div>
+                      <h4 className="text-xs font-black uppercase tracking-widest text-slate-400 mb-3">Submitted Information</h4>
+                      <div className="space-y-3">
+                        {Object.entries(selectedApp.answers).map(([key, value]) => (
+                          <div key={key} className="bg-slate-50 border border-slate-100 p-3 rounded-xl">
+                            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                              {key.replace(/_/g, " ")}
+                            </p>
+                            <p className="text-sm text-slate-800 whitespace-pre-wrap">
+                              {String(value)}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Assessment Assignment Section */}
+                  <div className="border-t pt-5">
+                    <h4 className="text-xs font-black uppercase tracking-widest text-slate-400 mb-3">ASSIGN ASSESSMENT</h4>
+                    <Select value={selectedAssessmentId} onValueChange={setSelectedAssessmentId}>
+                      <SelectTrigger className="mb-3">
+                        <SelectValue placeholder="Select Assessment" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {availableAssessments.map(ass => (
+                          <SelectItem key={ass.id} value={ass.id}>
+                            {ass.title} ({ass.difficulty})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+
+                    <Button 
+                      onClick={() => assignAssessment(selectedApp)} 
+                      disabled={!selectedAssessmentId || assigningAssessment === selectedApp.id}
+                      className="w-full bg-emerald-600 hover:bg-emerald-700 h-11"
+                    >
+                      {assigningAssessment === selectedApp.id ? (
+                        <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                      ) : <Award className="w-4 h-4 mr-2" />}
+                      Assign Selected Assessment
+                    </Button>
                   </div>
+
                 </CardContent>
               </Card>
             ) : (
-              <div className="h-full flex items-center justify-center border-2 border-dashed border-slate-200 rounded-xl p-8 text-center bg-slate-50 text-slate-400 font-medium">
-                Select a candidate from the table to view their full submission dossier and run individual ATS checks.
+              <div className="h-64 border-2 border-dashed border-slate-200 rounded-2xl flex items-center justify-center text-slate-400 text-xs font-semibold text-center p-8 bg-slate-50/50">
+                Select a candidate from the table to view full dossier and assign assessments
               </div>
             )}
           </div>

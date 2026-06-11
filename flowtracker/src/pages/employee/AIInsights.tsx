@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, Clock, Sparkles, CheckSquare, TrendingUp, Star, Download, CheckCircle2, AlertOctagon } from "lucide-react";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import { PieChart, Pie, Cell, Legend, ResponsiveContainer, Tooltip as RechartsTooltip } from "recharts";
 
 export default function EmployeeAIInsights() {
@@ -51,7 +50,6 @@ export default function EmployeeAIInsights() {
 
       const velocity = totalHours > 0 ? (completed / totalHours) : 0;
 
-      // AI Rating Algorithm (Velocity & Completion based)
       let aiRating = 3.0;
       if (total > 0 && totalHours > 0) {
         const completionRate = completed / total;
@@ -61,11 +59,9 @@ export default function EmployeeAIInsights() {
         aiRating = 2.0; 
       }
 
-      // === NEW: MASSIVE ATTRIBUTE ENGINE ===
       const posAttrs: string[] = [];
       const negAttrs: string[] = [];
 
-      // Positive Attributes
       if (aiRating >= 4.0) posAttrs.push("Top Tier Corporate Performer");
       if (Number(progress) >= 80) posAttrs.push("High Task Resolution Rate");
       if (totalHours > 160) posAttrs.push("Exceptional Dedication & Output");
@@ -74,7 +70,6 @@ export default function EmployeeAIInsights() {
       if (daysInCompany > 365) posAttrs.push("Consistent Long-Term Loyalty");
       if (completed > 10) posAttrs.push("Proven Track Record");
 
-      // Negative Attributes
       if (aiRating < 3.0) negAttrs.push("Needs Improvement Indicator");
       if (Number(progress) < 40 && total > 0) negAttrs.push("Severe Completion Lag");
       if (pending > completed) negAttrs.push("High Procrastination Risk");
@@ -104,13 +99,12 @@ export default function EmployeeAIInsights() {
     setLoading(false);
   };
 
+  // === MUTATED AI PIPELINE LINK: HUGGING FACE ROUTER WITH QWEN 3 ===
   const generateAISummary = async () => {
     if (!metrics) return;
     setGeneratingAI(true);
     try {
-      const apiKey = import.meta.env.VITE_GEMINI_API_KEY ;
-      const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" }); 
+      const HF_TOKEN = import.meta.env.VITE_HF_TOKEN || "[REDACTED]";
       
       const prompt = `Act as an elite Corporate Career Coach. Review this employee's metrics: 
       Progress: ${metrics.progress}% | Rating: ${metrics.aiRating}/5.0 | Velocity: ${metrics.velocity}.
@@ -118,16 +112,40 @@ export default function EmployeeAIInsights() {
       Risk Factors: ${metrics.attributes.negative.join(', ')}.
       
       Write a highly professional, 2-paragraph analysis evaluating their personal efficiency, dedication, and provide actionable career advancement advice based on their positive/negative traits. Do not use markdown.`;
-      
-      const result = await model.generateContent(prompt);
-      setAiSummary(result.response.text());
+
+      const response = await fetch("https://router.huggingface.co/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${HF_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "Qwen/Qwen3-32B:groq",
+          messages: [
+            { role: "user", content: prompt }
+          ]
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error?.message || "Failed to reach Hugging Face endpoint.");
+      }
+
+      const aiResponseText = data.choices[0].message.content;
+      setAiSummary(aiResponseText);
     } catch (err: any) {
-      toast({ title: "AI Engine Error", description: "Could not generate summary.", variant: "destructive" });
+      console.error("AI Generation Failure:", err);
+      toast({ 
+        title: "AI Engine Error", 
+        description: err.message || "Could not generate career evaluation via Qwen 3.", 
+        variant: "destructive" 
+      });
     }
     setGeneratingAI(false);
   };
 
-  // NEW: Download Report for Employee
   const exportReport = () => {
     let csvContent = `data:text/csv;charset=utf-8,EMPLOYEE INTELLIGENCE REPORT\n\n`;
     csvContent += `METRIC,VALUE\n`;
@@ -180,7 +198,7 @@ export default function EmployeeAIInsights() {
         {aiSummary && (
           <Card className="bg-blue-50 border border-blue-100 shadow-sm">
             <CardContent className="p-6">
-              <h3 className="text-blue-800 font-black flex items-center gap-2 mb-2"><Sparkles className="w-5 h-5"/> Gemini AI Career Evaluation</h3>
+              <h3 className="text-blue-800 font-black flex items-center gap-2 mb-2"><Sparkles className="w-5 h-5"/> Qwen 3 AI Career Evaluation</h3>
               <p className="text-blue-900 leading-relaxed font-medium text-sm whitespace-pre-wrap">{aiSummary}</p>
             </CardContent>
           </Card>
@@ -225,7 +243,6 @@ export default function EmployeeAIInsights() {
           </Card>
         </div>
 
-        {/* NEW: ATTRIBUTE SECTION */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-2">
           <Card className="shadow-sm border-emerald-200 bg-emerald-50/30">
             <CardHeader className="border-b border-emerald-100 pb-3">

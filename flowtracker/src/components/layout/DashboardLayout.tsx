@@ -6,10 +6,9 @@ import { supabase } from "@/lib/supabase";
 import { authService } from "@/lib/auth";
 import { 
   Menu, X, LogOut, Home, Users, Briefcase, MessageSquare, 
-  AlertCircle, CheckSquare, Clock, BarChart3, Bell, Settings, UserCircle, CheckCircle, Calendar, ClipboardList, Wallet, Sparkles, Timer, FileText, UserPlus, Loader2, Mail, Inbox, TrendingUp
+  AlertCircle, CheckSquare, Clock, BarChart3, Bell, Settings, UserCircle, CheckCircle, Calendar, ClipboardList, Wallet, Sparkles, Timer, FileText, UserPlus, Loader2, Mail, Inbox, FileCheck, Award, Video
 } from "lucide-react";
-import { GoogleGenerativeAI } from "@google/generative-ai";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 let globalProfile: any = null;
 let globalClockedIn = false;
@@ -24,7 +23,6 @@ const navItems: any = {
   admin: [
     { title: "Dashboard", href: "/admin", icon: Home },
     { title: "AI Insights", href: "/admin/ai-insights", icon: Sparkles },
-    { title: "Performance Engine", href: "/admin/performance", icon: TrendingUp }, 
     { title: "Time & Presence", href: "/admin/presence", icon: Clock },
     { title: "HR Directory", href: "/admin/directory", icon: Users },
     { title: "Employees", href: "/admin/employees", icon: Users },
@@ -41,10 +39,11 @@ const navItems: any = {
   hr: [
     { title: "HR Dashboard", href: "/hr", icon: Home },
     { title: "AI Insights", href: "/hr/ai-insights", icon: Sparkles }, 
-    { title: "Performance Engine", href: "/hr/performance", icon: TrendingUp }, 
     { title: "AI ATS & Recruiting", href: "/hr/recruitment", icon: UserPlus },
     { title: "Application Hub", href: "/hr/applications", icon: Inbox }, 
+    { title: "Onboarding Center", href: "/hr/onboarding", icon: FileCheck },
     { title: "Smart Inbox API", href: "/hr/smart-inbox", icon: Mail }, 
+    { title: "Candidate Messages", href: "/hr/messages", icon: MessageSquare }, 
     { title: "HR Directory", href: "/hr/directory", icon: Users },
     { title: "Time & Presence", href: "/hr/presence", icon: Clock },
     { title: "Payroll Management", href: "/hr/payroll", icon: Wallet }, 
@@ -86,9 +85,12 @@ const navItems: any = {
     { title: "Settings", href: "/employee/settings", icon: Settings },
   ],
   candidate: [
-    { title: "Candidate Portal", href: "/candidate", icon: Home },
-    { title: "Office Chat", href: "/candidate/chat", icon: MessageSquare },
-    { title: "Settings", href: "/candidate/settings", icon: Settings },
+    { title: "Dashboard", href: "/candidate", icon: Home },
+    { title: "Corporate Careers", href: "/candidate/careers", icon: Briefcase }, 
+    { title: "Active Assessments", href: "/candidate/assessments", icon: Award },
+    { title: "HR Correspondence", href: "/candidate/messages", icon: MessageSquare },
+    { title: "My Interview Board", href: "/candidate/interviews", icon: Video }
+    // === REMOVED THE UNMAPPED "Office Chat" OBJECT FROM CANDIDATE NAVIGATION GRID ===
   ]
 };
 
@@ -132,7 +134,7 @@ function DashboardLayoutCore({ children, role }: { children: React.ReactNode; ro
     return localStorage.getItem(`last_viewed_${userId}_${key}`) || new Date(0).toISOString();
   };
 
-  const setStoredTime = (userId: string, key: string) => {
+  const StoredTime = (userId: string, key: string) => {
     const now = new Date();
     now.setSeconds(now.getSeconds() + 1); 
     localStorage.setItem(`last_viewed_${userId}_${key}`, now.toISOString());
@@ -141,10 +143,10 @@ function DashboardLayoutCore({ children, role }: { children: React.ReactNode; ro
   useEffect(() => {
     if (!userProfile?.id) return;
     let cleared = false;
-    if (location.pathname.includes('/notifications')) { setStoredTime(userProfile.id, 'notifications'); globalBadges.notifications = 0; cleared = true; }
-    if (location.pathname.includes('/approvals')) { setStoredTime(userProfile.id, 'approvals'); globalBadges.approvals = 0; cleared = true; }
-    if (location.pathname.includes('/complaints')) { setStoredTime(userProfile.id, 'complaints'); globalBadges.complaints = 0; cleared = true; }
-    if (location.pathname.includes('/tasks')) { setStoredTime(userProfile.id, 'tasks'); globalBadges.tasks = 0; cleared = true; }
+    if (location.pathname.includes('/notifications')) { StoredTime(userProfile.id, 'notifications'); globalBadges.notifications = 0; cleared = true; }
+    if (location.pathname.includes('/approvals')) { StoredTime(userProfile.id, 'approvals'); globalBadges.approvals = 0; cleared = true; }
+    if (location.pathname.includes('/complaints')) { StoredTime(userProfile.id, 'complaints'); globalBadges.complaints = 0; cleared = true; }
+    if (location.pathname.includes('/tasks')) { StoredTime(userProfile.id, 'tasks'); globalBadges.tasks = 0; cleared = true; }
     if (cleared) setBadges({ ...globalBadges });
   }, [location.pathname, userProfile?.id]);
 
@@ -345,20 +347,48 @@ function DashboardLayoutCore({ children, role }: { children: React.ReactNode; ro
       const taskCount = tasks?.length || 0;
       const taskList = tasks?.map(t => t.title).join(", ") || "Standard operational and structural duties";
 
-      const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-      const genAI = new GoogleGenerativeAI(apiKey || "");
-      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-
       const prompt = `Act as an elite FWC India HR Evaluation Engine. Employee: ${empName}. Hours Worked: ${hours.toFixed(2)}. Tasks Done: ${taskCount} (${taskList}). Write a 3-sentence performance review. Assign a "Competence Score" out of 100. CRITICAL INSTRUCTION: If Hours Worked is greater than 11.5 hours, you MUST severely penalize the Competence Score (drop it below 40) for 'suspicious time-theft' or 'extremely poor time management', and explicitly scold them for it in the review. No markdown.`;
 
-      const result = await model.generateContent(prompt);
-      const aiResponse = result.response.text();
+      const HF_TOKEN = import.meta.env.VITE_HF_TOKEN || "[REDACTED]";
+
+      const response = await fetch("https://router.huggingface.co/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${HF_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "Qwen/Qwen3-32B:groq",
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0.2
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.error?.message || "Failed to route segment packet.");
+      }
+
+      let aiResponse = data.choices[0].message.content || "";
+
+      aiResponse = aiResponse
+        .replace(/<think>[\s\S]*?<\/think>/gi, "")
+        .replace(/<thinking>[\s\S]*?<\/thinking>/gi, "")
+        .replace(/<think>[\s\S Mont]*/gi, "")
+        .replace(/<thinking>[\s\S]*/gi, "")
+        .replace(/<\/think>/gi, "")
+        .replace(/<\/thinking>/gi, "")
+        .replace(/\*\*/g, "")
+        .replace(/\*/g, "")
+        .replace(/`/g, "")
+        .replace(/^#+\s+/gm, "")
+        .trim();
 
       setDailyReportData({ hours: hours.toFixed(2), tasks: taskCount, report: aiResponse });
       await supabase.from('work_logs').update({ notes: `SYSTEM AI REPORT: ${aiResponse}` }).eq('id', logId);
     } catch (error) {
-      console.error("EndOfDay AI Error:", error);
-      setDailyReportData({ hours: hours.toFixed(2), tasks: 0, report: "Shift recorded. AI evaluation engine is currently offline." });
+      setDailyReportData({ hours: hours.toFixed(2), tasks: 0, report: "Shift recorded. AI evaluation engine offline." });
     }
     setGeneratingReport(false);
   };
@@ -404,10 +434,10 @@ function DashboardLayoutCore({ children, role }: { children: React.ReactNode; ro
       }
     }
 
-    if (window.location.pathname.includes('/notifications')) { bNotif = 0; setStoredTime(userId, 'notifications'); }
-    if (window.location.pathname.includes('/approvals')) { bApp = 0; setStoredTime(userId, 'approvals'); }
-    if (window.location.pathname.includes('/complaints')) { bComp = 0; setStoredTime(userId, 'complaints'); }
-    if (window.location.pathname.includes('/tasks')) { bTasks = 0; setStoredTime(userId, 'tasks'); }
+    if (window.location.pathname.includes('/notifications')) { bNotif = 0; StoredTime(userId, 'notifications'); }
+    if (window.location.pathname.includes('/approvals')) { bApp = 0; StoredTime(userId, 'approvals'); }
+    if (window.location.pathname.includes('/complaints')) { bComp = 0; StoredTime(userId, 'complaints'); }
+    if (window.location.pathname.includes('/tasks')) { bTasks = 0; StoredTime(userId, 'tasks'); }
 
     const newBadges = { complaints: bComp, approvals: bApp, notifications: bNotif, tasks: bTasks };
     globalBadges = newBadges;
@@ -476,9 +506,8 @@ function DashboardLayoutCore({ children, role }: { children: React.ReactNode; ro
           </div>
           
           <div className="flex items-center gap-4">
-            <span className="text-sm text-gray-500 font-medium hidden sm:block">{userProfile?.role?.replace('_', ' ').toUpperCase() || 'USER'}</span>
+            <span className="text-sm text-gray-500 font-medium hidden sm:block">{userProfile?.role?.replace('_', ' ').toUpperCase() || 'HR'}</span>
             
-            {/* CORPORATE FIX: Candidates DO NOT Clock In or Out */}
             {currentRole !== 'candidate' && (
               !isClockedIn ? (
                 <div className="flex items-center gap-2">

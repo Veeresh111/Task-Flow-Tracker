@@ -4,19 +4,17 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Loader2, Sparkles, BrainCircuit, TrendingUp, Users, Target } from "lucide-react";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export default function HRAIInsights() {
   const [prompt, setPrompt] = useState("");
   const [insight, setInsight] = useState("");
   const [loading, setLoading] = useState(false);
 
+  // === UPDATED: SECURE HUGGING FACE ROUTER WITH QWEN 3 PIPELINE ===
   const generateInsight = async (type: string, customPrompt?: string) => {
     setLoading(true);
     try {
-      const apiKey = import.meta.env.VITE_GEMINI_API_KEY || "AQ.Ab8RN6KQXzJBhyAkPtzy70H-HJXV0zOvPoV6BjJ-ohgF3Cs_YQ";
-      const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+      const HF_TOKEN = import.meta.env.VITE_HF_TOKEN || "[REDACTED]";
 
       let basePrompt = "";
       if (type === "attrition") basePrompt = "Analyze the FWC global database for employee attrition patterns. Identify the top 2 reasons employees leave within the first 6 months and suggest actionable retention strategies.";
@@ -24,10 +22,30 @@ export default function HRAIInsights() {
       else if (type === "diversity") basePrompt = "Evaluate our corporate Diversity, Equity, and Inclusion (DEI) metrics. Suggest 3 specific initiatives to improve leadership diversity over the next 4 quarters.";
       else basePrompt = `As an Elite HR Executive AI: ${customPrompt}`;
 
-      const result = await model.generateContent(basePrompt);
-      setInsight(result.response.text());
-    } catch (e) {
-      setInsight("Error connecting to FWC AI Neural Engine.");
+      const response = await fetch("https://router.huggingface.co/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${HF_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "Qwen/Qwen3-32B:groq",
+          messages: [
+            { role: "user", content: basePrompt }
+          ]
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error?.message || "Failed to parse corporate analytics payload.");
+      }
+
+      setInsight(data.choices[0].message.content);
+    } catch (e: any) {
+      console.error("AI Insight Core Failure:", e);
+      setInsight("Error connecting to FWC AI Neural Engine via Qwen 3 infrastructure.");
     }
     setLoading(false);
   };
@@ -79,7 +97,7 @@ export default function HRAIInsights() {
         {insight && (
           <Card className="shadow-xl border-indigo-200 bg-gradient-to-br from-indigo-50 to-white animate-in slide-in-from-bottom-4">
             <CardHeader className="border-b border-indigo-100 pb-4">
-              <CardTitle className="text-lg text-indigo-900 flex items-center gap-2"><BrainCircuit className="w-5 h-5"/> AI Strategic Output</CardTitle>
+              <CardTitle className="text-lg text-indigo-900 flex items-center gap-2"><BrainCircuit className="w-5 h-5"/> AI Strategic Output (Qwen 3)</CardTitle>
             </CardHeader>
             <CardContent className="p-8 whitespace-pre-wrap text-slate-700 leading-relaxed font-medium text-sm">
               {insight}
