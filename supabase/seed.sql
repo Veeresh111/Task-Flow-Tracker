@@ -1,0 +1,2 @@
+-- Seed data for local development
+-- This file is intentionally minimal. Production data is managed via the application.

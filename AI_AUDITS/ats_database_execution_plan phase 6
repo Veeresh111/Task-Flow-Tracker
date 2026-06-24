@@ -1,0 +1,1288 @@
+# PHASE 6 — ATS DATABASE EXECUTION PLAN
+
+**System:** FWC AI-Powered HRMS + ATS Platform  
+**Document Type:** Principal Database Architect Execution Blueprint  
+**Date:** June 13, 2026  
+**Inputs:** Phase 1 (47 issues) · Phase 2 (99 issues) · Phase 3 (52 flaws) · Phase 4 (57 issues) · Phase 5 (Approved Roadmap)  
+**Benchmark:** Greenhouse · Lever · Workday · SAP SuccessFactors · Oracle HCM · BambooHR  
+
+---
+
+## 1. CURRENT ARCHITECTURE ASSESSMENT
+
+### 1.1 Existing Table Inventory (37 tables, 3 storage buckets)
+
+```mermaid
+graph TB
+    subgraph "User Identity (OVERLOADED)"
+        P["profiles (25+ files)"]
+    end
+
+    subgraph "Candidate Lifecycle (FRAGMENTED)"
+        C["candidates"]
+        JA["job_applications"]
+        CA["candidate_applications"]
+        AT["assessment_tokens"]
+        AA["assessment_attempts"]
+        CAS["candidate_assessments"]
+        IS["interview_sessions"]
+        CO["candidate_onboarding"]
+        BV["background_verifications"]
+        CN["candidate_notifications"]
+        CHR["candidate_hr_messages"]
+    end
+
+    subgraph "Job Definition (SPLIT-BRAIN)"
+        JF["job_forms"]
+        RP["recruitment_posts"]
+        A["assessments"]
+    end
+
+    subgraph "Employee Lifecycle"
+        WL["work_logs"]
+        T["tasks"]
+        PR["projects"]
+        L["leaves"]
+        CM["complaints"]
+        N["notifications"]
+        M["messages"]
+        RE["resignations"]
+    end
+
+    subgraph "Payroll (FRAGMENTED)"
+        PY["payroll"]
+        PL["payroll_ledger"]
+        PHR["payroll_history_records"]
+        SRH["salary_revision_history"]
+    end
+
+    subgraph "Analytics (DISCONNECTED)"
+        EA["employee_attrition"]
+        EAN["employee_analytics"]
+        PT["performance_trends"]
+        WA["weekly_attendance"]
+        RP2["reports"]
+    end
+
+    subgraph "Storage Buckets"
+        S1["resumes (PUBLIC)"]
+        S2["bgc_docs (PUBLIC)"]
+        S3["avatars (PUBLIC)"]
+    end
+```
+
+### 1.2 Critical Architecture Flaws
+
+| # | Flaw | Tables Affected | Impact |
+|---|------|----------------|--------|
+| 1 | **Triple-write for applications** — `job_applications`, `candidate_applications`, `candidates` all written to independently without transaction | 3 tables | Data drift, count divergence |
+| 2 | **Dual job definition** — `job_forms` and `recruitment_posts` are independent tables for the same concept | 2 tables | Orphaned postings, broken links |
+| 3 | **Global candidate stage** — `candidates.stage` is overwritten globally instead of per-application | 1 table | Multi-job candidates lose status |
+| 4 | **FK column name split-brain** — Same FK called `form_id` in some contexts, `job_form_id` in others | 4 tables | Silent query failures, empty results |
+| 5 | **Assessment questions contain answers** — `assessments.questions` JSONB includes `correctAnswer` | 1 table | Answer leakage (no RLS) |
+| 6 | **Performance data as JSONB array** — `profiles.performance_history` is an unbounded array | 1 table | 1NF violation, no queryability |
+| 7 | **Zero RLS policies** — All 37 tables queryable by any authenticated user | 37 tables | Full data breach exposure |
+| 8 | **No audit trail** — Only `salary_revision_history` tracks changes | 36 tables | No compliance capability |
+
+### 1.3 Table Ownership Audit
+
+| Table | Should Own | Currently Also Stores | Fix |
+|-------|-----------|----------------------|-----|
+| `candidates` | Candidate identity (name, email, phone, resume) | `stage`, `ats_score`, `recommendation` | Remove — these are per-application |
+| `job_applications` | Raw form submission (answers, resume_url) | `candidate_name`, `candidate_email` | Remove — denormalized data |
+| `candidate_applications` | Pipeline tracking (status, scores) | `parsed_resume_text` | Move to candidates or separate table |
+| `profiles` | User identity + employment details | `payroll_ctc`, `performance_score`, `performance_history` | Move to payroll_records and performance_reviews |
+| `assessments` | Test definition (title, config, time limit) | `questions` with `correctAnswer` embedded | Separate answer keys to server-only table |
+| `interview_sessions` | Interview record | All scores + feedback in one row | Normalize feedback to separate table for panel support |
+
+---
+
+## 2. CANDIDATE DATA MODEL
+
+### 2.1 Enterprise Candidate Entity
+
+The candidate record represents a **person**, not an application. One person can have many applications across many jobs and many years.
+
+```mermaid
+erDiagram
+    candidates {
+        uuid id PK
+        uuid profile_id FK "NULL until candidate registers/is onboarded"
+        text full_name "NOT NULL"
+        text email "NOT NULL, UNIQUE"
+        text phone
+        text source "career_portal | referral | linkedin | agency | campus | internal"
+        uuid referred_by FK "profiles(id), nullable"
+        text current_company
+        text current_designation
+        decimal current_ctc
+        decimal expected_ctc
+        integer notice_period_days
+        text location
+        text linkedin_url
+        text resume_url "Latest resume path in storage"
+        jsonb parsed_resume_data "Structured: skills, experience, education"
+        boolean blacklisted "DEFAULT false"
+        text blacklist_reason
+        timestamptz gdpr_consent_at
+        timestamptz created_at
+        timestamptz updated_at
+    }
+```
+
+### 2.2 What Changes from Current
+
+| Current | Enterprise Target | Rationale |
+|---------|------------------|-----------|
+| `stage` on candidates | **REMOVED** | Stage is per-application, not per-candidate. A candidate at "Offer" for Job A and "Applied" for Job B must retain both statuses |
+| `ats_score` on candidates | **REMOVED** | Score is per-application-per-job. Same resume scores differently against different JDs |
+| `recommendation` on candidates | **REMOVED** | Recommendation is per-application |
+| `missing_skills` on candidates | **REMOVED** | Skill gap is relative to a specific job's requirements |
+| `skills` as JSONB blob | `parsed_resume_data` as structured JSONB | Structured extraction: `{ skills: ["React", "Python"], experience: [{...}], education: [{...}] }` |
+| `email` nullable | `email NOT NULL, UNIQUE` | Email is the canonical deduplication key |
+| No `profile_id` | `profile_id FK → profiles` | Links candidate to auth user when they register or are onboarded |
+| No `source` | `source` with CHECK constraint | Required for recruitment analytics |
+| No `referred_by` | `referred_by FK → profiles` | Required for referral tracking |
+
+### 2.3 Candidate Lifecycle States
+
+The candidate **entity** has no status. Status lives on each `application`. The candidate entity persists across all interactions with the company — a talent pool record.
+
+```
+Candidate lifecycle (at entity level):
+  Created (first application) → Active → Hired (for one job) → Alumni (after exit)
+  
+Application lifecycle (per job):
+  applied → screening → shortlisted → assessment → interview → 
+  offer_pending → offer_sent → offer_accepted → onboarding → hired
+  (or: rejected | withdrawn | on_hold at any point)
+```
+
+---
+
+## 3. JOB DATA MODEL
+
+### 3.1 Enterprise Job Entity Hierarchy
+
+```mermaid
+erDiagram
+    departments ||--o{ job_requisitions : raises
+    job_requisitions ||--o{ job_postings : publishes
+    job_postings ||--o{ applications : receives
+
+    departments {
+        uuid id PK
+        text name "NOT NULL, UNIQUE"
+        uuid head_id FK "profiles(id)"
+        text cost_center_code
+        boolean is_active "DEFAULT true"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    job_requisitions {
+        uuid id PK
+        text title "NOT NULL"
+        uuid department_id FK "departments(id) NOT NULL"
+        uuid hiring_manager_id FK "profiles(id) NOT NULL"
+        uuid requested_by FK "profiles(id) NOT NULL"
+        uuid approved_by FK "profiles(id)"
+        text status "CHECK: draft|pending_approval|approved|rejected|closed"
+        integer headcount "DEFAULT 1"
+        integer filled_count "DEFAULT 0"
+        decimal salary_range_min
+        decimal salary_range_max
+        text employment_type "CHECK: full_time|part_time|contract|intern|consultant"
+        text experience_range "e.g., 3-5 years"
+        text location
+        text justification "Business case for the hire"
+        text approval_comments
+        timestamptz approved_at
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    job_postings {
+        uuid id PK
+        uuid requisition_id FK "job_requisitions(id) NOT NULL"
+        text jd_text "NOT NULL"
+        jsonb form_schema "Dynamic application form definition"
+        integer form_version "DEFAULT 1 — incremented on schema change"
+        boolean requires_assessment "DEFAULT false"
+        uuid assessment_id FK "assessments(id), nullable"
+        text status "CHECK: draft|published|paused|closed|archived"
+        text channel "career_portal|linkedin|naukri|internal"
+        timestamptz published_at
+        timestamptz expires_at
+        timestamptz closed_at
+        uuid created_by FK "profiles(id)"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+```
+
+### 3.2 What This Replaces
+
+| Current Table | Becomes | Migration Path |
+|--------------|---------|---------------|
+| `job_forms` | `job_postings` | Rename + add missing columns. All existing `job_forms.id` references become `job_postings.id` |
+| `recruitment_posts` | Merged into `job_postings` | Copy data into `job_postings`, matching on `recruitment_posts.job_form_id`. Orphaned posts (no `job_form_id`) get auto-created requisitions |
+| None (missing) | `job_requisitions` | **NEW** — Every existing `job_posting` gets a retrospective requisition |
+| None (missing) | `departments` | **NEW** — Populated from DISTINCT `profiles.department` values |
+
+### 3.3 Form Versioning Strategy
+
+```
+When HR modifies a job posting's form_schema:
+  1. Increment form_version
+  2. Store snapshot in form_version_history JSONB column OR separate table
+  3. Every application records the form_version at submission time
+  4. Historical applications render using their frozen schema version
+  
+This ensures: editing a form NEVER changes how past applications display.
+```
+
+---
+
+## 4. APPLICATION DATA MODEL
+
+### 4.1 Enterprise Application Entity — THE Single Source of Truth
+
+```mermaid
+erDiagram
+    candidates ||--o{ applications : submits
+    job_postings ||--o{ applications : receives
+    applications ||--o{ application_stage_history : tracks
+    applications ||--o{ assessment_assignments : triggers
+    applications ||--o{ interview_rounds : schedules
+    applications ||--o| offer_letters : generates
+
+    applications {
+        uuid id PK
+        uuid candidate_id FK "candidates(id) NOT NULL"
+        uuid job_posting_id FK "job_postings(id) NOT NULL"
+        jsonb answers "Form responses at submission time"
+        integer form_version "Frozen form version at submission"
+        text resume_url "Resume used for THIS application"
+        text stage "CHECK constraint — 13 valid stages"
+        integer ai_score "0-100, from ATS screening"
+        text ai_verdict "shortlist|review|reject"
+        jsonb ai_analysis "Structured: { matching_skills, missing_skills, experience_fit }"
+        text rejection_reason
+        text rejection_category "CHECK: underqualified|overqualified|cultural_fit|compensation|position_filled|other"
+        uuid stage_changed_by FK "profiles(id)"
+        timestamptz stage_changed_at
+        text source "career_portal|referral|ats_upload|agency|internal"
+        uuid referred_by FK "profiles(id)"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+```
+
+### 4.2 Stage CHECK Constraint — The State Machine
+
+```
+VALID STAGES (13):
+  applied
+  screening         — AI scan in progress
+  shortlisted       — AI passed, HR reviewing
+  assessment        — Assessment assigned
+  interview         — Interview rounds in progress
+  offer_pending     — Offer being drafted/approved
+  offer_sent        — Offer dispatched to candidate
+  offer_accepted    — Candidate accepted
+  offer_declined    — Candidate declined
+  onboarding        — Pre-joining activities
+  hired             — Employee record created
+  rejected          — At any point
+  withdrawn         — Candidate self-withdrew
+
+VALID TRANSITIONS (enforced by DB trigger):
+  applied       → screening, rejected, withdrawn
+  screening     → shortlisted, rejected, withdrawn
+  shortlisted   → assessment, interview, rejected, withdrawn, on_hold
+  assessment    → interview, rejected, withdrawn
+  interview     → offer_pending, rejected, withdrawn
+  offer_pending → offer_sent, rejected
+  offer_sent    → offer_accepted, offer_declined
+  offer_accepted→ onboarding
+  onboarding    → hired
+```
+
+### 4.3 Stage History Table — Audit Trail
+
+```mermaid
+erDiagram
+    applications ||--o{ application_stage_history : tracks
+
+    application_stage_history {
+        uuid id PK
+        uuid application_id FK "applications(id) NOT NULL"
+        text from_stage
+        text to_stage "NOT NULL"
+        uuid changed_by FK "profiles(id) NOT NULL"
+        text change_reason
+        timestamptz changed_at "DEFAULT now()"
+        integer time_in_previous_stage_hours "Computed"
+    }
+```
+
+**Every stage transition inserts a row.** This enables:
+- Pipeline velocity: AVG time per stage
+- Time-to-hire: first `applied` to `hired`
+- Recruiter productivity: transitions per recruiter per day
+- Compliance: who moved whom and why
+
+### 4.4 UNIQUE Constraint — Duplicate Prevention
+
+```
+UNIQUE (candidate_id, job_posting_id)
+
+This means:
+  ✅ Candidate A can apply to Job 1 AND Job 2 (different posting IDs)
+  ❌ Candidate A cannot apply to Job 1 twice (same posting ID)
+  ✅ Candidate A can re-apply to Job 1 AFTER withdrawal (if application is deleted/archived)
+```
+
+### 4.5 What This Replaces
+
+| Current Table | Fate | Data Migration |
+|--------------|------|---------------|
+| `job_applications` | **ABSORBED** into `applications` | Copy `id, form_id→job_posting_id, candidate_id, answers, resume_url, match_score→ai_score, ai_verdict, status→stage, created_at` |
+| `candidate_applications` | **ABSORBED** into `applications` | For records not already in `job_applications`: copy `id, candidate_id, job_form_id→job_posting_id, status→stage, ai_score, created_at` |
+| `candidates.stage` | **REMOVED** | No migration — column simply dropped |
+| `candidates.ats_score` | **REMOVED** | Data exists on applications now |
+| `candidates.recommendation` | **REMOVED** | Captured in `applications.ai_verdict` |
+
+---
+
+## 5. ASSESSMENT DATA MODEL
+
+### 5.1 Enterprise Assessment Architecture
+
+```mermaid
+erDiagram
+    assessments ||--o{ assessment_questions : contains
+    assessments ||--o{ assessment_answer_keys : "stores answers (SERVER ONLY)"
+    applications ||--o{ assessment_assignments : triggers
+    assessment_assignments ||--o{ assessment_submissions : records
+    assessment_assignments ||--o{ proctoring_violations : logs
+
+    assessments {
+        uuid id PK
+        text title "NOT NULL"
+        text description
+        uuid job_posting_id FK "job_postings(id) — links test to specific job"
+        text category "CHECK: technical|aptitude|psychometric|coding|domain"
+        integer time_limit_minutes "NOT NULL"
+        integer passing_score "Cutoff percentage"
+        integer max_attempts "DEFAULT 1"
+        text status "CHECK: draft|active|archived"
+        uuid created_by FK "profiles(id)"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    assessment_questions {
+        uuid id PK
+        uuid assessment_id FK "assessments(id) NOT NULL"
+        integer question_number "NOT NULL — ordering"
+        text question_text "NOT NULL"
+        text question_type "CHECK: mcq|true_false|short_answer|coding"
+        jsonb options "For MCQ: ['Option A', 'Option B', 'Option C', 'Option D']"
+        integer marks "DEFAULT 1"
+        text difficulty "CHECK: easy|medium|hard"
+        timestamptz created_at
+    }
+
+    assessment_answer_keys {
+        uuid id PK
+        uuid question_id FK "assessment_questions(id) NOT NULL, UNIQUE"
+        text correct_answer "NOT NULL"
+        text explanation "Why this is correct"
+    }
+
+    assessment_assignments {
+        uuid id PK
+        uuid application_id FK "applications(id) NOT NULL"
+        uuid assessment_id FK "assessments(id) NOT NULL"
+        text access_token "UNIQUE, NOT NULL — candidate enters this"
+        text status "CHECK: assigned|in_progress|completed|expired|graded"
+        integer score
+        integer percentage
+        boolean passed
+        integer attempt_number "DEFAULT 1"
+        timestamptz started_at
+        timestamptz completed_at
+        timestamptz expires_at "NOT NULL"
+        timestamptz created_at
+    }
+
+    assessment_submissions {
+        uuid id PK
+        uuid assignment_id FK "assessment_assignments(id) NOT NULL"
+        uuid question_id FK "assessment_questions(id) NOT NULL"
+        text candidate_answer
+        boolean is_correct "Set by grading function"
+        integer marks_awarded
+        timestamptz answered_at
+    }
+
+    proctoring_violations {
+        uuid id PK
+        uuid assignment_id FK "assessment_assignments(id) NOT NULL"
+        text violation_type "CHECK: tab_switch|copy_paste|screen_share|face_missing|multiple_faces"
+        text details
+        timestamptz occurred_at "NOT NULL"
+    }
+```
+
+### 5.2 Security Architecture
+
+```
+CLIENT can access:
+  ✅ assessments (title, description, time_limit, status)
+  ✅ assessment_questions (question_text, options) — via RLS filtered to assigned assessments only
+  ✅ assessment_assignments (own assignments only)
+  ✅ assessment_submissions (own submissions only)
+
+CLIENT CANNOT access:
+  ❌ assessment_answer_keys — RLS: SELECT denied for all except service_role
+  ❌ Other candidates' assignments or submissions
+
+GRADING happens in Edge Function (server-side):
+  1. Receives assignment_id
+  2. Fetches submissions + answer_keys using service_role
+  3. Computes score
+  4. Updates assignment.score, assignment.passed
+  5. Updates applications.stage → 'interview' (if passed) or 'rejected' (if failed)
+```
+
+### 5.3 What This Replaces
+
+| Current | Enterprise Target |
+|---------|------------------|
+| `assessments.questions` (JSONB with answers embedded) | Separate `assessment_questions` + `assessment_answer_keys` tables |
+| `assessment_tokens` (conflicting `used` vs `status`) | `assessment_assignments` with standardized `status` CHECK |
+| `candidate_assessments` (unclear purpose) | **REMOVED** — absorbed into `assessment_assignments` |
+| `assessment_attempts` (1 file reference) | **REMOVED** — absorbed into `assessment_assignments.attempt_number` |
+| Proctoring violations in React state only | `proctoring_violations` table |
+| No per-question submission tracking | `assessment_submissions` table |
+
+---
+
+## 6. INTERVIEW DATA MODEL
+
+### 6.1 Enterprise Interview Architecture
+
+```mermaid
+erDiagram
+    applications ||--o{ interview_rounds : schedules
+    interview_rounds ||--o{ interview_feedback : "receives from panel"
+    
+    interview_rounds {
+        uuid id PK
+        uuid application_id FK "applications(id) NOT NULL"
+        integer round_number "NOT NULL — sequencing"
+        text round_type "CHECK: phone_screen|technical|system_design|behavioral|culture_fit|hr|final"
+        text status "CHECK: scheduled|in_progress|completed|cancelled|no_show|rescheduled"
+        timestamptz scheduled_at "NOT NULL"
+        integer duration_minutes "DEFAULT 60"
+        text meeting_link
+        text meeting_provider "CHECK: google_meet|zoom|teams|in_person"
+        text overall_recommendation "CHECK: strong_hire|hire|no_hire|strong_no_hire — set after all feedback"
+        integer overall_score "0-100 — computed average from feedback"
+        text notes "HR notes"
+        integer reschedule_count "DEFAULT 0"
+        uuid created_by FK "profiles(id)"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    interview_feedback {
+        uuid id PK
+        uuid round_id FK "interview_rounds(id) NOT NULL"
+        uuid interviewer_id FK "profiles(id) NOT NULL"
+        integer technical_score "0-100"
+        integer communication_score "0-100"
+        integer problem_solving_score "0-100"
+        integer culture_fit_score "0-100"
+        integer overall_score "0-100"
+        text recommendation "CHECK: strong_hire|hire|no_hire|strong_no_hire"
+        text strengths
+        text weaknesses
+        text detailed_feedback
+        boolean is_submitted "DEFAULT false — becomes immutable when true"
+        timestamptz submitted_at
+        timestamptz created_at
+    }
+```
+
+### 6.2 Interview Workflow Rules
+
+```
+SCHEDULING:
+  Round N cannot be scheduled until Round N-1 status = 'completed'
+  Enforced by: DB trigger on interview_rounds INSERT
+  
+FEEDBACK:
+  Each round can have 1-5 interviewers (panel support)
+  Each interviewer submits independent feedback
+  Feedback is IMMUTABLE after is_submitted = true
+  Enforced by: UPDATE trigger — reject if is_submitted was already true
+  
+SCORING:
+  interview_rounds.overall_score = AVG(interview_feedback.overall_score)
+  Computed by: trigger on interview_feedback INSERT/UPDATE
+  
+RECOMMENDATION:
+  interview_rounds.overall_recommendation = majority vote of feedback recommendations
+  If unanimous strong_hire → strong_hire
+  If majority hire → hire
+  If any strong_no_hire → strong_no_hire
+  Otherwise → no_hire
+  
+STAGE PROGRESSION:
+  All rounds completed + final round = hire → applications.stage = 'offer_pending'
+  Any round = strong_no_hire → applications.stage = 'rejected'
+```
+
+### 6.3 What This Replaces
+
+| Current | Enterprise Target |
+|---------|------------------|
+| `interview_sessions` (single table, no interviewer) | `interview_rounds` + `interview_feedback` (normalized) |
+| AI-generated scores | **REMOVED** — Human interviewers submit scores |
+| All scores visible to candidates | RLS: candidates see round `status` only, not scores/feedback |
+| Free-text `round_name` | `round_number` INTEGER + `round_type` CHECK |
+| Feedback mutable forever | `is_submitted` flag → immutable after submission |
+| No no-show tracking | `no_show` status on interview_rounds |
+
+---
+
+## 7. ONBOARDING DATA MODEL
+
+### 7.1 Enterprise Onboarding Architecture
+
+```mermaid
+erDiagram
+    applications ||--o| offer_letters : generates
+    offer_letters ||--o| onboarding_records : initiates
+    onboarding_records ||--o{ onboarding_tasks : contains
+    onboarding_records ||--|| profiles : "creates employee"
+
+    offer_letters {
+        uuid id PK
+        uuid application_id FK "applications(id) NOT NULL, UNIQUE"
+        uuid candidate_id FK "candidates(id) NOT NULL"
+        decimal offered_ctc "NOT NULL"
+        text designation "NOT NULL"
+        uuid department_id FK "departments(id) NOT NULL"
+        uuid reporting_to FK "profiles(id)"
+        date joining_date "NOT NULL"
+        text employment_type "CHECK: full_time|part_time|contract|intern"
+        text offer_document_url "Stored in private bucket"
+        text status "CHECK: draft|pending_approval|approved|sent|accepted|declined|revoked|expired"
+        uuid approved_by FK "profiles(id)"
+        text approval_comments
+        timestamptz approved_at
+        timestamptz sent_at
+        timestamptz responded_at
+        text decline_reason
+        integer version "DEFAULT 1 — for revised offers"
+        uuid created_by FK "profiles(id)"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    onboarding_records {
+        uuid id PK
+        uuid offer_letter_id FK "offer_letters(id) NOT NULL, UNIQUE"
+        uuid candidate_id FK "candidates(id) NOT NULL"
+        uuid employee_profile_id FK "profiles(id) — set when employee record created"
+        text employee_code "UNIQUE, generated from sequence"
+        text status "CHECK: pre_boarding|in_progress|completed|cancelled"
+        date actual_joining_date
+        uuid processed_by FK "profiles(id)"
+        timestamptz completed_at
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    onboarding_tasks {
+        uuid id PK
+        uuid onboarding_id FK "onboarding_records(id) NOT NULL"
+        text task_name "NOT NULL"
+        text category "CHECK: hr|it|finance|admin|legal|facilities"
+        text description
+        uuid assigned_to FK "profiles(id)"
+        text status "CHECK: pending|in_progress|completed|blocked"
+        date due_date
+        timestamptz completed_at
+        text completion_notes
+        integer sort_order
+        timestamptz created_at
+    }
+```
+
+### 7.2 Employee Code Generation
+
+```
+CREATE SEQUENCE employee_code_seq START 1;
+
+Employee code format: FWC-{zero-padded 5-digit sequence}
+Examples: FWC-00001, FWC-00002, FWC-00003
+
+Generated by DB trigger on onboarding_records INSERT:
+  employee_code = 'FWC-' || LPAD(nextval('employee_code_seq')::text, 5, '0')
+```
+
+### 7.3 Default Onboarding Checklist
+
+When an `onboarding_record` is created, auto-populate `onboarding_tasks`:
+
+| # | Task | Category | Assigned To |
+|---|------|----------|------------|
+| 1 | Collect identity documents | HR | HR Manager |
+| 2 | Verify educational certificates | HR | HR Manager |
+| 3 | Background check clearance | HR | BGC Team |
+| 4 | Create email account | IT | IT Admin |
+| 5 | Provision laptop/workstation | IT | IT Admin |
+| 6 | Issue employee badge | Facilities | Admin |
+| 7 | Add to payroll system | Finance | Payroll Manager |
+| 8 | Configure tax regime | Finance | Payroll Manager |
+| 9 | Add to health insurance | HR | Benefits Admin |
+| 10 | NDA / confidentiality agreement | Legal | Legal Team |
+| 11 | Assign reporting manager | HR | HR Manager |
+| 12 | Schedule orientation session | HR | HR Manager |
+| 13 | Assign department + seating | Admin | Facilities |
+| 14 | Create system access (VPN, tools) | IT | IT Admin |
+| 15 | 30-day check-in scheduled | HR | Reporting Manager |
+
+### 7.4 Single Onboarding Pathway
+
+```
+CURRENT: Two competing pathways (OnboardingCenter + DocumentVault)
+TARGET: ONE pathway (OnboardingCenter) with these steps:
+
+  1. Offer accepted → onboarding_record auto-created
+  2. HR views onboarding dashboard → sees checklist
+  3. Each task checked off by assigned owner
+  4. All tasks complete → onboarding_record.status = 'completed'
+  5. DB trigger creates profiles record with role = 'employee'
+  6. candidates.profile_id linked to new employee profile
+  7. applications.stage = 'hired'
+
+DocumentVault becomes ONLY a document management tool — no "Convert to Employee" button.
+```
+
+---
+
+## 8. EMPLOYEE DATA MODEL
+
+### 8.1 Enterprise Employee Profile
+
+The `profiles` table is cleaned to store only identity and employment metadata:
+
+```
+profiles (CLEANED):
+  id                    UUID PK REFERENCES auth.users(id)
+  email                 TEXT NOT NULL UNIQUE
+  full_name             TEXT NOT NULL
+  phone                 TEXT
+  role                  TEXT NOT NULL CHECK (admin|hr|team_lead|employee|candidate)
+  department_id         UUID FK → departments(id)
+  reporting_manager_id  UUID FK → profiles(id)
+  employee_code         TEXT UNIQUE
+  designation           TEXT
+  employment_type       TEXT CHECK (full_time|part_time|contract|intern)
+  employment_status     TEXT CHECK (active|probation|pip|notice_period|suspended|terminated|resigned)
+  date_of_joining       DATE
+  date_of_birth         DATE
+  probation_end_date    DATE
+  avatar_url            TEXT
+  created_at            TIMESTAMPTZ
+  updated_at            TIMESTAMPTZ
+
+REMOVED from profiles:
+  ❌ payroll_ctc          → payroll_records table
+  ❌ performance_score    → performance_reviews table
+  ❌ performance_history  → performance_reviews table
+  ❌ education            → candidates.parsed_resume_data OR employee_documents
+  ❌ experience           → candidates.parsed_resume_data
+  ❌ core_skills          → candidates.parsed_resume_data
+  ❌ department (string)  → department_id FK
+```
+
+### 8.2 Organizational Hierarchy
+
+```
+Company
+  └── Departments (departments table)
+       └── Teams (implicit via reporting_manager_id)
+            └── Employees (profiles WHERE role = 'employee')
+
+Hierarchy query:
+  WITH RECURSIVE org_tree AS (
+    SELECT id, full_name, reporting_manager_id, 0 as depth
+    FROM profiles WHERE reporting_manager_id IS NULL AND role != 'candidate'
+    UNION ALL
+    SELECT p.id, p.full_name, p.reporting_manager_id, ot.depth + 1
+    FROM profiles p JOIN org_tree ot ON p.reporting_manager_id = ot.id
+  )
+  SELECT * FROM org_tree ORDER BY depth, full_name;
+```
+
+---
+
+## 9. RESUME MANAGEMENT ARCHITECTURE
+
+### 9.1 Storage Architecture
+
+```
+Storage Bucket: resumes (PRIVATE — not public)
+
+File Path Convention:
+  candidates/{candidate_id}/v{version}/{original_filename}
+  
+Example:
+  candidates/abc-123/v1/john_doe_resume.pdf
+  candidates/abc-123/v2/john_doe_resume_updated.pdf
+
+Access Method:
+  createSignedUrl('resumes', path, { expiresIn: 3600 })
+  NOT getPublicUrl() — resumes contain PII
+```
+
+### 9.2 Resume Version Tracking
+
+```mermaid
+erDiagram
+    candidates ||--o{ candidate_resumes : uploads
+
+    candidate_resumes {
+        uuid id PK
+        uuid candidate_id FK "candidates(id) NOT NULL"
+        text storage_path "NOT NULL"
+        text original_filename
+        integer file_size_bytes
+        text mime_type "CHECK: application/pdf|application/vnd.openxmlformats..."
+        integer version "NOT NULL"
+        boolean is_current "DEFAULT true"
+        text parsed_text "Raw extracted text"
+        jsonb parsed_data "Structured: { skills, experience, education }"
+        uuid parsed_by "Edge function ID or 'manual'"
+        timestamptz uploaded_at
+        timestamptz parsed_at
+    }
+```
+
+### 9.3 Upload Validation Rules
+
+| Validation | Client-Side | Server-Side (Storage Policy) |
+|-----------|------------|----------------------------|
+| File size | Max 10MB | Storage bucket policy: 10MB limit |
+| File type | `.pdf`, `.docx`, `.doc` only | MIME type check in edge function |
+| Filename sanitization | Strip special characters | Storage path uses UUID, not original name |
+| Duplicate prevention | Check if `is_current` version exists | UPSERT disabled — always create new version |
+| Malware scan | N/A | Future: integrate with ClamAV via edge function |
+
+### 9.4 Resume Parsing Pipeline
+
+```
+Upload Flow:
+  1. Client validates file type + size
+  2. Client uploads to private bucket via signed upload URL
+  3. DB trigger on candidate_resumes INSERT fires
+  4. Trigger invokes parse-resume Edge Function
+  5. Edge Function:
+     a. Downloads file from storage
+     b. Extracts text (pdf.js for PDF, mammoth for DOCX) — SERVER-SIDE
+     c. Sends text to AI for structured extraction
+     d. Updates candidate_resumes.parsed_data with structured JSON
+     e. Updates candidates.parsed_resume_data with latest version
+  6. Client receives success response
+```
+
+---
+
+## 10. DUPLICATE PREVENTION STRATEGY
+
+### 10.1 Candidate Deduplication
+
+| Level | Strategy | Implementation |
+|-------|---------|---------------|
+| **Primary key** | Email address | `UNIQUE(email)` on `candidates` table |
+| **Secondary check** | Phone number | Advisory check — same phone suggests duplicate |
+| **Fuzzy match** | Name similarity | `pg_trgm` extension for `similarity(a.full_name, b.full_name) > 0.8` |
+| **Merge capability** | Admin can merge duplicate candidates | Merge function: reassign all applications to surviving record, delete duplicate |
+
+### 10.2 Application Deduplication
+
+| Level | Strategy | Implementation |
+|-------|---------|---------------|
+| **Database** | One application per candidate per job | `UNIQUE(candidate_id, job_posting_id)` |
+| **UI** | "Already Applied" badge | Frontend checks before showing apply button |
+| **Re-application** | Withdraw + reapply | Candidate withdraws → application archived → can create new one |
+
+### 10.3 Assessment Deduplication
+
+| Level | Strategy | Implementation |
+|-------|---------|---------------|
+| **Database** | One active assignment per application per assessment | `UNIQUE(application_id, assessment_id) WHERE status != 'expired'` |
+| **Retake** | `attempt_number` increments | Max attempts controlled by `assessments.max_attempts` |
+
+### 10.4 Resume Deduplication
+
+| Level | Strategy | Implementation |
+|-------|---------|---------------|
+| **Versioning** | Never overwrite | Each upload creates new version; `is_current` flag rotated |
+| **Content hash** | SHA-256 of file content | Prevent exact duplicate uploads (optional, Phase 12 enhancement) |
+
+### 10.5 Employee Deduplication
+
+| Level | Strategy | Implementation |
+|-------|---------|---------------|
+| **Database** | Email unique across profiles | `UNIQUE(email)` on `profiles` |
+| **Employee code** | Sequence-generated | `UNIQUE(employee_code)` — no `EMP-{timestamp}` collisions |
+| **Candidate → Employee** | Profile linking | `candidates.profile_id` FK links to new employee `profiles` record |
+
+---
+
+## 11. REFERENTIAL INTEGRITY PLAN
+
+### 11.1 Complete FK Map
+
+| Child Table | Child Column | Parent Table | Parent Column | ON DELETE | ON UPDATE |
+|-------------|-------------|-------------|--------------|-----------|-----------|
+| `profiles` | `id` | `auth.users` | `id` | CASCADE | CASCADE |
+| `profiles` | `department_id` | `departments` | `id` | SET NULL | CASCADE |
+| `profiles` | `reporting_manager_id` | `profiles` | `id` | SET NULL | CASCADE |
+| `candidates` | `profile_id` | `profiles` | `id` | SET NULL | CASCADE |
+| `candidates` | `referred_by` | `profiles` | `id` | SET NULL | CASCADE |
+| `job_requisitions` | `department_id` | `departments` | `id` | RESTRICT | CASCADE |
+| `job_requisitions` | `hiring_manager_id` | `profiles` | `id` | RESTRICT | CASCADE |
+| `job_requisitions` | `requested_by` | `profiles` | `id` | RESTRICT | CASCADE |
+| `job_postings` | `requisition_id` | `job_requisitions` | `id` | RESTRICT | CASCADE |
+| `job_postings` | `assessment_id` | `assessments` | `id` | SET NULL | CASCADE |
+| `job_postings` | `created_by` | `profiles` | `id` | RESTRICT | CASCADE |
+| `applications` | `candidate_id` | `candidates` | `id` | RESTRICT | CASCADE |
+| `applications` | `job_posting_id` | `job_postings` | `id` | RESTRICT | CASCADE |
+| `applications` | `stage_changed_by` | `profiles` | `id` | SET NULL | CASCADE |
+| `assessment_questions` | `assessment_id` | `assessments` | `id` | CASCADE | CASCADE |
+| `assessment_answer_keys` | `question_id` | `assessment_questions` | `id` | CASCADE | CASCADE |
+| `assessment_assignments` | `application_id` | `applications` | `id` | CASCADE | CASCADE |
+| `assessment_assignments` | `assessment_id` | `assessments` | `id` | RESTRICT | CASCADE |
+| `assessment_submissions` | `assignment_id` | `assessment_assignments` | `id` | CASCADE | CASCADE |
+| `assessment_submissions` | `question_id` | `assessment_questions` | `id` | RESTRICT | CASCADE |
+| `proctoring_violations` | `assignment_id` | `assessment_assignments` | `id` | CASCADE | CASCADE |
+| `interview_rounds` | `application_id` | `applications` | `id` | CASCADE | CASCADE |
+| `interview_rounds` | `created_by` | `profiles` | `id` | SET NULL | CASCADE |
+| `interview_feedback` | `round_id` | `interview_rounds` | `id` | CASCADE | CASCADE |
+| `interview_feedback` | `interviewer_id` | `profiles` | `id` | RESTRICT | CASCADE |
+| `offer_letters` | `application_id` | `applications` | `id` | RESTRICT | CASCADE |
+| `offer_letters` | `candidate_id` | `candidates` | `id` | RESTRICT | CASCADE |
+| `offer_letters` | `department_id` | `departments` | `id` | RESTRICT | CASCADE |
+| `offer_letters` | `approved_by` | `profiles` | `id` | SET NULL | CASCADE |
+| `offer_letters` | `created_by` | `profiles` | `id` | RESTRICT | CASCADE |
+| `onboarding_records` | `offer_letter_id` | `offer_letters` | `id` | RESTRICT | CASCADE |
+| `onboarding_records` | `candidate_id` | `candidates` | `id` | RESTRICT | CASCADE |
+| `onboarding_records` | `employee_profile_id` | `profiles` | `id` | SET NULL | CASCADE |
+| `onboarding_tasks` | `onboarding_id` | `onboarding_records` | `id` | CASCADE | CASCADE |
+| `onboarding_tasks` | `assigned_to` | `profiles` | `id` | SET NULL | CASCADE |
+| `candidate_resumes` | `candidate_id` | `candidates` | `id` | CASCADE | CASCADE |
+| `application_stage_history` | `application_id` | `applications` | `id` | CASCADE | CASCADE |
+| `application_stage_history` | `changed_by` | `profiles` | `id` | SET NULL | CASCADE |
+| `work_logs` | `user_id` | `profiles` | `id` | RESTRICT | CASCADE |
+| `tasks` | `assigned_to` | `profiles` | `id` | SET NULL | CASCADE |
+| `tasks` | `project_id` | `projects` | `id` | CASCADE | CASCADE |
+| `leaves` | `user_id` | `profiles` | `id` | RESTRICT | CASCADE |
+| `complaints` | `user_id` | `profiles` | `id` | RESTRICT | CASCADE |
+| `notifications` | `user_id` | `profiles` | `id` | CASCADE | CASCADE |
+| `messages` | `sender_id` | `profiles` | `id` | RESTRICT | CASCADE |
+| `messages` | `receiver_id` | `profiles` | `id` | RESTRICT | CASCADE |
+| `audit_log` | `actor_id` | `profiles` | `id` | RESTRICT | CASCADE |
+
+### 11.2 CHECK Constraints
+
+| Table | Column | Valid Values |
+|-------|--------|-------------|
+| `profiles` | `role` | `admin`, `hr`, `team_lead`, `employee`, `candidate` |
+| `profiles` | `employment_status` | `active`, `probation`, `pip`, `notice_period`, `suspended`, `terminated`, `resigned` |
+| `candidates` | `source` | `career_portal`, `referral`, `linkedin`, `agency`, `campus`, `internal`, `ats_upload` |
+| `job_requisitions` | `status` | `draft`, `pending_approval`, `approved`, `rejected`, `closed` |
+| `job_postings` | `status` | `draft`, `published`, `paused`, `closed`, `archived` |
+| `applications` | `stage` | 13 stages (listed in Section 4.2) |
+| `applications` | `rejection_category` | `underqualified`, `overqualified`, `cultural_fit`, `compensation`, `position_filled`, `other` |
+| `assessments` | `status` | `draft`, `active`, `archived` |
+| `assessment_assignments` | `status` | `assigned`, `in_progress`, `completed`, `expired`, `graded` |
+| `interview_rounds` | `status` | `scheduled`, `in_progress`, `completed`, `cancelled`, `no_show`, `rescheduled` |
+| `interview_rounds` | `round_type` | `phone_screen`, `technical`, `system_design`, `behavioral`, `culture_fit`, `hr`, `final` |
+| `interview_feedback` | `recommendation` | `strong_hire`, `hire`, `no_hire`, `strong_no_hire` |
+| `offer_letters` | `status` | `draft`, `pending_approval`, `approved`, `sent`, `accepted`, `declined`, `revoked`, `expired` |
+| `onboarding_records` | `status` | `pre_boarding`, `in_progress`, `completed`, `cancelled` |
+| `onboarding_tasks` | `status` | `pending`, `in_progress`, `completed`, `blocked` |
+| `onboarding_tasks` | `category` | `hr`, `it`, `finance`, `admin`, `legal`, `facilities` |
+
+### 11.3 UNIQUE Constraints
+
+| Table | Columns | Purpose |
+|-------|---------|---------|
+| `candidates` | `email` | One candidate per email |
+| `profiles` | `email` | One user per email |
+| `profiles` | `employee_code` WHERE NOT NULL | Unique employee IDs |
+| `applications` | `(candidate_id, job_posting_id)` | Prevent duplicate applications |
+| `assessment_assignments` | `access_token` | Unique assessment access tokens |
+| `assessment_assignments` | `(application_id, assessment_id, attempt_number)` | One attempt per assignment |
+| `offer_letters` | `application_id` | One offer per application |
+| `onboarding_records` | `offer_letter_id` | One onboarding per offer |
+| `onboarding_records` | `employee_code` | Unique employee codes |
+| `departments` | `name` | No duplicate department names |
+
+---
+
+## 12. SCALABILITY PLAN
+
+### 12.1 Table Size Projections (3-Year Horizon)
+
+| Table | Year 1 | Year 3 | Partition? | Archive? |
+|-------|--------|--------|-----------|---------|
+| `candidates` | 15,000 | 100,000 | By `created_at` year | After 5 years |
+| `applications` | 50,000 | 500,000 | By `created_at` month | After 2 years → cold storage |
+| `application_stage_history` | 200,000 | 2,000,000 | By `changed_at` month | After 1 year → cold |
+| `assessment_submissions` | 500,000 | 5,000,000 | By `answered_at` month | After 1 year → cold |
+| `interview_rounds` | 10,000 | 100,000 | No | After 3 years |
+| `interview_feedback` | 20,000 | 200,000 | No | After 3 years |
+| `work_logs` | 365,000 | 1,100,000 | By month | After 2 years |
+| `messages` | 500,000 | 5,000,000 | By month | After 6 months → cold |
+| `notifications` | 200,000 | 1,000,000 | By month + TTL auto-delete | After 90 days |
+| `audit_log` | 100,000 | 1,000,000 | By month | After 3 years (compliance) |
+
+### 12.2 Connection Pooling
+
+```
+Supabase pgBouncer configuration:
+  pool_mode: transaction
+  max_connections: 200
+  default_pool_size: 15
+
+Expected concurrent connections:
+  100 HR users + 50 employees + 20 candidates + Edge Functions = ~200
+```
+
+### 12.3 Query Performance Targets
+
+| Query | Target Latency | Current (Estimated) | Fix |
+|-------|---------------|-------------------|-----|
+| Dashboard metrics | <100ms | 2-5 seconds | Database views |
+| Application list (paginated) | <200ms | 3-10 seconds | Cursor pagination + indexes |
+| Candidate search | <300ms | 1-5 seconds | pg_trgm index |
+| Pipeline funnel counts | <100ms | 500ms-2s | Materialized view |
+| Badge counts | <50ms | 500ms (4-5 queries) | Single view query |
+
+---
+
+## 13. SEARCH OPTIMIZATION PLAN
+
+### 13.1 Full-Text Search Setup
+
+```
+Enable pg_trgm extension:
+  CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+Candidate name search (fuzzy):
+  CREATE INDEX idx_candidates_name_trgm ON candidates USING GIN (full_name gin_trgm_ops);
+  
+  Query: SELECT * FROM candidates 
+         WHERE full_name % 'John Doe' 
+         ORDER BY similarity(full_name, 'John Doe') DESC
+         LIMIT 20;
+
+Candidate email search (exact prefix):
+  CREATE INDEX idx_candidates_email_trgm ON candidates USING GIN (email gin_trgm_ops);
+
+Job title search:
+  CREATE INDEX idx_postings_title_trgm ON job_postings USING GIN (jd_text gin_trgm_ops);
+```
+
+### 13.2 Indexed Search Patterns
+
+| Search Context | Query Pattern | Index Required |
+|---------------|-------------|---------------|
+| Candidates by name | `WHERE full_name ILIKE '%john%'` | GIN trigram on `full_name` |
+| Candidates by email | `WHERE email = 'exact@email.com'` | B-tree UNIQUE on `email` |
+| Applications by stage | `WHERE stage = 'interview'` | B-tree on `stage` |
+| Applications by job | `WHERE job_posting_id = $1` | B-tree on `job_posting_id` |
+| Applications by candidate | `WHERE candidate_id = $1` | B-tree on `candidate_id` |
+| Applications by date range | `WHERE created_at BETWEEN $1 AND $2` | B-tree on `created_at` |
+| Applications composite filter | `WHERE job_posting_id = $1 AND stage = $2` | Composite `(job_posting_id, stage)` |
+| Interview by scheduled date | `WHERE scheduled_at BETWEEN $1 AND $2` | B-tree on `scheduled_at` |
+| Employees by department | `WHERE department_id = $1` | B-tree on `department_id` |
+| Employees by manager | `WHERE reporting_manager_id = $1` | B-tree on `reporting_manager_id` |
+| Notifications by user | `WHERE user_id = $1 ORDER BY created_at DESC` | Composite `(user_id, created_at DESC)` |
+| Audit log by entity | `WHERE entity_type = $1 AND entity_id = $2` | Composite `(entity_type, entity_id)` |
+
+---
+
+## 14. INDEXING STRATEGY
+
+### 14.1 Complete Index Inventory (32 indexes)
+
+| # | Index | Table | Column(s) | Type |
+|---|-------|-------|----------|------|
+| 1 | `idx_candidates_email` | candidates | email | UNIQUE B-tree |
+| 2 | `idx_candidates_name_trgm` | candidates | full_name | GIN trigram |
+| 3 | `idx_candidates_source` | candidates | source | B-tree |
+| 4 | `idx_candidates_profile` | candidates | profile_id | B-tree |
+| 5 | `idx_profiles_role` | profiles | role | B-tree |
+| 6 | `idx_profiles_department` | profiles | department_id | B-tree |
+| 7 | `idx_profiles_manager` | profiles | reporting_manager_id | B-tree |
+| 8 | `idx_profiles_employee_code` | profiles | employee_code | UNIQUE partial (WHERE NOT NULL) |
+| 9 | `idx_requisitions_dept` | job_requisitions | department_id | B-tree |
+| 10 | `idx_requisitions_status` | job_requisitions | status | B-tree |
+| 11 | `idx_postings_requisition` | job_postings | requisition_id | B-tree |
+| 12 | `idx_postings_status` | job_postings | status | B-tree |
+| 13 | `idx_applications_candidate` | applications | candidate_id | B-tree |
+| 14 | `idx_applications_posting` | applications | job_posting_id | B-tree |
+| 15 | `idx_applications_stage` | applications | stage | B-tree |
+| 16 | `idx_applications_composite` | applications | (candidate_id, job_posting_id) | UNIQUE B-tree |
+| 17 | `idx_applications_created` | applications | created_at | B-tree |
+| 18 | `idx_applications_posting_stage` | applications | (job_posting_id, stage) | Composite B-tree |
+| 19 | `idx_stage_history_app` | application_stage_history | application_id | B-tree |
+| 20 | `idx_stage_history_time` | application_stage_history | changed_at | B-tree |
+| 21 | `idx_assessment_posting` | assessments | job_posting_id | B-tree |
+| 22 | `idx_assignment_token` | assessment_assignments | access_token | UNIQUE B-tree |
+| 23 | `idx_assignment_application` | assessment_assignments | application_id | B-tree |
+| 24 | `idx_submissions_assignment` | assessment_submissions | assignment_id | B-tree |
+| 25 | `idx_rounds_application` | interview_rounds | application_id | B-tree |
+| 26 | `idx_rounds_scheduled` | interview_rounds | scheduled_at | B-tree |
+| 27 | `idx_feedback_round` | interview_feedback | round_id | B-tree |
+| 28 | `idx_feedback_interviewer` | interview_feedback | interviewer_id | B-tree |
+| 29 | `idx_offers_application` | offer_letters | application_id | UNIQUE B-tree |
+| 30 | `idx_onboarding_offer` | onboarding_records | offer_letter_id | UNIQUE B-tree |
+| 31 | `idx_audit_entity` | audit_log | (entity_type, entity_id) | Composite B-tree |
+| 32 | `idx_audit_actor_time` | audit_log | (actor_id, created_at DESC) | Composite B-tree |
+
+---
+
+## 15. ANALYTICS DATA MODEL
+
+### 15.1 Dashboard Views (Computed, Not Stored)
+
+| View | Purpose | Source Tables |
+|------|---------|-------------|
+| `v_org_metrics` | Headcount, dept distribution | profiles, departments |
+| `v_recruitment_funnel` | Applications by stage by job | applications, job_postings |
+| `v_pipeline_velocity` | AVG time per stage | application_stage_history |
+| `v_time_to_hire` | Median days from applied to hired | application_stage_history |
+| `v_time_to_fill` | Median days from posted to filled | job_postings, applications |
+| `v_offer_acceptance_rate` | Accepted / total offers | offer_letters |
+| `v_source_effectiveness` | Applications by source with conversion rates | applications |
+| `v_assessment_pass_rates` | Pass/fail by assessment | assessment_assignments |
+| `v_interview_pass_rates` | Hire/no-hire by round type | interview_rounds, interview_feedback |
+| `v_recruiter_productivity` | Stage transitions per recruiter per period | application_stage_history |
+| `v_payroll_summary` | Total payroll by department by month | payroll_records, departments |
+| `v_department_headcount` | Active employees by department | profiles, departments |
+
+### 15.2 Key Recruitment Metrics
+
+| Metric | Calculation | View |
+|--------|------------|------|
+| **Time to Hire** | `hired_at - applied_at` per application WHERE stage = 'hired' | `v_time_to_hire` |
+| **Time to Fill** | `first_hired_at - published_at` per job posting | `v_time_to_fill` |
+| **Pipeline Velocity** | `AVG(time_in_stage)` per stage from stage_history | `v_pipeline_velocity` |
+| **Offer Acceptance Rate** | `COUNT(accepted) / COUNT(sent)` | `v_offer_acceptance_rate` |
+| **Source Effectiveness** | `COUNT(hired WHERE source=X) / COUNT(applied WHERE source=X)` | `v_source_effectiveness` |
+| **Assessment Pass Rate** | `COUNT(passed) / COUNT(completed)` | `v_assessment_pass_rates` |
+| **Recruiter Pipeline** | `COUNT(stage_transitions) GROUP BY changed_by, DATE` | `v_recruiter_productivity` |
+| **Cost per Hire** | Requires external cost data — future phase | N/A |
+
+---
+
+## 16. AI READINESS PLAN
+
+### 16.1 Data Architecture for AI Features
+
+| AI Feature | Data Required | Table/Column | Status |
+|-----------|-------------|-------------|--------|
+| Resume Parsing | Raw file + parsed text | `candidate_resumes.parsed_text`, `parsed_data` | ✅ Designed |
+| Skill Extraction | Parsed resume data | `candidates.parsed_resume_data.skills` | ✅ Designed |
+| Candidate Scoring | Resume data + job requirements | `applications.ai_score`, `ai_analysis` | ✅ Designed |
+| Candidate Ranking | All scores for a job | `applications WHERE job_posting_id = X ORDER BY ai_score DESC` | ✅ Queryable |
+| Skill Gap Analysis | Candidate skills vs job requirements | `candidates.parsed_resume_data.skills` vs `job_postings.jd_text` requirements | ✅ Designable |
+| Interview Summarization | Feedback text from interviewers | `interview_feedback.detailed_feedback` | ✅ Designed |
+| Bias Detection | Screening decisions + candidate demographics | `applications.stage` + demographic data (future) | ⚠️ Needs demographic columns |
+| Attrition Prediction | Employee tenure, performance, leave patterns | `profiles.date_of_joining`, `performance_reviews`, `leave_requests` | ✅ Partially available |
+| Workforce Forecasting | Historical hiring + attrition data | `applications`, `separation_records` | ⚠️ Needs `separation_records` table |
+
+### 16.2 AI Data Flow Architecture
+
+```
+AI Feature Data Flow:
+
+  1. Resume uploaded → Edge Function parses → Structured data stored
+  2. Application created → Edge Function scores against JD → Score stored on applications
+  3. Assessment completed → Edge Function grades → Score stored on assignment
+  4. Interview completed → All feedback available for AI summarization
+  5. Dashboard queries → AI insights computed from views (not raw tables)
+
+All AI results are:
+  ✅ Stored in database (not client-only state)
+  ✅ Auditable (who triggered, when, what result)
+  ✅ Reproducible (input data preserved)
+  ✅ Human-reviewable (AI recommendation ≠ final decision)
+```
+
+---
+
+## 17. MIGRATION STRATEGY
+
+### 17.1 Zero-Downtime Migration Approach
+
+```
+Phase 1: ADDITIVE — Create new tables and columns alongside existing ones
+Phase 2: DUAL-WRITE — Frontend writes to BOTH old and new tables
+Phase 3: BACKFILL — Migrate historical data from old tables to new
+Phase 4: CUTOVER — Frontend reads from new tables only
+Phase 5: CLEANUP — Drop old tables after verification period
+
+This ensures: No data loss, no downtime, rollback possible at every phase.
+```
+
+### 17.2 Migration Execution Order
+
+| # | Migration | Dependencies | Risk |
+|---|-----------|-------------|------|
+| M1 | Create `departments` table | None | 🟢 Low |
+| M2 | Backfill departments from `profiles.department` strings | M1 | 🟡 Medium |
+| M3 | Add `department_id` to profiles, backfill | M2 | 🟡 Medium |
+| M4 | Create `job_requisitions` table | M1 | 🟢 Low |
+| M5 | Rename `job_forms` → `job_postings`, add missing columns | M4 | 🔴 High |
+| M6 | Merge `recruitment_posts` into `job_postings` | M5 | 🔴 High |
+| M7 | Create `applications` table (new unified) | M5 | 🟢 Low |
+| M8 | Migrate `job_applications` → `applications` | M7 | 🔴 High |
+| M9 | Migrate `candidate_applications` → `applications` (dedup) | M8 | 🔴 High |
+| M10 | Remove `stage`, `ats_score`, `recommendation` from `candidates` | M9 | 🟡 Medium |
+| M11 | Create `application_stage_history` | M7 | 🟢 Low |
+| M12 | Create `assessment_questions` + `assessment_answer_keys` | None | 🟢 Low |
+| M13 | Migrate questions from `assessments.questions` JSONB | M12 | 🟡 Medium |
+| M14 | Create `assessment_assignments` (replaces `assessment_tokens`) | M7, M12 | 🟡 Medium |
+| M15 | Create `assessment_submissions` + `proctoring_violations` | M14 | 🟢 Low |
+| M16 | Rename `interview_sessions` → `interview_rounds`, add columns | M7 | 🟡 Medium |
+| M17 | Create `interview_feedback` table | M16 | 🟢 Low |
+| M18 | Create `offer_letters` table | M7 | 🟢 Low |
+| M19 | Create `onboarding_records` + `onboarding_tasks` | M18 | 🟢 Low |
+| M20 | Create `candidate_resumes` table | None | 🟢 Low |
+| M21 | Create `audit_log` table + triggers | None | 🟢 Low |
+| M22 | Create all 32 indexes | All above | 🟢 Low |
+| M23 | Create all 12 dashboard views | All above | 🟢 Low |
+| M24 | Create all CHECK constraints | All above | 🟡 Medium |
+| M25 | Create all RLS policies | All above | 🔴 High |
+| M26 | Clean up: remove `payroll_ctc`, `performance_score`, `performance_history` from profiles | Payroll + Performance tables created | 🟡 Medium |
+| M27 | Drop old tables: `job_applications`, `candidate_applications`, `assessment_tokens`, `candidate_assessments`, `recruitment_posts` | All cutover verified | 🔴 High |
+
+### 17.3 Rollback Strategy
+
+```
+Every migration has a rollback script:
+  M5 rollback: Rename job_postings → job_forms, drop added columns
+  M8 rollback: Recreate job_applications from applications backup
+  M25 rollback: DROP all RLS policies (tables remain functional)
+  M27 rollback: Restore old tables from backup (taken before drop)
+
+Backup protocol:
+  Before M8-M9: pg_dump of job_applications + candidate_applications
+  Before M27: pg_dump of all tables being dropped
+  Retention: 90 days
+```
+
+---
+
+## 18. RISK ASSESSMENT
+
+### 18.1 Migration Risk Matrix
+
+| Migration | Data Loss Risk | Downtime Risk | Feature Break Risk | Overall |
+|-----------|---------------|--------------|-------------------|---------|
+| M1-M4 (New tables) | 🟢 None | 🟢 None | 🟢 None | 🟢 Low |
+| M5-M6 (Job unification) | 🟡 Medium | 🟢 Low | 🔴 High | 🔴 High |
+| M8-M9 (App unification) | 🔴 High | 🟡 Medium | 🔴 High | 🔴 Critical |
+| M10 (Drop candidate columns) | 🟡 Medium | 🟢 None | 🟡 Medium | 🟡 Medium |
+| M12-M15 (Assessment redesign) | 🟡 Medium | 🟢 Low | 🟡 Medium | 🟡 Medium |
+| M16-M17 (Interview redesign) | 🟢 Low | 🟢 Low | 🟡 Medium | 🟢 Low |
+| M18-M19 (Offer + Onboarding) | 🟢 None (new) | 🟢 None | 🟢 Low | 🟢 Low |
+| M25 (RLS policies) | 🟢 None | 🟡 Medium | 🔴 High | 🔴 High |
+| M27 (Drop old tables) | 🔴 High | 🟢 None | 🟡 Medium | 🔴 High |
+
+### 18.2 Critical Risk Mitigations
+
+| Risk | Probability | Impact | Mitigation |
+|------|------------|--------|-----------|
+| Application data lost during M8-M9 | Medium | Critical | Full pg_dump before migration + row-count verification after |
+| RLS policies break existing queries | High | Critical | Test in Supabase branch/staging first; deploy per-table |
+| Dual-write period causes divergence | Medium | High | Add reconciliation check query; run every 6 hours |
+| form_id → job_posting_id rename breaks reads | High | High | Add column alias in same transaction as rename |
+| Department string normalization misses variations | High | Medium | Manual review of DISTINCT values before migration |
+
+---
+
+## FINAL PRODUCTION DATABASE ARCHITECTURE
+
+```mermaid
+erDiagram
+    departments ||--o{ job_requisitions : raises
+    departments ||--o{ profiles : employs
+    
+    job_requisitions ||--o{ job_postings : publishes
+    job_postings ||--o{ applications : receives
+    job_postings ||--o| assessments : requires
+    
+    candidates ||--o{ applications : submits
+    candidates ||--o{ candidate_resumes : uploads
+    candidates ||--o| profiles : "becomes employee"
+    
+    applications ||--o{ application_stage_history : tracks
+    applications ||--o{ assessment_assignments : triggers
+    applications ||--o{ interview_rounds : schedules
+    applications ||--o| offer_letters : generates
+    
+    assessments ||--o{ assessment_questions : contains
+    assessment_questions ||--|| assessment_answer_keys : "has answer (SERVER ONLY)"
+    assessment_assignments ||--o{ assessment_submissions : records
+    assessment_assignments ||--o{ proctoring_violations : logs
+    
+    interview_rounds ||--o{ interview_feedback : "receives from panel"
+    
+    offer_letters ||--o| onboarding_records : initiates
+    onboarding_records ||--o{ onboarding_tasks : contains
+    onboarding_records ||--|| profiles : "creates employee"
+    
+    profiles ||--o{ work_logs : logs
+    profiles ||--o{ tasks : assigned
+    profiles ||--o{ leaves : submits
+    profiles ||--o{ payroll_records : receives
+    profiles ||--o{ performance_reviews : undergoes
+    
+    audit_log }o--|| profiles : "performed by"
+```
+
+### Table Count Summary
+
+| Category | Current Tables | Target Tables | Change |
+|----------|---------------|--------------|--------|
+| Identity | 1 (`profiles`) | 2 (`profiles`, `departments`) | +1 |
+| Candidates | 1 (`candidates`) | 2 (`candidates`, `candidate_resumes`) | +1 |
+| Jobs | 2 (`job_forms`, `recruitment_posts`) | 2 (`job_requisitions`, `job_postings`) | 0 (unified) |
+| Applications | 2 (`job_applications`, `candidate_applications`) | 2 (`applications`, `application_stage_history`) | 0 (unified) |
+| Assessments | 4 (conflicting) | 5 (normalized) | +1 |
+| Interviews | 1 (`interview_sessions`) | 2 (`interview_rounds`, `interview_feedback`) | +1 |
+| Offers | 0 | 1 (`offer_letters`) | +1 |
+| Onboarding | 1 (`candidate_onboarding`) | 2 (`onboarding_records`, `onboarding_tasks`) | +1 |
+| Audit | 0 | 1 (`audit_log`) | +1 |
+| **ATS Total** | **12** | **19** | **+7 (net, after merging)** |
+
+> [!IMPORTANT]
+> This execution plan creates a Fortune 500-grade ATS database architecture. The key transformation is **eliminating the triple-write pattern** and establishing `applications` as the single source of truth for all pipeline data. Every metric, every dashboard, every report derives from this one table and its associated views. No more conflicting counts. No more split-brain data. No more orphaned records.
+
+> [!CAUTION]
+> **Do not execute migrations M5-M9 (Job + Application unification) without a complete pg_dump backup and row-count verification script.** These are the highest-risk migrations in the entire plan and require staging environment validation before production deployment.

@@ -1,0 +1,948 @@
+# FWC HRMS/ATS — Enterprise Architecture Audit Report
+
+**Audit Date:** June 13, 2026  
+**Scope:** Full-stack architecture review of the FlowTracker HRMS & ATS system  
+**Auditor Role:** Principal Software Architect / Enterprise Solutions Architect  
+
+---
+
+## SECTION 1: Architecture Overview
+
+### Current System Topology
+
+```mermaid
+graph TB
+    subgraph Frontend["Frontend (React + Vite + TypeScript)"]
+        A[App.tsx Router] --> B[DashboardLayout]
+        B --> C[Admin Module - 15 pages]
+        B --> D[HR Module - 10 pages + 8 recruitment submodules]
+        B --> E[Team Lead Module - 15 pages]
+        B --> F[Employee Module - 13 pages]
+        B --> G[Candidate Module - 6 pages]
+        A --> H[Public Routes - JobApplication, AssessmentAccess]
+    end
+
+    subgraph Backend["Backend (Supabase)"]
+        I[Supabase Auth]
+        J[PostgreSQL DB]
+        K[Supabase Storage - resumes, bgc_docs]
+        L[Edge Functions - ats-screen]
+    end
+
+    subgraph External["External AI"]
+        M[HuggingFace Router - Qwen3-32B]
+        N[Ollama Local - llama3.1]
+    end
+
+    Frontend --> Backend
+    Frontend --> External
+    L --> M
+```
+
+### Inferred Database Tables (from query analysis)
+
+| Table | Purpose | Issues Found |
+|-------|---------|-------------|
+| `profiles` | User directory (all roles) | Overloaded, no role separation |
+| `candidates` | External applicant records | Duplicated with profiles |
+| `job_forms` | Job posting configurations | No status lifecycle |
+| `job_applications` | Raw application submissions | Dual-key confusion (form_id vs job_form_id) |
+| `candidate_applications` | Pipeline tracking | Duplicates job_applications data |
+| `assessments` | Assessment definitions | Missing job_form_id linkage |
+| `assessment_tokens` | Token-based assessment access | Schema inconsistencies |
+| `candidate_assessments` | Assessment tracking | Third redundant application tracker |
+| `interview_sessions` | Interview records | Properly structured |
+| `candidate_notifications` | Candidate alerts | No read tracking |
+| `candidate_onboarding` | Onboarding records | Disconnected from pipeline |
+| `background_verifications` | Document verification | Dual status column confusion |
+| `payroll_ledger` | Payroll records | Exists but unused in Payroll module |
+| `payroll_history_records` | Historical payslips | Barely populated |
+| `salary_revision_history` | Audit trail for changes | Properly structured |
+| `employee_attrition` | Separation records | Missing FK constraints |
+| `work_logs` | Clock in/out tracking | No daily uniqueness enforcement |
+| `tasks` | Task assignments | Minimal schema |
+| `complaints` | Employee grievances | Status field inconsistencies |
+| `leaves` | Leave management | Minimal integration |
+| `notifications` | Internal notifications | Basic structure |
+| `chat_messages` (inferred) | Internal messaging | Not audited in detail |
+
+### Module Routing Matrix
+
+| Role | Dashboard | Route Prefix | Shared Components |
+|------|-----------|-------------|-------------------|
+| Admin | AdminDashboard | `/admin` | SettingsPage, Chat, Notifications |
+| HR | HRDashboard | `/hr` | Uses AdminAnalytics, AdminPresence, AdminMasterDirectory, AdminComplaints, AdminApprovals, AdminSettings, AdminChat |
+| Team Lead | TeamLeadDashboard | `/team-lead` | Uses AdminPayroll (CRITICAL BUG) |
+| Employee | EmployeeDashboard | `/employee` | Uses AdminPayroll (CRITICAL BUG) |
+| Candidate | CandidateDashboard | `/candidate` | Uses OnboardingCenter from HR |
+
+---
+
+## SECTION 2: Critical Issues
+
+> [!CAUTION]
+> These issues represent immediate security vulnerabilities, data corruption risks, or fundamental architectural flaws that must be addressed before any production deployment.
+
+### CRIT-01: Hardcoded API Token Exposed in Client-Side Code
+
+**Files:** [ai.ts](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/lib/ai.ts#L10), [Dashboard.tsx (HR)](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/Dashboard.tsx#L45), [DashboardLayout.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/components/layout/DashboardLayout.tsx#L352), [PerformanceEngine.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/PerformanceEngine.tsx#L31), [CandidateDashboard.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/candidate/Dashboard.tsx#L81)
+
+The HuggingFace API token `[REDACTED]` is **hardcoded as a fallback** in at least 5 source files across the client bundle. This token is shipped to every browser, giving any visitor unrestricted access to the AI API at FWC's expense.
+
+**Impact:** API cost hijacking, credential theft, service abuse.
+
+---
+
+### CRIT-02: No Route Guards — Zero Authentication Enforcement
+
+**File:** [App.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/App.tsx)
+
+Every protected route (`/admin/*`, `/hr/*`, `/team-lead/*`, `/employee/*`, `/candidate/*`) is directly accessible without any `PrivateRoute` or `AuthGuard` wrapper. The `DashboardLayout` performs a *soft redirect* after the page has already rendered:
+
+```tsx
+// DashboardLayout.tsx:154-198 — Redirect happens AFTER component mounts
+const initApp = async () => {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return; // Simply returns, does NOT redirect to login
+```
+
+**Impact:** Any unauthenticated user can view admin, HR, and payroll pages by navigating directly to the URL. The "redirect" is advisory, not enforced.
+
+---
+
+### CRIT-03: No Row-Level Security (RLS) Policies Evidenced
+
+No RLS policies are defined anywhere in the codebase, migration files, or Supabase configuration. All Supabase queries use the **anon key** directly from the client. This means:
+
+- Any authenticated user can `SELECT * FROM profiles` to see all employee data
+- Any authenticated user can `UPDATE profiles SET role = 'admin'`
+- Any authenticated user can read `payroll_ledger`, `salary_revision_history`
+- Candidates can see other candidates' data
+- The `assessment_tokens` table is readable by anyone
+
+**Impact:** Complete data breach risk. Any registered user can escalate privileges to admin.
+
+---
+
+### CRIT-04: Role Stored in Client-Writable `user_metadata`
+
+**File:** [auth.ts](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/lib/auth.ts#L18-L25)
+
+```typescript
+// The role is set during self-registration in user_metadata
+options: { data: { role: formData.role || "employee" } }
+```
+
+The user's role is stored in Supabase `user_metadata`, which is **client-writable**. Any user can call `supabase.auth.updateUser({ data: { role: 'admin' } })` from the browser console to grant themselves admin access. The `signIn` function then trusts this value absolutely:
+
+```typescript
+const trueRole = authData.user.user_metadata?.role; // Line 38
+// Then UPDATES the database to match the client-chosen role:
+await supabase.from('profiles').update({ role: trueRole }).eq('id', authData.user.id);
+```
+
+**Impact:** Any registered user can become admin by modifying `user_metadata`.
+
+---
+
+### CRIT-05: Admin Client Using Anon Key for User Creation
+
+**File:** [auth.ts](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/lib/auth.ts#L5-L9)
+
+```typescript
+const adminSupabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: { persistSession: false, autoRefreshToken: false }
+});
+```
+
+The `adminCreateUser` function creates a separate Supabase client with the **same anon key** (not the service_role key). This provides zero additional privilege. The comment "Secret Admin connection" is misleading — it has the same access level as the regular client.
+
+**Impact:** False sense of admin isolation. No actual privilege separation.
+
+---
+
+### CRIT-06: Dual Source of Truth for Applications
+
+**Files:** [JobApplication.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/public/JobApplication.tsx#L248-L326), [ApplicationHub.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/ApplicationHub.tsx#L76-L111)
+
+Every job application is written to **three separate tables** with no transactional guarantee:
+1. `job_applications` — the raw submission
+2. `candidate_applications` — the tracking board copy
+3. `candidates` — stage update
+
+The `ApplicationHub` then performs a **client-side manual join** between `job_applications` and `job_forms` because there's no proper FK relationship:
+
+```typescript
+const localizedJoinedApplications = (rawApps || []).map((app: any) => {
+  const targetFormId = app.form_id || app.job_form_id; // Two possible column names!
+  const matchingForm = rawForms?.find((f: any) => f.id === targetFormId) || null;
+```
+
+**Impact:** Data drift between tables, orphaned records, broken joins, inconsistent pipeline state.
+
+---
+
+### CRIT-07: CORS Wildcard on Edge Function
+
+**File:** [ats-screen/index.ts](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/supabase/functions/ats-screen/index.ts#L3-L7)
+
+```typescript
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+```
+
+The ATS screening edge function allows requests from **any origin**. Combined with the anon key being public, any website can invoke the AI screening engine.
+
+**Impact:** API abuse, cost escalation, unauthorized ATS scanning.
+
+---
+
+## SECTION 3: High Priority Issues
+
+> [!WARNING]
+> These issues cause significant functional problems, data inconsistencies, or violate enterprise HR best practices.
+
+### HIGH-01: Employee/Team Lead Sees Admin Payroll Module
+
+**File:** [App.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/App.tsx#L118-L135)
+
+```tsx
+<Route path="/team-lead/payroll" element={<AdminPayroll />} />
+<Route path="/employee/payroll" element={<AdminPayroll />} />
+```
+
+Both employee and team lead roles are routed to `AdminPayroll` (actually `HRPayroll`), which includes the **Global Employee Payroll Ledger** showing all employees' salaries, market deviations, and compensation breakdowns. It also includes buttons to modify compensation and initiate employee separation.
+
+**Impact:** Any employee can view all salaries and fire other employees.
+
+---
+
+### HIGH-02: HR Routes Reuse Admin Components Without Role Filtering
+
+**File:** [App.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/App.tsx#L154-L171)
+
+The HR role uses `AdminAnalytics`, `AdminPresence`, `AdminMasterDirectory`, `AdminComplaints`, `AdminApprovals`, `AdminSettings`, and `AdminChat` directly. None of these components check the current user's role to filter data or permissions. HR users have full admin capabilities.
+
+---
+
+### HIGH-03: Payroll Calculations Are 100% Client-Side Fabricated
+
+**File:** [Payroll.tsx (HR)](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/Payroll.tsx#L104-L176)
+
+All payroll figures (basic pay, HRA, TA, DA, variable pay, tax, PF, net pay) are calculated by **hardcoded percentages in the browser**:
+
+```typescript
+const basicPay = totalCtc * 0.50;
+const hra = totalCtc * 0.20;
+const tax = gross * 0.18; // Flat 18% tax for everyone
+const providentFund = basicPay * 0.12;
+```
+
+There is no payroll table storing actual disbursements. The `payroll_ledger` table exists but is only read in `ApplicationHub` for unrelated "financial metrics." Historical payslips are fabricated with fake months when no real records exist:
+
+```typescript
+if (!data || data.length === 0) {
+  setHistoricalSlips([
+    { payout_month: 'May 2026', ... },
+    { payout_month: 'April 2026', ... },
+    { payout_month: 'March 2026', ... }
+  ]);
+```
+
+**Impact:** No actual payroll processing. Financial data is entirely cosmetic.
+
+---
+
+### HIGH-04: Admin Dashboard Financial Data is Fabricated
+
+**File:** [Dashboard.tsx (Admin)](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/admin/Dashboard.tsx#L57-L93)
+
+Balance sheets, company valuations, and financial growth metrics are calculated using hardcoded multipliers:
+
+```typescript
+const estAnnualRevenue = globalPayroll * 12 * 1.8;
+const currentValuation = estAnnualRevenue * 4.5;
+const previousValuation = currentValuation * 0.82; // 18% YoY Growth assumption
+```
+
+These are presented as real financial data with "Download Balance Sheet" CSV export.
+
+**Impact:** Leadership decisions made on completely fabricated metrics.
+
+---
+
+### HIGH-05: `form_id` vs `job_form_id` Column Name Conflict
+
+Multiple modules use different column names to refer to the same FK relationship:
+
+| Module | Column Used |
+|--------|-----------|
+| `JobApplication.tsx` (insert) | `form_id` |
+| `ApplicationHub.tsx` (read) | `app.form_id \|\| app.job_form_id` |
+| `CandidatePipeline.tsx` (join) | `job_form_id` (via FK relation) |
+| `InterviewCenter.tsx` (update) | `form_id` |
+| `AssessmentCenter.tsx` | `job_form_id` |
+
+This means some records use `form_id`, others use `job_form_id`, and queries using the wrong column silently return empty results.
+
+---
+
+### HIGH-06: Assessment Token Schema Inconsistency
+
+The `assessment_tokens` table receives inserts with conflicting schemas:
+
+From [ApplicationHub.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/ApplicationHub.tsx#L147-L154):
+```typescript
+{ candidate_id, assessment_id, token, used: false }
+```
+
+From [JobApplication.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/public/JobApplication.tsx#L284-L291):
+```typescript
+{ assessment_id, candidate_id, token, status: "Active", expires_at }
+```
+
+One uses `used: boolean`, the other uses `status: string` with `expires_at`. These are different column sets suggesting the table schema was changed but callers weren't unified.
+
+---
+
+### HIGH-07: Document Vault Has Dual Onboarding Pathways
+
+Both [OnboardingCenter.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/OnboardingCenter.tsx#L156-L221) and [DocumentVault.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/DocumentVault.tsx#L110-L162) implement completely separate onboarding flows:
+
+| Aspect | OnboardingCenter | DocumentVault |
+|--------|-----------------|---------------|
+| Target table | `profiles` + `candidate_onboarding` | `profiles` + `payroll` |
+| Salary field | `payroll_ctc` on profiles | `base_salary` on payroll table |
+| Employee code | Generates `EMP-{timestamp}` | Not generated |
+| Status fields | `verification_status`, `asset_status`, `payroll_status` | Only role change |
+
+Two competing onboarding processes writing to different tables with different data models.
+
+---
+
+### HIGH-08: Performance Scores Overwrite Without History Protection
+
+**File:** [PerformanceEngine.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/PerformanceEngine.tsx#L100-L103)
+
+```typescript
+await supabase.from('profiles').update({
+  performance_score: parsed.score,
+  performance_history: [...currentHistory, newEntry]
+}).eq('id', emp.id);
+```
+
+Performance history is stored as a **JSONB array on the profiles table**. This approach:
+- Has no schema validation
+- Can grow unbounded
+- Provides no query capability for analytics
+- Will corrupt if two concurrent evaluations run
+
+---
+
+## SECTION 4: Medium Priority Issues
+
+### MED-01: Global Mutable State in DashboardLayout
+
+**File:** [DashboardLayout.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/components/layout/DashboardLayout.tsx#L13-L18)
+
+```typescript
+let globalProfile: any = null;
+let globalClockedIn = false;
+let globalLogId: string | null = null;
+```
+
+Module-level mutable variables persist across route navigations and can cause stale data bugs. This pattern is an anti-pattern in React.
+
+---
+
+### MED-02: No `updated_at` Timestamps on Core Tables
+
+Most queries don't reference `updated_at` columns. Without them:
+- Conflict resolution is impossible
+- Audit trails have gaps
+- Optimistic concurrency control is impossible
+
+---
+
+### MED-03: Realtime Subscriptions Without Cleanup Safety
+
+Multiple components subscribe to Supabase realtime channels but rely on `useEffect` cleanup. If the component tree remounts quickly (React StrictMode, fast navigation), channels can leak.
+
+---
+
+### MED-04: AI "KYC Verification" is a Prompt That Assumes Authenticity
+
+**File:** [CandidateDashboard.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/candidate/Dashboard.tsx#L82)
+
+```typescript
+const prompt = `Act as an AI KYC Engine. A candidate just uploaded a document for "${docType}".
+Please assume it passes visual inspection and output: "Document Verified: Authentic ${docType} format detected."`;
+```
+
+The AI is explicitly instructed to **always return "verified"** regardless of the document. This is not verification — it's a rubber stamp.
+
+---
+
+### MED-05: No File Type/Size Validation on Resume Storage Bucket
+
+**File:** [JobApplication.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/public/JobApplication.tsx#L191-L193)
+
+```typescript
+const { error: uploadError } = await supabase.storage
+  .from("resumes")
+  .upload(storageFilePath, resumeFile, { cacheControl: '3600', upsert: true });
+```
+
+Client-side validation accepts `.pdf,.docx,.doc` but:
+- No server-side MIME type validation
+- No malware scanning
+- `upsert: true` overwrites existing files
+- Public URL is generated, making all resumes world-accessible
+
+---
+
+### MED-06: Estimated Payroll on Dashboard vs Actual Payroll Mismatch
+
+The HR Dashboard shows: `₹{(stats.totalEmployees * 65000 / 100000).toFixed(1)}L` — a flat ₹65,000 per employee estimate. The Admin Dashboard uses role-based estimates (65k/95k/125k). The Payroll module uses `payroll_ctc` from profiles. None agree.
+
+---
+
+### MED-07: Offer Letter Generation is Not Persisted
+
+**File:** [Recruitment.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/Recruitment.tsx#L107-L143)
+
+Generated offer letters exist only in React state. They are not saved to the database, not linked to candidates, and dispatched via `mailto:` protocol which has no delivery tracking. The `offer_status` column on `candidate_applications` is never updated by the offer generator.
+
+---
+
+### MED-08: Candidate Dashboard Bypasses Role to Show All Assessments
+
+**File:** [CandidateDashboard.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/candidate/Dashboard.tsx#L52)
+
+```typescript
+const { data: tests } = await supabase.from('assessments').select('*').eq('status', 'Active');
+```
+
+All active assessments are shown to every candidate, not just the ones assigned to them via `assessment_tokens`. Any candidate can take any assessment.
+
+---
+
+### MED-09: TypeScript Types Don't Match Database Schema
+
+**File:** [types/index.ts](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/types/index.ts)
+
+The TypeScript interfaces define `UserRole = 'admin' | 'team_lead' | 'employee'` but the system actually uses `'admin' | 'hr' | 'team_lead' | 'employee' | 'candidate'`. Missing types for candidates, HR, job forms, applications, assessments, interviews, payroll, etc. Nearly all components use `any` types.
+
+---
+
+### MED-10: Simultaneous Duplicate Clock-In Not Prevented at DB Level
+
+While the code checks for active work logs, there's no database-level unique constraint. Race conditions can create multiple active shifts for the same user.
+
+---
+
+## SECTION 5: Low Priority Issues
+
+### LOW-01: No Pagination on Any Data-Heavy Table
+All queries use `select('*')` without limits. At 5000+ candidates, the ApplicationHub, CandidatePipeline, and OnboardingCenter will load thousands of rows.
+
+### LOW-02: Inconsistent Date Handling
+Some dates use `new Date().toISOString()`, others use `Date.now()`. Employee codes use `EMP-${Date.now()}` which generates non-human-readable IDs.
+
+### LOW-03: `alert()` Used Instead of Toast in DocumentVault
+DocumentVault uses `alert()` for feedback while every other module uses the toast system.
+
+### LOW-04: Unused Imports and Dead Code
+`extractedEmails`, `showEmailModal`, `emailTemplate` states in Recruitment.tsx are declared but never populated with real data.
+
+### LOW-05: No i18n/l10n Support
+All text is hardcoded in English. Currency formatting assumes INR but uses different formatters across modules.
+
+### LOW-06: Missing Error Boundaries
+No React error boundaries exist. A single component crash takes down the entire application.
+
+### LOW-07: No Loading Skeletons
+Most components show a spinner during data loading. No skeleton UI for better perceived performance.
+
+### LOW-08: `console.log` Statements in Production
+Extensive debug logging (e.g., `console.log("LOGIN RESULT:", result)`) ships to production.
+
+---
+
+## SECTION 6: Recommended Enterprise Architecture
+
+### 6.1 Authentication & Authorization Layer
+
+```mermaid
+graph LR
+    A[User Login] --> B[Supabase Auth]
+    B --> C{JWT Token}
+    C --> D[Custom Claims: role, org_id, permissions]
+    D --> E[RLS Policies on Every Table]
+    D --> F[Client-Side Route Guards]
+    D --> G[Edge Function Auth Middleware]
+```
+
+**Requirements:**
+1. Store role in `app_metadata` (server-only, not client-writable) via a Supabase trigger on profile creation
+2. Implement `PrivateRoute` component wrapping all authenticated routes
+3. Create RLS policies for every table based on `auth.jwt() -> app_metadata -> role`
+4. Remove all hardcoded API tokens from client code — proxy AI calls through edge functions
+
+### 6.2 Database Architecture (Normalized)
+
+```mermaid
+erDiagram
+    organizations ||--o{ departments : has
+    departments ||--o{ teams : has
+    teams ||--o{ employees : contains
+    
+    employees ||--|| profiles : "is a"
+    employees ||--o{ payroll_records : receives
+    employees ||--o{ leave_requests : submits
+    employees ||--o{ performance_reviews : has
+    employees ||--o{ work_sessions : logs
+    
+    job_requisitions ||--o{ job_postings : creates
+    job_postings ||--o{ applications : receives
+    applications ||--|| candidates : "from"
+    applications ||--o{ assessment_assignments : triggers
+    applications ||--o{ interview_rounds : schedules
+    applications ||--o| offer_letters : generates
+    
+    candidates ||--o{ documents : uploads
+    documents ||--o{ verifications : undergoes
+    
+    offer_letters ||--o| onboarding_records : initiates
+    onboarding_records ||--|| employees : creates
+```
+
+### 6.3 Service Layer Architecture
+
+Instead of direct Supabase calls in every component:
+
+```
+Component → Custom Hook → Service Layer → Supabase Client
+                              ↓
+                        Error Handling
+                        Type Validation
+                        Audit Logging
+                        Cache Management
+```
+
+### 6.4 AI Integration Architecture
+
+```mermaid
+graph TB
+    A[Client Request] --> B[Edge Function Proxy]
+    B --> C{Rate Limiter}
+    C --> D[Token Management - Server Side]
+    D --> E[HuggingFace / OpenAI]
+    E --> F[Response Sanitization]
+    F --> G[Structured JSON Validation]
+    G --> H[Database Persistence]
+    H --> I[Client Response]
+```
+
+All AI calls must be routed through Supabase Edge Functions to:
+- Keep API tokens server-side
+- Enforce rate limiting per user/role
+- Validate and sanitize AI outputs
+- Log all AI decisions for audit compliance
+
+---
+
+## SECTION 7: Recommended Database Relationships
+
+### 7.1 Core Tables with Proper Relationships
+
+```sql
+-- Organization hierarchy
+CREATE TABLE departments (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL UNIQUE,
+    head_id UUID REFERENCES profiles(id),
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Unified profile with proper constraints
+CREATE TABLE profiles (
+    id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    email TEXT NOT NULL UNIQUE,
+    full_name TEXT NOT NULL,
+    phone TEXT,
+    role TEXT NOT NULL CHECK (role IN ('admin','hr','team_lead','employee','candidate')),
+    department_id UUID REFERENCES departments(id),
+    reporting_manager_id UUID REFERENCES profiles(id),
+    employment_status TEXT DEFAULT 'active' CHECK (employment_status IN ('active','on_leave','probation','terminated','resigned')),
+    date_of_joining DATE,
+    employee_code TEXT UNIQUE,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Separate candidate profile
+CREATE TABLE candidates (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    profile_id UUID REFERENCES profiles(id), -- Only after registration
+    full_name TEXT NOT NULL,
+    email TEXT NOT NULL,
+    phone TEXT,
+    resume_url TEXT,
+    source TEXT, -- 'career_portal', 'referral', 'job_board'
+    created_at TIMESTAMPTZ DEFAULT now(),
+    UNIQUE(email)
+);
+
+-- Job lifecycle
+CREATE TABLE job_requisitions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    title TEXT NOT NULL,
+    department_id UUID REFERENCES departments(id),
+    requested_by UUID REFERENCES profiles(id),
+    approved_by UUID REFERENCES profiles(id),
+    status TEXT DEFAULT 'draft' CHECK (status IN ('draft','pending_approval','approved','published','closed','cancelled')),
+    headcount INTEGER DEFAULT 1,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE job_postings (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    requisition_id UUID REFERENCES job_requisitions(id) NOT NULL,
+    jd_text TEXT NOT NULL,
+    form_schema JSONB DEFAULT '[]',
+    requires_assessment BOOLEAN DEFAULT false,
+    is_active BOOLEAN DEFAULT true,
+    published_at TIMESTAMPTZ,
+    expires_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Single source of truth for applications
+CREATE TABLE applications (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    candidate_id UUID REFERENCES candidates(id) NOT NULL,
+    job_posting_id UUID REFERENCES job_postings(id) NOT NULL,
+    answers JSONB DEFAULT '{}',
+    resume_url TEXT,
+    ai_score INTEGER CHECK (ai_score BETWEEN 0 AND 100),
+    ai_verdict TEXT,
+    stage TEXT DEFAULT 'applied' CHECK (stage IN (
+        'applied','screening','shortlisted','assessment','interview',
+        'offer_pending','offer_sent','offer_accepted','offer_declined',
+        'onboarding','hired','rejected','withdrawn'
+    )),
+    rejection_reason TEXT,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    UNIQUE(candidate_id, job_posting_id) -- Prevent duplicate applications
+);
+
+-- Assessment assignment (one per application)
+CREATE TABLE assessment_assignments (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    application_id UUID REFERENCES applications(id) NOT NULL,
+    assessment_id UUID REFERENCES assessments(id) NOT NULL,
+    access_token TEXT UNIQUE NOT NULL DEFAULT gen_random_uuid()::text,
+    status TEXT DEFAULT 'assigned' CHECK (status IN ('assigned','in_progress','completed','expired')),
+    score INTEGER,
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    UNIQUE(application_id, assessment_id)
+);
+
+-- Interview rounds (multiple per application)
+CREATE TABLE interview_rounds (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    application_id UUID REFERENCES applications(id) NOT NULL,
+    round_number INTEGER NOT NULL,
+    round_type TEXT CHECK (round_type IN ('phone_screen','technical','behavioral','culture_fit','final','hr')),
+    interviewer_id UUID REFERENCES profiles(id),
+    scheduled_at TIMESTAMPTZ NOT NULL,
+    meeting_link TEXT,
+    meeting_provider TEXT,
+    status TEXT DEFAULT 'scheduled' CHECK (status IN ('scheduled','in_progress','completed','cancelled','no_show')),
+    overall_score INTEGER CHECK (overall_score BETWEEN 0 AND 100),
+    feedback JSONB, -- {communication: 80, technical: 90, ...}
+    recommendation TEXT CHECK (recommendation IN ('strong_hire','hire','no_hire','strong_no_hire')),
+    notes TEXT,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Offer management
+CREATE TABLE offer_letters (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    application_id UUID REFERENCES applications(id) NOT NULL UNIQUE,
+    candidate_id UUID REFERENCES candidates(id) NOT NULL,
+    offered_ctc DECIMAL NOT NULL,
+    joining_date DATE NOT NULL,
+    designation TEXT NOT NULL,
+    department_id UUID REFERENCES departments(id),
+    reporting_to UUID REFERENCES profiles(id),
+    offer_document_url TEXT,
+    status TEXT DEFAULT 'draft' CHECK (status IN ('draft','pending_approval','approved','sent','accepted','declined','revoked')),
+    approved_by UUID REFERENCES profiles(id),
+    sent_at TIMESTAMPTZ,
+    response_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Payroll (actual records, not calculated)
+CREATE TABLE payroll_records (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    employee_id UUID REFERENCES profiles(id) NOT NULL,
+    pay_period_start DATE NOT NULL,
+    pay_period_end DATE NOT NULL,
+    basic_pay DECIMAL NOT NULL,
+    hra DECIMAL DEFAULT 0,
+    transport_allowance DECIMAL DEFAULT 0,
+    dearness_allowance DECIMAL DEFAULT 0,
+    variable_pay DECIMAL DEFAULT 0,
+    gross_pay DECIMAL NOT NULL,
+    income_tax DECIMAL DEFAULT 0,
+    provident_fund DECIMAL DEFAULT 0,
+    professional_tax DECIMAL DEFAULT 0,
+    total_deductions DECIMAL NOT NULL,
+    net_pay DECIMAL NOT NULL,
+    status TEXT DEFAULT 'draft' CHECK (status IN ('draft','processed','approved','disbursed')),
+    processed_by UUID REFERENCES profiles(id),
+    disbursed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    UNIQUE(employee_id, pay_period_start, pay_period_end)
+);
+
+-- Audit trail
+CREATE TABLE audit_log (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    actor_id UUID REFERENCES profiles(id),
+    action TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id UUID NOT NULL,
+    old_values JSONB,
+    new_values JSONB,
+    ip_address INET,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Required indexes
+CREATE INDEX idx_applications_candidate ON applications(candidate_id);
+CREATE INDEX idx_applications_posting ON applications(job_posting_id);
+CREATE INDEX idx_applications_stage ON applications(stage);
+CREATE INDEX idx_payroll_employee ON payroll_records(employee_id);
+CREATE INDEX idx_payroll_period ON payroll_records(pay_period_start, pay_period_end);
+CREATE INDEX idx_audit_entity ON audit_log(entity_type, entity_id);
+CREATE INDEX idx_profiles_role ON profiles(role);
+CREATE INDEX idx_profiles_department ON profiles(department_id);
+CREATE INDEX idx_work_sessions_user ON work_sessions(employee_id, status);
+```
+
+### 7.2 Required RLS Policies
+
+```sql
+-- Example: Employees can only see their own payroll
+CREATE POLICY payroll_employee_access ON payroll_records
+  FOR SELECT USING (
+    employee_id = auth.uid()
+    OR (auth.jwt() -> 'app_metadata' ->> 'role') IN ('admin', 'hr')
+  );
+
+-- Candidates can only see their own applications
+CREATE POLICY application_candidate_access ON applications
+  FOR SELECT USING (
+    candidate_id IN (SELECT id FROM candidates WHERE profile_id = auth.uid())
+    OR (auth.jwt() -> 'app_metadata' ->> 'role') IN ('admin', 'hr')
+  );
+
+-- Only HR/Admin can modify applications
+CREATE POLICY application_modify ON applications
+  FOR UPDATE USING (
+    (auth.jwt() -> 'app_metadata' ->> 'role') IN ('admin', 'hr')
+  );
+```
+
+---
+
+## SECTION 8: Recommended ATS Workflow
+
+```mermaid
+stateDiagram-v2
+    [*] --> JobRequisition: HR creates requisition
+    JobRequisition --> PendingApproval: Submit for approval
+    PendingApproval --> Approved: Manager approves
+    PendingApproval --> Rejected: Manager rejects
+    Approved --> Published: HR publishes posting
+    Published --> ApplicationReceived: Candidate applies
+
+    ApplicationReceived --> AIScreening: Auto ATS scan
+    AIScreening --> Shortlisted: Score >= threshold
+    AIScreening --> Rejected: Score < threshold
+    
+    Shortlisted --> AssessmentAssigned: HR assigns assessment
+    AssessmentAssigned --> AssessmentCompleted: Candidate completes
+    AssessmentCompleted --> InterviewScheduled: HR schedules interview
+    AssessmentCompleted --> Rejected: Assessment failed
+    
+    InterviewScheduled --> InterviewCompleted: Round completed
+    InterviewCompleted --> NextRound: More rounds needed
+    NextRound --> InterviewScheduled
+    InterviewCompleted --> OfferPending: All rounds passed
+    InterviewCompleted --> Rejected: Interview failed
+    
+    OfferPending --> OfferApproved: Finance approves
+    OfferApproved --> OfferSent: HR sends offer
+    OfferSent --> OfferAccepted: Candidate accepts
+    OfferSent --> OfferDeclined: Candidate declines
+    
+    OfferAccepted --> Onboarding: Initiate onboarding
+    Onboarding --> Hired: Onboarding complete
+    Hired --> [*]
+```
+
+### Key Workflow Gaps in Current System
+
+| Step | Current State | Required |
+|------|-------------|----------|
+| Job Requisition Approval | ❌ None — HR creates postings directly | Multi-level approval chain |
+| Duplicate Application Prevention | ⚠️ Partial — checks `candidate_applications` but race conditions possible | DB unique constraint |
+| Assessment Expiry | ⚠️ Token has `expires_at` but never checked | Server-side expiry enforcement |
+| Interview Feedback Loop | ⚠️ Score recorded but no structured feedback form | Standardized scorecard per round |
+| Offer Approval Chain | ❌ None — HR generates and sends directly | Finance → VP → HR approval flow |
+| Offer Acceptance Tracking | ❌ Not tracked | Digital acceptance with e-signature |
+| Background Verification | ⚠️ Fake AI verification | Third-party BGV integration |
+| Onboarding Checklist | ❌ Single button click | Phased checklist with IT/Finance/HR tasks |
+
+---
+
+## SECTION 9: Recommended HRMS Workflow
+
+### 9.1 Employee Lifecycle
+
+```mermaid
+graph LR
+    A[Candidate Hired] --> B[Pre-boarding: IT Setup, Access Provisioning]
+    B --> C[Day 1: Orientation, Buddy Assignment]
+    C --> D[Week 1: Role Training, System Access]
+    D --> E[30 Days: Probation Review]
+    E --> F[90 Days: Confirmation Review]
+    F --> G[Active Employment]
+    G --> H{Lifecycle Events}
+    H --> I[Performance Review - Quarterly]
+    H --> J[Compensation Revision - Annual]
+    H --> K[Promotion / Transfer]
+    H --> L[Leave Management]
+    H --> M[Disciplinary Action]
+    H --> N[Separation / Offboarding]
+    N --> O[Exit Interview]
+    O --> P[Final Settlement]
+    P --> Q[Account Deactivation]
+```
+
+### 9.2 Missing Enterprise HR Processes
+
+| Process | Status | Priority |
+|---------|--------|----------|
+| Organization hierarchy (org chart) | ❌ Missing | High |
+| Department-based access control | ❌ Missing | High |
+| Leave balance tracking & accrual | ❌ Missing | High |
+| Attendance regularization workflow | ❌ Missing | Medium |
+| Expense reimbursement | ❌ Missing | Medium |
+| Training & learning management | ❌ Missing | Medium |
+| Succession planning | ❌ Missing | Low |
+| Employee self-service portal | ⚠️ Partial | Medium |
+| Policy document management | ❌ Missing | Medium |
+| Exit interview & clearance checklist | ❌ Missing | High |
+| Employee referral tracking | ❌ Missing | Low |
+| Shift management & scheduling | ❌ Missing | Medium |
+| Overtime calculation & approval | ❌ Missing | Medium |
+| Multi-currency payroll | ❌ Missing | Low |
+| Tax declaration & investment proofs | ❌ Missing | High |
+| Statutory compliance (PF, ESI, PT) | ❌ Missing (flat 18% tax) | Critical |
+| Payroll processing approval workflow | ❌ Missing | Critical |
+| Audit trail for all HR actions | ⚠️ Partial (salary revisions only) | Critical |
+
+---
+
+## SECTION 10: Implementation Roadmap
+
+### Phase 1: Security Hardening (Week 1-2) — BLOCKERS
+
+| # | Task | Effort |
+|---|------|--------|
+| 1.1 | Remove all hardcoded API tokens from client code | 2 hrs |
+| 1.2 | Proxy all AI calls through Supabase Edge Functions | 1 day |
+| 1.3 | Move role from `user_metadata` to `app_metadata` via DB trigger | 4 hrs |
+| 1.4 | Implement `PrivateRoute` component with role-based access | 4 hrs |
+| 1.5 | Write RLS policies for all 20+ tables | 2 days |
+| 1.6 | Fix CORS on edge functions (restrict to app domain) | 1 hr |
+| 1.7 | Remove `AdminPayroll` from employee/team-lead routes | 1 hr |
+| 1.8 | Add server-side file validation on storage buckets | 4 hrs |
+
+### Phase 2: Database Normalization (Week 3-4)
+
+| # | Task | Effort |
+|---|------|--------|
+| 2.1 | Create `departments` table and migrate department strings | 1 day |
+| 2.2 | Unify `job_applications` and `candidate_applications` into single `applications` table | 2 days |
+| 2.3 | Add unique constraints for duplicate prevention | 4 hrs |
+| 2.4 | Standardize `form_id`/`job_form_id` to single column name | 4 hrs |
+| 2.5 | Create proper `payroll_records` table with actual disbursement records | 1 day |
+| 2.6 | Create `audit_log` table with triggers | 1 day |
+| 2.7 | Add `updated_at` triggers on all tables | 4 hrs |
+| 2.8 | Create required indexes for query performance | 4 hrs |
+
+### Phase 3: ATS Pipeline Reconstruction (Week 5-7)
+
+| # | Task | Effort |
+|---|------|--------|
+| 3.1 | Implement job requisition approval workflow | 2 days |
+| 3.2 | Build unified application pipeline (single source of truth) | 3 days |
+| 3.3 | Implement proper assessment assignment and expiry enforcement | 2 days |
+| 3.4 | Build structured interview scorecard with multi-round support | 2 days |
+| 3.5 | Implement offer letter persistence with approval chain | 2 days |
+| 3.6 | Build phased onboarding checklist | 2 days |
+| 3.7 | Implement candidate portal with real-time status visibility | 2 days |
+
+### Phase 4: HRMS Core Modules (Week 8-11)
+
+| # | Task | Effort |
+|---|------|--------|
+| 4.1 | Build real payroll processing with calculation engine | 3 days |
+| 4.2 | Implement leave balance management and accrual | 2 days |
+| 4.3 | Build performance review cycle with configurable KPIs | 3 days |
+| 4.4 | Implement separation/offboarding workflow with clearance checklist | 2 days |
+| 4.5 | Build organization hierarchy and org chart | 2 days |
+| 4.6 | Implement statutory compliance (PF, ESI, PT calculations) | 2 days |
+| 4.7 | Build employee self-service portal | 2 days |
+
+### Phase 5: Quality & Scale (Week 12-14)
+
+| # | Task | Effort |
+|---|------|--------|
+| 5.1 | Replace all `any` types with proper TypeScript interfaces | 3 days |
+| 5.2 | Add pagination to all data tables | 2 days |
+| 5.3 | Implement React error boundaries | 4 hrs |
+| 5.4 | Add comprehensive E2E tests (Playwright/Cypress) | 3 days |
+| 5.5 | Performance audit and query optimization | 2 days |
+| 5.6 | Implement proper service layer with custom hooks | 3 days |
+| 5.7 | Add loading skeletons and optimistic updates | 2 days |
+
+---
+
+## Summary of Findings
+
+| Category | Critical | High | Medium | Low |
+|----------|----------|------|--------|-----|
+| Security | 5 | 2 | 1 | 0 |
+| Database Design | 1 | 4 | 2 | 1 |
+| Workflow Gaps | 0 | 2 | 1 | 0 |
+| Data Integrity | 1 | 2 | 3 | 0 |
+| Scalability | 0 | 0 | 1 | 1 |
+| Code Quality | 0 | 0 | 2 | 6 |
+| **Total** | **7** | **10** | **10** | **8** |
+
+> [!IMPORTANT]
+> **This system is not production-ready.** The 7 critical issues (especially CRIT-02 through CRIT-04) mean that any authenticated user can escalate to admin, view all salary data, and modify any record. Phase 1 (Security Hardening) must be completed before any real user data enters the system.
