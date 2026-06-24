@@ -1,0 +1,1136 @@
+# PHASE 5 — ENTERPRISE IMPLEMENTATION ROADMAP, MODERNIZATION STRATEGY & SAFE REFACTORING PLAN
+
+**System:** FWC AI-Powered HRMS + ATS Platform  
+**Document Type:** CTO-Level Enterprise Implementation Roadmap  
+**Date:** June 13, 2026  
+**Inputs:** Phase 1 Architecture Audit (47 issues) · Phase 2 Database Audit (99 issues) · Phase 3 ATS Workflow Audit (52 flaws) · Phase 4 Frontend Audit (57 issues)  
+**Total Issues Being Resolved:** 255  
+
+---
+
+## EXECUTIVE SUMMARY
+
+This roadmap converts 255 identified issues across architecture, database, ATS workflow, and frontend into a **12-phase, 24-week implementation plan** that transforms the FWC platform from a prototype into a production-grade enterprise HRMS + ATS.
+
+### Guiding Principles
+
+1. **Preserve all working features** — No feature removal without a replacement
+2. **Backward compatibility** — Existing records, dashboards, and forms continue functioning
+3. **Root cause fixes** — No temporary patches
+4. **Single Source of Truth** — One table, one metric, one calculation path
+5. **Additive migration** — New tables/columns first, then data migration, then code cutover
+
+### Issue Distribution by Phase
+
+| Phase | Focus | Issues Resolved | Weeks | Risk Level |
+|-------|-------|----------------|-------|------------|
+| 1 | Data Integrity Stabilization | 18 | 1-3 | 🔴 High |
+| 2 | Database Relationship Hardening | 22 | 3-5 | 🔴 High |
+| 3 | Candidate Application Redesign | 15 | 5-7 | 🔴 High |
+| 4 | Application Hub Stabilization | 8 | 7-9 | 🟡 Medium |
+| 5 | Assessment Workflow Stabilization | 12 | 9-11 | 🟡 Medium |
+| 6 | Interview Workflow Stabilization | 10 | 11-13 | 🟡 Medium |
+| 7 | Onboarding Workflow Stabilization | 11 | 13-15 | 🟡 Medium |
+| 8 | Dashboard Unification | 14 | 15-17 | 🟢 Low |
+| 9 | Analytics Unification | 8 | 17-19 | 🟢 Low |
+| 10 | Frontend Performance Optimization | 28 | 19-21 | 🟡 Medium |
+| 11 | Security Hardening | 16 | 21-23 | 🔴 High |
+| 12 | AI Enhancement Layer | 12 | 23-24+ | 🟡 Medium |
+
+---
+
+## PHASE 1 — DATA INTEGRITY STABILIZATION
+
+### Business Goal
+
+Eliminate conflicting data between tables so that every metric (employee count, application count, payroll total) returns the same number regardless of which module queries it.
+
+### Issues Resolved
+
+- CRIT-DB-03: Candidate `stage` overwritten globally
+- CRIT-DB-04: Triple-write without transaction
+- CRIT-DB-10: Dashboard count divergence (6 different sources)
+- HIGH-DB-06: Department is free-text, not FK
+- FE-15: Five components compute headcount differently
+- WF-18: Global stage overwrite on candidate record
+- WF-35: Stages not synchronized between tables
+- Plus 11 related normalization / 3NF violations
+
+### Modules Affected
+
+| Module | Impact |
+|--------|--------|
+| All Dashboards | Metric counts change source |
+| CandidatePipeline | Reads from unified table |
+| ApplicationHub | Reads from unified table |
+| OnboardingCenter | Department becomes FK |
+| CareerPortal | Department becomes FK |
+| JobApplication.tsx | Application write path changes |
+
+### Files Likely Affected
+
+| File | Change Type |
+|------|------------|
+| [JobApplication.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/public/JobApplication.tsx) | Write to single `applications` table instead of 3 |
+| [ATSScanner.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/recruitment/ATSScanner.tsx) | Write to unified `candidates` + `applications` |
+| [CandidatePipeline.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/recruitment/CandidatePipeline.tsx) | Read from `applications` instead of `candidate_applications` |
+| [ApplicationHub.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/ApplicationHub.tsx) | Read from `applications` instead of `job_applications` |
+| [Admin Dashboard.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/admin/Dashboard.tsx) | Use database views for metrics |
+| [HR Dashboard.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/Dashboard.tsx) | Use database views for metrics |
+| [OnboardingCenter.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/OnboardingCenter.tsx) | Use `department_id` FK |
+| [CareerPortal.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/recruitment/CareerPortal.tsx) | Use `department_id` FK |
+
+### Database Changes
+
+```
+1. CREATE TABLE departments (id, name, head_id, created_at, updated_at)
+2. Populate departments from DISTINCT profiles.department values
+3. ADD COLUMN department_id UUID REFERENCES departments(id) to profiles
+4. Backfill department_id from text department column
+5. Remove stage, ats_score, recommendation from candidates table
+   (stage lives on applications per-job, not globally)
+6. Create v_application_counts VIEW for dashboard metrics
+7. Create v_department_headcount VIEW for dashboard metrics
+8. Create v_pipeline_summary VIEW for recruitment metrics
+```
+
+### Frontend Changes
+
+```
+1. Update all department dropdowns to fetch from departments table
+2. Remove all client-side headcount calculations
+3. Replace inline COUNT(*) queries with view queries
+4. Ensure JobApplication.tsx no longer writes to candidates.stage
+```
+
+### Backend Changes
+
+```
+1. Create Supabase migration file for departments table + views
+2. Create backfill script for department_id
+```
+
+### Risks
+
+| Risk | Probability | Impact |
+|------|------------|--------|
+| Department names have typos/variations across records | High | Some records won't match after normalization |
+| Removing `candidates.stage` breaks CandidatePipeline | High | Pipeline view shows no status |
+| Dashboard counts change | Certain | Users notice different numbers |
+
+### Risk Mitigation
+
+| Risk | Mitigation |
+|------|-----------|
+| Department name variations | Run deduplication query first; present to user for approval |
+| CandidatePipeline break | Update read query BEFORE removing column; use COALESCE |
+| Dashboard count changes | Add migration note explaining correct vs previous counts |
+
+### Test Plan
+
+```
+1. Query v_application_counts — compare against manual COUNT on each table
+2. Verify all departments populated in departments table
+3. Verify every profile has a valid department_id
+4. Apply for a job via JobApplication.tsx → verify only applications table written
+5. Navigate Admin Dashboard → verify count matches HR Dashboard
+6. Apply same candidate to 2 jobs → verify stage is per-application, not global
+```
+
+### Success Criteria
+
+- [ ] `SELECT COUNT(*) FROM applications` matches across all dashboards
+- [ ] `candidates` table has no `stage` column
+- [ ] `departments` table has all departments with unique IDs
+- [ ] All profiles have valid `department_id` FK
+- [ ] No client-side headcount calculations remain
+
+---
+
+## PHASE 2 — DATABASE RELATIONSHIP HARDENING
+
+### Business Goal
+
+Establish foreign key relationships, CHECK constraints, and indexes across all 37 tables so that orphan records, invalid status strings, and duplicate entries are prevented at the database level.
+
+### Issues Resolved
+
+- CRIT-DB-01: email nullable on candidates
+- CRIT-DB-02: candidates and profiles disconnected
+- CRIT-DB-05: form_id vs job_form_id split-brain
+- CRIT-DB-06: assessment_tokens conflicting schemas
+- HIGH-DB-01: Dual job posting tables
+- HIGH-DB-04: No interviewer_id
+- HIGH-DB-05: No multi-round support
+- Plus 15 missing FK, missing index, and constraint issues
+
+### Modules Affected
+
+All modules that write to or read from any table with missing constraints.
+
+### Files Likely Affected
+
+| File | Change Type |
+|------|------------|
+| [JobApplication.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/public/JobApplication.tsx) | Standardize FK column name to `job_posting_id` |
+| [ApplicationHub.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/ApplicationHub.tsx) | Remove `form_id || job_form_id` fallback |
+| [InterviewCenter.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/recruitment/InterviewCenter.tsx) | Add `interviewer_id`, `round_number` |
+| [AssessmentCenter.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/recruitment/AssessmentCenter.tsx) | Standardize token schema |
+| [CandidateMessages.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/recruitment/CandidateMessages.tsx) | Write to unified `job_postings` |
+| [CareerPortal.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/recruitment/CareerPortal.tsx) | Write to unified `job_postings` |
+| [Careers.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/candidate/Careers.tsx) | Read from unified `job_postings` |
+
+### Database Changes
+
+```
+1. Unify job_forms + recruitment_posts → job_postings table
+   - Migrate data from both tables into unified structure
+   - Add status lifecycle: draft → published → paused → closed → archived
+   
+2. Standardize FK column name: job_posting_id (not form_id, not job_form_id)
+
+3. ADD NOT NULL to candidates.email + UNIQUE constraint
+
+4. ADD CHECK constraints on:
+   - profiles.role IN ('admin','hr','team_lead','employee','candidate')
+   - applications.stage IN (defined set of 13 stages)
+   - interview_sessions.status IN (defined set)
+   - assessment_tokens.status IN (defined set)
+   
+5. ADD interviewer_id UUID to interview_sessions
+6. ADD round_number INTEGER to interview_sessions
+7. Unify assessment_tokens columns: remove used BOOLEAN, keep status TEXT
+
+8. CREATE 22+ indexes (per Phase 2 database audit)
+
+9. ADD UNIQUE constraint on (candidate_id, job_posting_id) on applications
+10. ADD UNIQUE constraint on (employee_id, pay_period) on payroll
+11. ADD cascade rules per Phase 2 Section 11
+```
+
+### Frontend Changes
+
+```
+1. Replace all form_id references with job_posting_id
+2. Replace all job_form_id references with job_posting_id
+3. Remove the form_id || job_form_id fallback pattern
+4. Update CareerPortal + CandidateMessages to write to job_postings
+5. Update Careers.tsx to read from job_postings
+```
+
+### Risks
+
+| Risk | Probability | Impact | Mitigation |
+|------|------------|--------|-----------|
+| Existing records have NULL emails | High | Migration blocks on NOT NULL | Backfill NULLs with placeholder + flag for review |
+| form_id → job_posting_id rename breaks existing queries | High | All reads fail | Rename column first, update code in same deployment |
+| Dual job tables merge loses data | Medium | Orphaned postings | Audit both tables before merge; keep originals as backup |
+
+### Test Plan
+
+```
+1. Attempt INSERT into candidates with NULL email → expect error
+2. Attempt INSERT into applications with invalid stage → expect error
+3. Attempt INSERT with non-existent job_posting_id → expect FK error
+4. Verify all 22 indexes exist via pg_indexes
+5. Verify all CHECK constraints via information_schema
+6. Run EXPLAIN ANALYZE on top 10 queries → verify index usage
+```
+
+### Success Criteria
+
+- [ ] Zero NULL emails in candidates table
+- [ ] Zero invalid stage strings in applications
+- [ ] Only one job posting table (`job_postings`)
+- [ ] All FK columns use consistent naming (`job_posting_id`)
+- [ ] 22+ indexes created and verified
+
+---
+
+## PHASE 3 — CANDIDATE APPLICATION REDESIGN
+
+### Business Goal
+
+Create a single, reliable application submission pathway that handles duplicate detection, multi-job applications, resume versioning, and candidate profile reuse.
+
+### Issues Resolved
+
+- WF-17: Triple-write without transaction
+- WF-19: Duplicate applications from career portal
+- WF-20: Candidates cannot track own applications
+- WF-21: No reusable candidate profile
+- WF-22: No application withdrawal
+- WF-23: No stage change notifications
+- FE-28: Resumes publicly accessible
+
+### Modules Affected
+
+| Module | Change |
+|--------|--------|
+| JobApplication.tsx | Rewrite submission flow → single table write |
+| CandidateDashboard.tsx | Add "My Applications" tab showing all applications |
+| Careers.tsx | Show application status per job |
+| ATSScanner.tsx | Use unified applications table |
+| CandidatePipeline.tsx | Read from unified applications |
+
+### Files Likely Affected
+
+| File | Change |
+|------|--------|
+| [JobApplication.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/public/JobApplication.tsx) | Single INSERT into `applications` table |
+| [CandidateDashboard.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/candidate/Dashboard.tsx) | Add application tracking section |
+| [Careers.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/candidate/Careers.tsx) | Show "Applied" badge on already-applied jobs |
+| [ATSScanner.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/recruitment/ATSScanner.tsx) | Write to `applications` + `candidates` only |
+
+### Database Changes
+
+```
+1. Ensure UNIQUE(candidate_id, job_posting_id) on applications (from Phase 2)
+2. ADD application_status_history table for audit trail
+3. Make resume bucket PRIVATE (remove public access)
+4. Create resume_versions table for version history
+5. ADD withdrawal_reason column to applications
+6. Create DB trigger: on applications.stage change → INSERT notification
+```
+
+### Frontend Changes
+
+```
+1. JobApplication.tsx: Replace 4-step sequential write with single INSERT
+2. Add "My Applications" component to CandidateDashboard
+3. Add "Already Applied" badge to Careers.tsx job cards
+4. Add "Withdraw Application" button to candidate view
+5. Replace getPublicUrl() with createSignedUrl() for resumes
+6. Add client-side file size limit (10MB) and type validation
+```
+
+### Risks
+
+| Risk | Mitigation |
+|------|-----------|
+| Existing applications in old tables not visible | Migration script to copy into unified table |
+| UNIQUE constraint blocks re-applications | Show user-friendly "already applied" message |
+| Signed URLs expire | Set 1-hour expiry; regenerate on demand |
+
+### Test Plan
+
+```
+1. Submit application as new candidate → verify single row in applications
+2. Submit same candidate to same job → expect user-friendly duplicate error
+3. Submit same candidate to different job → expect success, both visible
+4. Check "My Applications" in candidate dashboard → verify all applications listed
+5. Withdraw application → verify stage updated to 'withdrawn'
+6. Access resume URL without authentication → expect 403
+7. Upload 50MB file → expect client-side rejection
+```
+
+### Success Criteria
+
+- [ ] Every application submission creates exactly 1 row in `applications`
+- [ ] Candidates see all their applications in dashboard
+- [ ] Duplicate applications blocked by DB constraint
+- [ ] Resumes accessible only via signed URLs
+- [ ] Application stage changes generate notifications
+
+---
+
+## PHASE 4 — APPLICATION HUB STABILIZATION
+
+### Business Goal
+
+Make ApplicationHub the single HR interface for viewing all applications, with server-side joins, pagination, and filtering.
+
+### Issues Resolved
+
+- WF-69: ApplicationHub and CandidatePipeline show different data
+- WF-70: Client-side join with form_id fallback
+- WF-71: No pagination
+- WF-72: No filtering by job/department/date
+- FE-21: All search is client-side
+
+### Files Likely Affected
+
+| File | Change |
+|------|--------|
+| [ApplicationHub.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/ApplicationHub.tsx) | Rewrite to query unified `applications` with server-side join |
+| [CandidatePipeline.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/recruitment/CandidatePipeline.tsx) | Read from same `applications` table |
+
+### Database Changes
+
+```
+1. Create v_application_detail VIEW joining applications + candidates + job_postings
+2. Add server-side pagination function (cursor-based)
+3. Add pg_trgm extension for fuzzy search on candidate name/email
+```
+
+### Frontend Changes
+
+```
+1. Replace client-side join with Supabase JOIN query via view
+2. Add server-side pagination (20 per page)
+3. Add filter dropdowns: department, job, stage, date range
+4. Add debounced search (300ms) on candidate name/email
+5. Remove O(n×m) .find() pattern
+```
+
+### Test Plan
+
+```
+1. Load ApplicationHub with 100+ applications → verify pagination works
+2. Filter by department → verify correct results
+3. Search by partial name → verify server-side ILIKE works
+4. Compare ApplicationHub count with CandidatePipeline count → must match
+```
+
+### Success Criteria
+
+- [ ] ApplicationHub and CandidatePipeline show identical data
+- [ ] Server-side pagination with 20 results per page
+- [ ] No client-side `.find()` joins
+- [ ] Search debounced and server-side
+
+---
+
+## PHASE 5 — ASSESSMENT WORKFLOW STABILIZATION
+
+### Business Goal
+
+Create a working end-to-end assessment flow: create assessment → link to job → assign to candidate → candidate takes test → auto-grade → update pipeline.
+
+### Issues Resolved
+
+- WF-36: Assessments not linked to jobs
+- WF-37: Candidate sees ALL active assessments
+- WF-38: Correct answers in same JSONB
+- WF-39: AI generates hardcoded mock questions
+- WF-40: No retake rules
+- WF-41: No expiry enforcement
+- WF-42: Proctoring violations not persisted
+- WF-43: Scores don't auto-update pipeline
+- WF-44: grade-assessment edge function doesn't exist
+
+### Files Likely Affected
+
+| File | Change |
+|------|--------|
+| [AssessmentCenter.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/recruitment/AssessmentCenter.tsx) | Link assessments to jobs; fix question generation |
+| [CandidateDashboard.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/candidate/Dashboard.tsx) | Show only assigned assessments |
+| [ActiveAssessments.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/candidate/ActiveAssessments.tsx) | Filter by candidate's tokens |
+| [AssessmentAccess.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/public/AssessmentAccess.tsx) | Check token expiry; persist violations |
+| `supabase/functions/grade-assessment/` | **[NEW]** Create this edge function |
+
+### Database Changes
+
+```
+1. ADD job_posting_id FK to assessments table
+2. Separate assessment answers from questions:
+   - assessments.questions → questions only (no correctAnswer)
+   - NEW assessment_answer_keys table (server-only, not client-readable)
+3. Create assessment_assignments table (from Phase 1 audit schema)
+4. Create assessment_submissions table for individual answers
+5. Create proctoring_violations table
+6. ADD max_attempts to assessments
+7. Create DB trigger: on assessment grade → update applications.stage
+```
+
+### Frontend Changes
+
+```
+1. AssessmentCenter: Add job_posting_id dropdown when creating assessment
+2. CandidateDashboard: Query assessment_assignments WHERE candidate_id = me
+3. Replace hardcoded mock questions with real AI generation (remove staticMockQuestions)
+4. AssessmentAccess: Check expires_at before allowing start
+5. Persist proctoring violations to proctoring_violations table
+6. On submission: call grade-assessment edge function
+```
+
+### Backend Changes
+
+```
+1. CREATE grade-assessment Edge Function:
+   - Receive submission_id
+   - Fetch answers from assessment_answer_keys (server-only table)
+   - Calculate score
+   - Update assessment_assignments.score and status
+   - Update applications.stage if score >= cutoff
+   - Return score to client
+```
+
+### Risks
+
+| Risk | Mitigation |
+|------|-----------|
+| Existing assessments lack job_posting_id | Allow NULL initially; require for new assessments |
+| Separating answers breaks existing grading | Keep old JSONB as backup; test grading with new table |
+| grade-assessment function 404s on current code | Create function BEFORE updating client code |
+
+### Test Plan
+
+```
+1. Create assessment linked to a specific job → verify FK
+2. Assign assessment to candidate → verify token created in assessment_assignments
+3. Login as different candidate → verify they cannot see unassigned assessments
+4. Take assessment with expired token → verify rejection
+5. Submit assessment → verify grade-assessment function called
+6. Verify score populates assessment_assignments.score
+7. Verify applications.stage auto-updates on pass/fail
+8. Trigger proctoring violation → verify persisted to DB
+```
+
+### Success Criteria
+
+- [ ] Assessments linked to specific jobs via FK
+- [ ] Candidates only see assessments assigned to them
+- [ ] Correct answers stored server-side only
+- [ ] grade-assessment edge function exists and works
+- [ ] Pipeline stage auto-updates after grading
+- [ ] Proctoring violations persisted
+
+---
+
+## PHASE 6 — INTERVIEW WORKFLOW STABILIZATION
+
+### Business Goal
+
+Implement multi-round interview scheduling with interviewer tracking, human-provided feedback, and automated stage progression.
+
+### Issues Resolved
+
+- WF-45: No interviewer assignment
+- WF-46: No panel interview support
+- WF-47: No multi-round enforcement
+- WF-48: AI generates interview scores instead of interviewer
+- WF-49: Feedback is mutable
+- WF-50: No no-show tracking
+- WF-52: Candidate can see internal scores
+
+### Files Likely Affected
+
+| File | Change |
+|------|--------|
+| [InterviewCenter.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/recruitment/InterviewCenter.tsx) | Add interviewer selection, round sequencing, human feedback form |
+| [CandidateInterviews.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/candidate/Interviews.tsx) | Hide internal scores; show only pass/fail status |
+
+### Database Changes
+
+```
+1. ADD interviewer_id UUID REFERENCES profiles(id) to interview_sessions
+2. ADD round_number INTEGER NOT NULL to interview_sessions
+3. ADD no_show BOOLEAN DEFAULT false
+4. CREATE interview_feedback table (separate from interview_sessions)
+   - Allows multiple feedbacks per session (panel interviews)
+   - Feedback immutable after submission (no UPDATE allowed)
+5. ADD CHECK constraint: interview_sessions.status IN defined set
+6. CREATE DB trigger: all rounds completed + passed → update applications.stage
+```
+
+### Frontend Changes
+
+```
+1. Add interviewer dropdown (populated from profiles WHERE role IN ('hr','team_lead'))
+2. Add round number sequencing (disable Round 2 until Round 1 completed)
+3. Replace AI score generation with structured feedback form
+4. Make submitted feedback read-only
+5. Add "No Show" button for HR
+6. Hide detailed scores from candidate view — show only status
+```
+
+### Test Plan
+
+```
+1. Schedule Round 1 → verify interviewer_id saved
+2. Attempt to schedule Round 2 before Round 1 completed → verify blocked
+3. Submit feedback → verify immutable (UPDATE attempt fails)
+4. Mark no-show → verify status updated
+5. Complete all rounds with pass → verify application stage auto-advances
+6. Login as candidate → verify no numerical scores visible
+```
+
+### Success Criteria
+
+- [ ] Every interview session has an assigned interviewer
+- [ ] Round sequencing enforced
+- [ ] Human-provided feedback (not AI-generated)
+- [ ] Feedback immutable after submission
+- [ ] Candidates see status only, not internal scores
+
+---
+
+## PHASE 7 — ONBOARDING WORKFLOW STABILIZATION
+
+### Business Goal
+
+Create a single, trackable onboarding pathway with a multi-step checklist, offer persistence, and proper candidate-to-employee conversion.
+
+### Issues Resolved
+
+- WF-53-60: Offer management (persistence, approval, versioning, acceptance)
+- WF-61: Two competing onboarding pathways
+- WF-62-68: Pre-boarding, checklist, employee code, joining date, BGC
+
+### Files Likely Affected
+
+| File | Change |
+|------|--------|
+| [OnboardingCenter.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/OnboardingCenter.tsx) | Sole onboarding pathway with checklist |
+| [DocumentVault.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/DocumentVault.tsx) | Remove duplicate onboarding; keep document management |
+| [Recruitment.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/Recruitment.tsx) | Offer generator persists to offer_letters table |
+
+### Database Changes
+
+```
+1. CREATE offer_letters table (per Phase 1 audit schema)
+2. CREATE onboarding_tasks table (checklist items)
+3. CREATE onboarding_documents table (required docs per hire)
+4. ADD candidate_id FK to candidate_onboarding linking back to candidate record
+5. CREATE employee_code_seq SEQUENCE for auto-incrementing codes
+6. ADD joining_date, confirmation_date to profiles
+7. Remove onboarding functionality from DocumentVault (keep doc management)
+```
+
+### Frontend Changes
+
+```
+1. Recruitment.tsx offer generator → persist to offer_letters table
+2. Add offer status tracking (draft → sent → accepted → declined)
+3. Add candidate acceptance/decline flow in CandidateDashboard
+4. OnboardingCenter: implement multi-step checklist UI
+5. Generate employee_code from sequence (not Date.now())
+6. DocumentVault: remove "Convert to Employee" button
+```
+
+### Test Plan
+
+```
+1. Generate offer → verify saved in offer_letters table
+2. Candidate accepts offer → verify status updated
+3. HR initiates onboarding → verify checklist items created
+4. Complete all checklist items → verify employee record created
+5. Verify employee code is sequential (FWC-0001, FWC-0002)
+6. Verify candidate record linked to employee profile
+```
+
+### Success Criteria
+
+- [ ] Single onboarding pathway (OnboardingCenter only)
+- [ ] Offers persisted with full lifecycle tracking
+- [ ] Candidate can accept/decline offers in portal
+- [ ] Employee codes sequential and formatted
+- [ ] Checklist tracks IT, HR, Finance, Admin tasks
+
+---
+
+## PHASE 8 — DASHBOARD UNIFICATION
+
+### Business Goal
+
+Every dashboard (Admin, HR, Team Lead, Employee, Candidate) shows identical metrics for the same underlying data, derived from database views.
+
+### Issues Resolved
+
+- All dashboard divergence issues from Phase 2 Section 9
+- FE-15: Five different headcount computations
+- HIGH-04: Fabricated financial data
+
+### Files Likely Affected
+
+All 5 dashboard files, plus FloatingChatbot.tsx (removes fabricated valuation).
+
+### Database Changes
+
+```
+1. CREATE v_org_metrics VIEW (headcount, dept distribution, active candidates)
+2. CREATE v_recruitment_funnel VIEW (applications by stage)
+3. CREATE v_payroll_summary VIEW (total payroll, dept breakdown)
+4. CREATE v_interview_pipeline VIEW (scheduled, completed, pending)
+5. CREATE v_onboarding_status VIEW (in-progress, completed)
+```
+
+### Frontend Changes
+
+```
+1. All dashboards query from same views
+2. Remove ALL client-side metric calculations
+3. Remove fabricated valuation from FloatingChatbot.tsx
+4. Remove fabricated balance sheet from Admin Dashboard
+5. Replace hardcoded payroll estimates with actual payroll_records SUM
+```
+
+### Test Plan
+
+```
+1. Add an employee → verify all 5 dashboards reflect +1
+2. Process a payroll record → verify payroll summary updates everywhere
+3. Submit an application → verify recruitment funnel updates
+4. Verify no Math.random() or hardcoded multipliers in any dashboard
+```
+
+### Success Criteria
+
+- [ ] Admin + HR dashboards show identical headcount
+- [ ] Payroll totals match actual payroll_records
+- [ ] Zero fabricated financial data
+- [ ] All metrics derived from database views
+
+---
+
+## PHASE 9 — ANALYTICS UNIFICATION
+
+### Business Goal
+
+Replace client-side analytics with server-side aggregations. Provide pipeline velocity, time-to-hire, offer acceptance rate, and source effectiveness.
+
+### Files Likely Affected
+
+| File | Change |
+|------|--------|
+| [Admin Analytics.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/admin/Analytics.tsx) | Read from analytics views |
+| [HR Analytics reusing Admin](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/App.tsx#L166) | Add HR-specific analytics |
+| [Team Lead Analytics.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/team-lead/Analytics.tsx) | Read from team-scoped views |
+
+### Database Changes
+
+```
+1. CREATE v_pipeline_velocity (AVG time_in_stage per stage)
+2. CREATE v_time_to_hire (applied_date to hired_date)
+3. CREATE v_offer_acceptance_rate (accepted / total offers)
+4. CREATE v_source_effectiveness (applications by source)
+5. CREATE v_department_performance (tasks completed, hours worked)
+```
+
+### Frontend Changes
+
+```
+1. Replace 7 simultaneous select('*') queries with single view query
+2. Add new analytics charts: pipeline velocity, time-to-hire, source funnel
+3. Add date range filter for all analytics
+```
+
+### Success Criteria
+
+- [ ] All analytics derived from server-side views
+- [ ] No client-side `forEach` loops for metric calculation
+- [ ] Time-to-hire and pipeline velocity metrics functional
+
+---
+
+## PHASE 10 — FRONTEND PERFORMANCE OPTIMIZATION
+
+### Business Goal
+
+Reduce initial bundle by 70%, eliminate re-render storms, enable pagination, and handle 5000+ record datasets without browser freeze.
+
+### Issues Resolved
+
+- FE-01 to FE-08: Architecture issues
+- FE-09 to FE-13: State management issues
+- FE-14: 1-second re-render storm
+- FE-16 to FE-20: Realtime issues
+- FE-21 to FE-27: Search, DSA, form issues
+- Plus all bundle size, duplication, and performance issues
+
+### Execution Sub-Phases
+
+#### 10a: Critical Performance Fixes (3 days)
+
+| Task | File | Impact |
+|------|------|--------|
+| `React.lazy()` on all 65+ route imports | [App.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/App.tsx) | ~70% bundle reduction |
+| Extract clock timer into isolated `<ClockTimer />` component | [DashboardLayout.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/components/layout/DashboardLayout.tsx) | Eliminate 1-second full-app re-render |
+| Remove `@google/generative-ai` + `@mediapipe/tasks-vision` | [package.json](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/package.json) | ~600KB dead code removed |
+| Remove FloatingChatbot omniscient subscription | [FloatingChatbot.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/components/FloatingChatbot.tsx) | Eliminate unbounded realtime |
+
+#### 10b: Enable React Query (1 week)
+
+| Task | Impact |
+|------|--------|
+| Wrap app in `QueryClientProvider` | Foundation for all caching |
+| Create `useCurrentUser()` hook with `useQuery` | Eliminate 15+ redundant fetches |
+| Migrate badge count logic to polling (30s) | Replace realtime storm |
+| Add column projection to all `select('*')` | 60-80% payload reduction |
+
+#### 10c: Consolidate Duplicates (1 week)
+
+| Task | Lines Saved |
+|------|------------|
+| Shared `<ChatPage role={} />` | ~1600 |
+| Shared `<ComplaintsPage role={} />` | ~1200 |
+| Shared `<NotificationsPage />` | ~900 |
+| Shared `<SettingsPage />` | ~900 |
+| Shared `<AIInsightsPage role={} />` | ~1200 |
+| Single `callAI()` service | ~300 |
+| **Total** | **~6100 lines** |
+
+#### 10d: Performance Patterns (1 week)
+
+| Pattern | Where |
+|---------|-------|
+| `useMemo` on all filter/sort/map chains | All list views |
+| Hash maps for client-side joins | ApplicationHub, CandidateInterviews |
+| Cursor-based pagination via `useInfiniteQuery` | All list views |
+| `@tanstack/react-virtual` for tables >50 rows | Pipeline, Applications, Employees |
+| Debounce on all search inputs (300ms) | All search bars |
+| Lazy-load Recharts, pdf.js, mammoth | Analytics, ATSScanner |
+
+### Success Criteria
+
+- [ ] Initial bundle < 500KB (gzipped)
+- [ ] No 1-second re-render observable in React DevTools Profiler
+- [ ] All list views paginated
+- [ ] No `select('*')` queries remain
+- [ ] ~6000 lines of duplicate code removed
+
+---
+
+## PHASE 11 — SECURITY HARDENING
+
+### Business Goal
+
+Implement defense-in-depth: route guards, RLS policies, role-in-app_metadata, AI proxy, and file access controls.
+
+### Issues Resolved
+
+- CRIT-01: Hardcoded API token
+- CRIT-02: No route guards
+- CRIT-03: No RLS policies
+- CRIT-04: Role in client-writable user_metadata
+- CRIT-05: Admin client using anon key
+- FE-38 to FE-43: All frontend security issues
+- All Phase 2 security issues (10 items)
+
+### Execution Order
+
+```
+11a: Move role to app_metadata via DB trigger (1 day)
+11b: Create ProtectedRoute component with role check (1 day)  
+11c: Implement RLS policies for all 37 tables (3 days)
+11d: Create AI proxy Edge Function (2 days)
+11e: Remove all hardcoded API tokens (1 hour)
+11f: Make storage buckets private with signed URLs (4 hours)
+11g: Add audit_log table + triggers (2 days)
+```
+
+### Database Changes
+
+```
+1. CREATE FUNCTION set_role_on_signup() → copies role to app_metadata
+2. CREATE RLS policies for all tables (per Phase 2 Section 13)
+3. ALTER TABLE assessments → separate answer keys table
+4. CREATE audit_log table with triggers on critical tables
+5. Make resume/bgc storage buckets private
+```
+
+### Frontend Changes
+
+```
+1. Create <ProtectedRoute allowedRoles={[...]}> wrapper
+2. Wrap all role-prefixed routes with ProtectedRoute
+3. Remove all hardcoded HF tokens
+4. Route all AI calls through Edge Function proxy
+5. Replace getPublicUrl() with createSignedUrl() everywhere
+6. Strip PII from FloatingChatbot context before sending to AI
+```
+
+### Test Plan
+
+```
+1. Login as employee → navigate to /admin → expect redirect to /unauthorized
+2. Login as candidate → attempt supabase.from('profiles').select('*') → expect RLS block
+3. Attempt supabase.auth.updateUser({ data: { role: 'admin' } }) → verify no effect
+4. Grep client bundle for API tokens → expect zero matches
+5. Access resume URL without auth → expect 403
+6. Verify audit_log entries for stage change, role change, offer creation
+```
+
+### Success Criteria
+
+- [ ] Route guards enforce role-based access
+- [ ] RLS policies active on all tables
+- [ ] Role in app_metadata (not client-writable)
+- [ ] Zero API tokens in client bundle
+- [ ] All file access via signed URLs
+- [ ] Audit trail for all sensitive operations
+
+---
+
+## PHASE 12 — AI ENHANCEMENT LAYER
+
+### Business Goal
+
+Upgrade AI features from prototype to production: real resume parsing, functional assessment grading, and structured candidate ranking.
+
+### Prerequisite Phases
+
+All previous phases must be complete — AI features depend on clean data, proper FKs, and server-side proxy.
+
+### AI Feature Implementation Order
+
+| # | Feature | Dependencies | Effort |
+|---|---------|-------------|--------|
+| 12.1 | **Server-side resume parsing** | AI proxy (Phase 11), resume storage (Phase 3) | 3 days |
+| 12.2 | **Structured skill extraction** | Resume parsing, skill taxonomy table | 2 days |
+| 12.3 | **AI candidate scoring** (real, not mock) | Skill extraction, applications table (Phase 3) | 2 days |
+| 12.4 | **AI candidate ranking** | Scoring, job_postings.requirements | 2 days |
+| 12.5 | **Assessment auto-grading** | grade-assessment function (Phase 5) | Already done |
+| 12.6 | **Post-interview summarization** | Interview feedback (Phase 6), AI proxy | 2 days |
+| 12.7 | **AI skill gap analysis** | Skill extraction, job requirements | 2 days |
+| 12.8 | **AI workforce analytics** | Department metrics views (Phase 9) | 3 days |
+| 12.9 | **AI attrition prediction** | Historical employee data, performance reviews | 5 days |
+| 12.10 | **AI recruitment forecasting** | Pipeline velocity data, historical hiring | 5 days |
+| 12.11 | **AI bias detection** | Screening decisions + candidate demographics | 3 days |
+| 12.12 | **Candidate FAQ chatbot** | Career portal, job_postings data | 2 days |
+
+### Architecture
+
+```
+All AI calls route through Edge Functions:
+
+Client → Edge Function → Rate Limiter → AI Provider
+                              ↓
+                     Input Sanitization (strip PII where possible)
+                              ↓
+                     Structured JSON Validation
+                              ↓
+                     Result Persistence (to DB)
+                              ↓
+                     Audit Log Entry
+                              ↓
+                     Response to Client
+```
+
+### Success Criteria
+
+- [ ] Resume parsing extracts structured data (name, skills, experience, education)
+- [ ] AI scoring produces consistent, explainable scores
+- [ ] Candidate ranking is per-job, not global
+- [ ] All AI results persisted and auditable
+
+---
+
+## ENTERPRISE ARCHITECTURE TARGET STATE
+
+```mermaid
+graph TB
+    subgraph "Client Layer"
+        A["React SPA (Lazy-loaded, Code-split)"]
+        A1["ProtectedRoute Guards"]
+        A2["React Query Cache"]
+        A3["Zustand Auth Store"]
+    end
+
+    subgraph "API Layer"
+        B["Supabase Client (RLS-enforced)"]
+        C["Edge Functions (AI Proxy, Grading, Parsing)"]
+    end
+
+    subgraph "Data Layer"
+        D["PostgreSQL"]
+        D1["Tables with FK, CHECK, UNIQUE"]
+        D2["RLS Policies (per role)"]
+        D3["Database Views (metrics)"]
+        D4["Audit Log Triggers"]
+        D5["22+ Performance Indexes"]
+    end
+
+    subgraph "Storage Layer"
+        E["Private Buckets (signed URLs)"]
+    end
+
+    subgraph "External"
+        F["AI Provider (HuggingFace/OpenAI)"]
+    end
+
+    A --> A1 --> B
+    A --> A2 --> B
+    A --> A3
+    B --> D
+    C --> D
+    C --> F
+    B --> E
+    D --> D1 & D2 & D3 & D4 & D5
+```
+
+---
+
+## ADVANCED REACT OPTIMIZATION SCHEDULE
+
+| Optimization | When to Implement | Phase |
+|-------------|------------------|-------|
+| `React.lazy()` + `Suspense` | Phase 10a (first task) | 10 |
+| Error Boundaries | Phase 10a | 10 |
+| `React.memo` on list items | Phase 10d (with virtualization) | 10 |
+| `useMemo` on derived data | Phase 10d | 10 |
+| `useCallback` on event handlers | Phase 10d | 10 |
+| React Query (`useQuery`, `useInfiniteQuery`) | Phase 10b | 10 |
+| Virtualized tables (`@tanstack/react-virtual`) | Phase 10d | 10 |
+| Route-level code splitting | Phase 10a | 10 |
+| Infinite scrolling (chat, notifications) | Phase 10d | 10 |
+
+---
+
+## ADVANCED DSA OPTIMIZATION SCHEDULE
+
+| Structure | Where | Why | Phase |
+|-----------|-------|-----|-------|
+| **Hash Map** (`Map<id, entity>`) | ApplicationHub client-side joins, CandidateInterviews joins | O(n×m) → O(n+m) for all lookups | 4, 10d |
+| **Set** | DashboardLayout team member deduplication | Already used ✅ | N/A |
+| **Debounced search** | All search inputs (OnboardingCenter, Pipeline, Hub) | Reduce filter calls from 10/s to 3/s | 4, 10d |
+| **Memoization** (`useMemo`) | All `.filter().sort().map()` chains in render | Prevent recalculation on unrelated re-renders | 10d |
+| **Server-side aggregation** | All dashboard metrics, analytics | Eliminate client-side O(n) loops | 8, 9 |
+| **Cursor-based pagination** | All list views at scale | O(1) page load instead of O(n) full scan | 4, 10d |
+| **Trie / pg_trgm** | Candidate name search at 5000+ records | Sub-linear search time | 4 |
+| **Priority Queue** (conceptual) | Interview scheduling (find next available slot) | Efficient time-slot allocation | 6 |
+| **Lookup tables** (constants) | Department names, status strings, role enums | O(1) validation instead of string comparison | 1, 2 |
+| **State normalization** | React Query cache with entity normalization | Prevent duplicate data in memory | 10b |
+
+---
+
+## SECURITY ROADMAP SUMMARY
+
+| Layer | Current State | Target State | Phase |
+|-------|-------------|-------------|-------|
+| Authentication | Supabase Auth (functional) | Supabase Auth + session refresh | 11 |
+| Authorization | None (client-side redirect only) | ProtectedRoute + RLS | 11 |
+| RBAC | Role in user_metadata (client-writable) | Role in app_metadata (server-only) | 11 |
+| Audit Trails | None | audit_log table with triggers | 11 |
+| Data Privacy | All data publicly queryable | RLS per role on all tables | 11 |
+| Document Security | Public URLs | Signed URLs with expiry | 3, 11 |
+| Resume Security | Public bucket | Private bucket + signed access | 3 |
+| Assessment Security | Answers in client-readable JSONB | Answers in server-only table | 5 |
+| Interview Security | Scores visible to candidates | Status-only for candidates | 6 |
+| API Keys | Hardcoded in 6 client files | Server-side only via Edge Functions | 11 |
+
+---
+
+## SCALABILITY ROADMAP
+
+| Concern | Current Limit | Target Capacity | Solution | Phase |
+|---------|-------------|----------------|----------|-------|
+| Candidate list load | ~200 before jank | 5000+ | Cursor pagination + virtualization | 4, 10d |
+| Application list | ~100 before freeze | 10000+ | Server-side pagination + view | 4 |
+| Assessment records | Untested | 100000+ | Indexed queries + pagination | 5 |
+| Dashboard metrics | Client-side O(n) | O(1) view query | Database views | 8 |
+| Realtime channels | Unbounded (per component) | 1 multiplexed per user | Shared channel manager | 10b |
+| AI processing | Sequential 4s delays | Batch queue (10 concurrent) | Edge Function queue | 12 |
+| Concurrent users | ~10 before degradation | 200+ | Connection pooling + RLS | 11 |
+| Bundle size | ~2-4MB initial | <500KB gzipped | Lazy loading + dead code removal | 10a |
+
+---
+
+## TECHNICAL DEBT ELIMINATION PLAN
+
+| Debt Category | Estimated Lines | Resolution Phase | Strategy |
+|--------------|----------------|-----------------|----------|
+| Duplicate Chat pages (4×) | ~1600 | 10c | Shared component |
+| Duplicate Complaints pages (3×) | ~1200 | 10c | Shared component |
+| Duplicate Notifications pages (3×) | ~900 | 10c | Shared component |
+| Duplicate Settings pages (3×) | ~900 | 10c | Shared component |
+| Duplicate AI Insights pages (3×) | ~1200 | 10c | Shared component |
+| Duplicate Payroll pages (3×) | ~800 | 10c | Shared component |
+| Duplicate AI utility (6×) | ~300 | 10c | Single service |
+| `any` type annotations | ~500 occurrences | 10 (types) | Supabase gen types |
+| Dead dependencies | ~1.5MB bundle | 10a | Remove unused deps |
+| Console.log statements | ~100 occurrences | 10 | Replace with structured logger |
+| **Total waste** | **~7800+ lines** | | |
+
+---
+
+## ESTIMATED RISK MATRIX
+
+| Phase | Data Loss Risk | Downtime Risk | User Impact | Overall Risk |
+|-------|---------------|--------------|-------------|-------------|
+| 1: Data Integrity | 🟡 Medium | 🟢 Low | 🟡 Numbers change | 🟡 Medium |
+| 2: DB Hardening | 🟡 Medium | 🟡 Medium | 🟢 Low | 🟡 Medium |
+| 3: Applications | 🔴 High | 🟡 Medium | 🔴 High (flow changes) | 🔴 High |
+| 4: Application Hub | 🟢 Low | 🟢 Low | 🟢 Low | 🟢 Low |
+| 5: Assessments | 🟡 Medium | 🟢 Low | 🟡 Medium | 🟡 Medium |
+| 6: Interviews | 🟢 Low | 🟢 Low | 🟡 Medium | 🟢 Low |
+| 7: Onboarding | 🟡 Medium | 🟢 Low | 🟡 Medium | 🟡 Medium |
+| 8: Dashboards | 🟢 Low | 🟢 Low | 🟡 Numbers change | 🟢 Low |
+| 9: Analytics | 🟢 Low | 🟢 Low | 🟢 Low | 🟢 Low |
+| 10: Performance | 🟢 Low | 🟢 Low | 🟢 Positive | 🟢 Low |
+| 11: Security | 🟡 Medium | 🟡 Medium | 🟡 Auth flow changes | 🟡 Medium |
+| 12: AI Enhancement | 🟢 Low | 🟢 Low | 🟢 Positive | 🟢 Low |
+
+---
+
+## RECOMMENDED ORDER OF IMPLEMENTATION
+
+```mermaid
+gantt
+    title Enterprise Modernization - 24 Week Plan
+    dateFormat  YYYY-MM-DD
+    axisFormat  %b %d
+
+    section Foundation
+    Phase 1 - Data Integrity         :p1, 2026-06-16, 3w
+    Phase 2 - DB Relationships       :p2, after p1, 2w
+    
+    section Core Workflows
+    Phase 3 - Applications           :p3, after p2, 2w
+    Phase 4 - Application Hub        :p4, after p3, 2w
+    Phase 5 - Assessments            :p5, after p4, 2w
+    Phase 6 - Interviews             :p6, after p5, 2w
+    Phase 7 - Onboarding             :p7, after p6, 2w
+
+    section Analytics & Dashboards
+    Phase 8 - Dashboards             :p8, after p7, 2w
+    Phase 9 - Analytics              :p9, after p8, 2w
+
+    section Optimization
+    Phase 10 - Frontend Performance  :p10, after p9, 2w
+    Phase 11 - Security Hardening    :p11, after p10, 2w
+    Phase 12 - AI Enhancement        :p12, after p11, 2w
+```
+
+> [!IMPORTANT]
+> **Phases 1-2 are strict prerequisites.** No other phase can begin safely until the data foundation (departments table, unified applications, FK constraints) is in place. Attempting to fix workflows on a broken data model will create more problems than it solves.
+
+---
+
+## FINAL PRODUCTION READINESS ASSESSMENT
+
+### Pre-Launch Checklist
+
+| Category | Requirement | Status After All Phases |
+|----------|------------|----------------------|
+| **Data Integrity** | Single source of truth for all metrics | ✅ |
+| **Database** | FKs, CHECKs, UNIQUEs on all tables | ✅ |
+| **Security** | RLS on all tables, role in app_metadata | ✅ |
+| **Auth** | Route guards + RLS double protection | ✅ |
+| **API Keys** | Server-side only via Edge Functions | ✅ |
+| **Performance** | Code splitting, pagination, virtualization | ✅ |
+| **Scalability** | Handles 5000 candidates, 1000 employees | ✅ |
+| **Audit Trail** | All sensitive operations logged | ✅ |
+| **ATS Pipeline** | 13-stage state machine with enforcement | ✅ |
+| **Assessments** | Server-side grading, answers hidden | ✅ |
+| **Interviews** | Multi-round, human feedback, immutable | ✅ |
+| **Offers** | Persistent, versioned, approval chain | ✅ |
+| **Onboarding** | Single pathway with checklist | ✅ |
+| **Payroll** | Real records, not fabricated | ✅ |
+| **AI** | Proxied, sanitized, audited | ✅ |
+| **Types** | Generated from DB schema, no `any` | ✅ |
+| **Tests** | Unit + integration for critical flows | ✅ |
+| **Bundle** | <500KB gzipped initial load | ✅ |
+| **Error Handling** | Error boundaries, structured logging | ✅ |
+| **Deployment** | vercel.json, env vars, caching headers | ✅ |
+
+### Estimated Total Effort
+
+| Category | Effort |
+|----------|--------|
+| Database migrations + views | ~15 days |
+| Backend (Edge Functions) | ~8 days |
+| Frontend (refactoring) | ~30 days |
+| Frontend (new features) | ~15 days |
+| Testing | ~10 days |
+| Documentation | ~5 days |
+| **Total** | **~83 working days (~17 weeks for 1 engineer)** |
+
+> [!CAUTION]
+> **With a single engineer, the 24-week timeline is realistic but tight.** A 2-engineer team can parallelize Phases 8-9 with 10 and reduce to ~16 weeks. Critical path: Phases 1 → 2 → 3 are strictly sequential and cannot be parallelized.
+
+---
+
+> [!IMPORTANT]
+> **DO NOT START IMPLEMENTATION** until this roadmap has been reviewed and approved. Each phase requires explicit approval before beginning, as database migrations are irreversible in production.

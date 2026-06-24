@@ -1,0 +1,1290 @@
+# PHASE 7 — ENTERPRISE HRMS EXECUTION PLAN
+
+**System:** FWC AI-Powered HRMS + ATS Platform  
+**Document Type:** Chief HR Technology Officer Execution Blueprint  
+**Date:** June 13, 2026  
+**Inputs:** Phase 1-4 Audit Reports · Phase 5 Enterprise Roadmap · Phase 6 ATS Database Execution Plan  
+**Benchmark:** Workday · SAP SuccessFactors · Oracle HCM · Darwinbox · BambooHR · Zoho People  
+
+---
+
+## 1. CURRENT HRMS ASSESSMENT
+
+### 1.1 Module Inventory
+
+| Module | File(s) | Lines | Enterprise Coverage | Verdict |
+|--------|---------|-------|-------------------|---------|
+| Employee Dashboard | [Dashboard.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/employee/Dashboard.tsx) | 141 | Tasks, projects, hours, complaints | 🟡 15% |
+| Leave Management | [leaves.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/employee/leaves.tsx) | 131 | Submit leave + resign | 🟡 20% |
+| Work Logs / Attendance | [WorkLogs.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/employee/WorkLogs.tsx) | 311 | Clock in/out, AI standup polisher | 🟡 30% |
+| Tasks | [Tasks.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/employee/Tasks.tsx) | ~180 | View assigned tasks | 🔴 15% |
+| Projects | [Projects.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/employee/Projects.tsx) | ~100 | View projects | 🔴 10% |
+| Payroll | [Payroll.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/Payroll.tsx) | 812 | Fabricated payroll calculations | 🔴 5% |
+| Performance | [PerformanceEngine.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/PerformanceEngine.tsx) | 165 | AI-only, no human reviews | 🔴 10% |
+| Settings | [SettingsPage.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/employee/SettingsPage.tsx) | 137 | Name + phone + avatar | 🔴 10% |
+| Team Lead Approvals | [Approvals.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/team-lead/Approvals.tsx) | 98 | Leave approvals only | 🔴 15% |
+| Team Management | [MyTeam.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/team-lead/MyTeam.tsx) | 323 | View team, inspect profiles | 🟡 25% |
+| Complaints | [Complaints.tsx (emp)](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/employee/Complaints.tsx) | ~300 | Submit + track grievances | 🟡 25% |
+| Chat | [Chat.tsx (emp)](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/employee/Chat.tsx) | ~500 | Internal messaging | 🟡 30% |
+| AI Insights | [AIInsights.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/employee/AIInsights.tsx) | ~400 | AI assistant | 🟡 20% |
+
+### 1.2 Critical HRMS Gaps (78 identified)
+
+| Category | Missing Capabilities | Count |
+|----------|---------------------|-------|
+| Organizational Structure | No departments table, no hierarchy, no business units | 8 |
+| Employee Lifecycle | No promotions, no transfers, no confirmations, no PIP | 12 |
+| RBAC | No route guards, employee sees admin payroll, role in client-writable metadata | 7 |
+| Employee Master Data | No emergency contacts, no bank details, no statutory IDs, no employment history | 10 |
+| Onboarding | Two pathways, no checklist, no offer persistence | 6 |
+| Performance Management | AI-only, no goals, no KPIs, no review cycles, no peer reviews | 9 |
+| Leave Management | No balance tracking, no accrual rules, no holiday calendar | 7 |
+| Attendance | No overtime, no regularization, no shift management | 5 |
+| Payroll | 100% fabricated, no salary structures, no tax regime, no actual payslips | 8 |
+| Employee Self-Service | Only name + phone editable, no payslips, no tax declarations | 6 |
+
+---
+
+## 2. ORGANIZATIONAL ARCHITECTURE
+
+### 2.1 Current State
+
+```
+CURRENT HIERARCHY:
+  profiles.role = 'admin' | 'hr' | 'team_lead' | 'employee' | 'candidate'
+  profiles.department = free-text string (e.g., "Engineering", "Engg", "engineering")
+  profiles.team_lead_id = UUID → profiles (self-referential)
+  
+  NO departments table
+  NO business unit concept
+  NO designation/grade concept
+  NO multi-level management chain
+  NO org chart derivable from data
+```
+
+### 2.2 Enterprise Target Architecture
+
+```mermaid
+graph TB
+    subgraph "Level 1: Company"
+        ORG["FWC Corporation"]
+    end
+    
+    subgraph "Level 2: Business Units (Future)"
+        BU1["Technology"]
+        BU2["Operations"]
+        BU3["Corporate"]
+    end
+    
+    subgraph "Level 3: Departments"
+        D1["Engineering"]
+        D2["Product Management"]
+        D3["Human Resources"]
+        D4["Finance & Accounts"]
+        D5["Sales & Marketing"]
+        D6["IT Infrastructure"]
+    end
+    
+    subgraph "Level 4: Teams (implicit via reporting_manager_id)"
+        T1["Frontend Team"]
+        T2["Backend Team"]
+        T3["QA Team"]
+        T4["Recruitment Team"]
+    end
+    
+    ORG --> BU1 & BU2 & BU3
+    BU1 --> D1 & D2
+    BU3 --> D3 & D4 & D5
+    BU2 --> D6
+    D1 --> T1 & T2 & T3
+    D3 --> T4
+```
+
+### 2.3 Organizational Data Model
+
+```
+departments:
+  id              UUID PK
+  name            TEXT NOT NULL UNIQUE
+  code            TEXT UNIQUE (e.g., 'ENG', 'HR', 'FIN')
+  head_id         UUID FK → profiles(id)
+  parent_dept_id  UUID FK → departments(id) — for sub-departments
+  cost_center     TEXT
+  is_active       BOOLEAN DEFAULT true
+  created_at      TIMESTAMPTZ
+  updated_at      TIMESTAMPTZ
+
+designations:
+  id              UUID PK
+  title           TEXT NOT NULL (e.g., 'Software Engineer', 'Senior Analyst')
+  grade           TEXT (e.g., 'L1', 'L2', 'L3', 'L4', 'L5')
+  band            TEXT (e.g., 'IC1', 'IC2', 'M1', 'M2')
+  department_id   UUID FK → departments(id) — optional
+  salary_range_min DECIMAL
+  salary_range_max DECIMAL
+  is_active       BOOLEAN DEFAULT true
+  created_at      TIMESTAMPTZ
+```
+
+### 2.4 Reporting Hierarchy
+
+```
+Reporting chain query (recursive CTE):
+
+Employee → Reporting Manager → Department Head → VP/Director → CEO
+
+profiles.reporting_manager_id = UUID FK → profiles(id)
+departments.head_id = UUID FK → profiles(id)
+
+Approval chain derives from this:
+  Leave approval: reporting_manager_id
+  Expense approval: reporting_manager_id → department head (if amount > threshold)
+  Hiring approval: department head → finance → VP
+```
+
+### 2.5 What Changes from Current
+
+| Current | Enterprise Target | Impact |
+|---------|------------------|--------|
+| `profiles.department` (free-text) | `profiles.department_id FK → departments` | All 24+ files referencing department string must update |
+| No designation concept | `profiles.designation_id FK → designations` | New field on profiles |
+| `team_lead_id` only | `reporting_manager_id` (supports multi-level chain) | Rename + support deeper hierarchy |
+| No department head | `departments.head_id FK → profiles` | New concept |
+| Role detection via URL pathname | Role from `app_metadata` via auth | Remove `window.location.pathname` hacks |
+
+---
+
+## 3. EMPLOYEE LIFECYCLE ARCHITECTURE
+
+### 3.1 Current vs Enterprise Lifecycle
+
+```mermaid
+graph LR
+    subgraph "CURRENT (5 stages)"
+        A1["Candidate"] --> A2["Hired (role change)"]
+        A2 --> A3["Employee"]
+        A3 --> A4["Resigned"]
+    end
+    
+    subgraph "ENTERPRISE (12 stages)"
+        B1["Candidate"] --> B2["Offer Accepted"]
+        B2 --> B3["Pre-boarding"]
+        B3 --> B4["Day 1 Onboarding"]
+        B4 --> B5["Probation"]
+        B5 --> B6["Confirmed Employee"]
+        B6 --> B7["Promotion / Transfer"]
+        B7 --> B6
+        B6 --> B8["PIP (Performance Improvement)"]
+        B8 --> B6
+        B8 --> B9["Separation Initiated"]
+        B6 --> B9
+        B9 --> B10["Notice Period"]
+        B10 --> B11["Exit Clearance"]
+        B11 --> B12["Alumni"]
+    end
+```
+
+### 3.2 Missing Lifecycle Stages
+
+| Stage | Current Status | Required Implementation |
+|-------|---------------|----------------------|
+| **Probation** | ❌ No concept | `profiles.employment_status = 'probation'` + `probation_end_date` + confirmation trigger |
+| **Confirmation** | ❌ No concept | Auto-transition after probation period + manager confirmation approval |
+| **Promotion** | ❌ No concept | `employment_history` table: old designation → new designation with effective date |
+| **Internal Transfer** | ❌ No concept | `employment_history` table: old department → new department with effective date |
+| **PIP** | ❌ No concept | `performance_improvement_plans` table with goals, duration, review dates |
+| **Notice Period** | ❌ Partial (resignation table exists) | `profiles.employment_status = 'notice_period'` + `last_working_date` |
+| **Exit Clearance** | ❌ No concept | `clearance_tasks` table: IT return, finance settlement, knowledge transfer |
+| **Alumni** | ❌ No concept | `profiles.employment_status = 'alumni'` after exit clearance complete |
+
+### 3.3 Employment History Table (NEW)
+
+```
+employment_history:
+  id                UUID PK
+  employee_id       UUID FK → profiles(id) NOT NULL
+  change_type       TEXT CHECK (joining|promotion|transfer|redesignation|salary_revision|confirmation|pip|separation)
+  effective_date    DATE NOT NULL
+  old_department_id UUID FK → departments(id)
+  new_department_id UUID FK → departments(id)
+  old_designation_id UUID FK → designations(id)
+  new_designation_id UUID FK → designations(id)
+  old_salary        DECIMAL
+  new_salary        DECIMAL
+  old_manager_id    UUID FK → profiles(id)
+  new_manager_id    UUID FK → profiles(id)
+  reason            TEXT
+  approved_by       UUID FK → profiles(id)
+  created_at        TIMESTAMPTZ
+```
+
+---
+
+## 4. ROLE-BASED ACCESS MODEL
+
+### 4.1 Current RBAC Flaws
+
+| # | Flaw | File | Impact |
+|---|------|------|--------|
+| RBAC-01 | **Role in client-writable `user_metadata`** — any user can become admin | [auth.ts L18](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/lib/auth.ts#L18) | Privilege escalation |
+| RBAC-02 | **Employee/Team Lead routes include AdminPayroll** — sees all salaries | [App.tsx L118-135](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/App.tsx#L118) | Data breach |
+| RBAC-03 | **HR reuses Admin components without filtering** | [App.tsx L154-171](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/App.tsx#L154) | Over-privileged |
+| RBAC-04 | **No route guards** — unauthenticated users see protected pages | [App.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/App.tsx) | Zero access control |
+| RBAC-05 | **Role detection via URL pathname** — `window.location.pathname.includes('/admin')` | [SettingsPage.tsx L19](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/employee/SettingsPage.tsx#L19) | Spoofable |
+| RBAC-06 | **Team Lead scope uses department string match as fallback** | [Approvals.tsx L38](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/team-lead/Approvals.tsx#L38) | Cross-team data leak |
+| RBAC-07 | **No RLS** — Any authenticated user reads any table | All files | Complete data exposure |
+
+### 4.2 Enterprise RBAC Permission Matrix
+
+| Capability | Admin | HR | Team Lead | Employee | Candidate |
+|-----------|-------|-----|-----------|----------|-----------|
+| **Organization** | | | | | |
+| View all departments | ✅ | ✅ | Own dept only | Own dept only | ❌ |
+| Create/edit departments | ✅ | ❌ | ❌ | ❌ | ❌ |
+| View org chart | ✅ | ✅ | Own dept | Own team | ❌ |
+| **Employee Data** | | | | | |
+| View all employee profiles | ✅ | ✅ | Own team only | Own profile only | ❌ |
+| Edit employee details | ✅ | ✅ (HR fields) | ❌ | Own profile (limited) | ❌ |
+| View salaries | ✅ | ✅ | ❌ | Own salary only | ❌ |
+| Change roles | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **Leave Management** | | | | | |
+| Submit leave | ❌ | ❌ | ✅ | ✅ | ❌ |
+| Approve team leaves | ❌ | ✅ (all) | ✅ (own team) | ❌ | ❌ |
+| View leave balances | ✅ | ✅ (all) | ✅ (own team) | ✅ (own) | ❌ |
+| Configure leave policies | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **Attendance** | | | | | |
+| Clock in/out | ❌ | ❌ | ✅ | ✅ | ❌ |
+| View team attendance | ✅ | ✅ (all) | ✅ (own team) | ❌ | ❌ |
+| Approve regularization | ❌ | ✅ | ✅ (own team) | ❌ | ❌ |
+| **Payroll** | | | | | |
+| View all payroll | ✅ | ✅ | ❌ | ❌ | ❌ |
+| Process payroll run | ❌ | ✅ | ❌ | ❌ | ❌ |
+| View own payslip | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Revise compensation | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **Performance** | | | | | |
+| Create review cycles | ✅ | ✅ | ❌ | ❌ | ❌ |
+| Submit reviews | ❌ | ❌ | ✅ (for team) | ✅ (self-review) | ❌ |
+| View all reviews | ✅ | ✅ | Own team | Own reviews | ❌ |
+| **Recruitment** | | | | | |
+| Create job requisitions | ✅ | ✅ | ✅ (own dept) | ❌ | ❌ |
+| Manage pipeline | ✅ | ✅ | View only (own dept) | ❌ | ❌ |
+| **System** | | | | | |
+| View audit logs | ✅ | ✅ (limited) | ❌ | ❌ | ❌ |
+| System configuration | ✅ | ❌ | ❌ | ❌ | ❌ |
+
+### 4.3 Implementation Strategy
+
+```
+Layer 1: Database (RLS policies) — Enforced at query level
+  profiles: Employee sees own row; TL sees team; HR/Admin sees all
+  payroll_records: Employee sees own; HR/Admin sees all; TL sees NOTHING
+  leaves: Employee sees own; TL sees team; HR sees all
+  
+Layer 2: Frontend (ProtectedRoute) — Prevents page rendering
+  <ProtectedRoute allowedRoles={['admin', 'hr']}>
+    <HRPayroll />
+  </ProtectedRoute>
+
+Layer 3: Component (Role-aware rendering) — Hides UI elements
+  {role === 'hr' && <SalaryColumn />}
+  
+All three layers must agree. RLS is the ultimate enforcer.
+```
+
+---
+
+## 5. EMPLOYEE MASTER DATA MODEL
+
+### 5.1 Current Profile Fields (from `profiles` table audit)
+
+| Field | Status | Enterprise Requirement |
+|-------|--------|----------------------|
+| `id`, `email`, `name` | ✅ Present | Required |
+| `phone` | ✅ Present | Required |
+| `role` | ✅ Present (no CHECK) | Required + CHECK constraint |
+| `department` | ⚠️ Free-text string | Must be FK → departments |
+| `team_lead_id` | ⚠️ Only 1 level | Rename to `reporting_manager_id` |
+| `employee_code` | ⚠️ `EMP-{timestamp}` | Sequential from DB sequence |
+| `avatar_url` | ✅ Present | Required |
+| `payroll_ctc` | ❌ On wrong table | Move to `salary_details` |
+| `performance_score` | ❌ On wrong table | Move to `performance_reviews` |
+| `performance_history` | ❌ JSONB array (1NF violation) | Move to `performance_reviews` |
+| `education`, `experience`, `core_skills` | ❌ Unstructured text | Move to employee documents or structured JSONB |
+
+### 5.2 Enterprise Employee Master Data
+
+```
+profiles (CLEANED — identity + employment):
+  id                    UUID PK = auth.users.id
+  email                 TEXT NOT NULL UNIQUE
+  full_name             TEXT NOT NULL
+  phone                 TEXT
+  date_of_birth         DATE
+  gender                TEXT CHECK (male|female|non_binary|prefer_not_to_say)
+  blood_group           TEXT
+  nationality           TEXT
+  
+  -- Employment
+  role                  TEXT NOT NULL CHECK (admin|hr|team_lead|employee|candidate)
+  department_id         UUID FK → departments(id)
+  designation_id        UUID FK → designations(id)
+  reporting_manager_id  UUID FK → profiles(id)
+  employee_code         TEXT UNIQUE
+  employment_type       TEXT CHECK (full_time|part_time|contract|intern|consultant)
+  employment_status     TEXT CHECK (active|probation|confirmed|pip|notice_period|suspended|terminated|resigned|alumni)
+  date_of_joining       DATE
+  probation_end_date    DATE
+  confirmation_date     DATE
+  last_working_date     DATE
+  
+  -- Avatar
+  avatar_url            TEXT
+  
+  -- Timestamps
+  created_at            TIMESTAMPTZ
+  updated_at            TIMESTAMPTZ
+
+employee_personal_details (NEW — sensitive PII):
+  id                    UUID PK
+  employee_id           UUID FK → profiles(id) NOT NULL UNIQUE
+  permanent_address     TEXT
+  current_address       TEXT
+  marital_status        TEXT CHECK (single|married|divorced|widowed)
+  spouse_name           TEXT
+  pan_number            TEXT -- India statutory
+  aadhaar_number        TEXT -- India statutory
+  uan_number            TEXT -- PF account
+  passport_number       TEXT
+  emergency_contact_name TEXT
+  emergency_contact_phone TEXT
+  emergency_contact_relation TEXT
+  bank_name             TEXT
+  bank_account_number   TEXT
+  bank_ifsc_code        TEXT
+  tax_regime            TEXT CHECK (old|new) -- India
+  updated_at            TIMESTAMPTZ
+
+employee_education (NEW):
+  id                    UUID PK
+  employee_id           UUID FK → profiles(id) NOT NULL
+  degree                TEXT NOT NULL
+  institution           TEXT NOT NULL
+  specialization        TEXT
+  year_of_passing       INTEGER
+  grade_percentage      TEXT
+  sort_order            INTEGER
+
+employee_work_experience (NEW):
+  id                    UUID PK
+  employee_id           UUID FK → profiles(id) NOT NULL
+  company_name          TEXT NOT NULL
+  designation           TEXT NOT NULL
+  from_date             DATE NOT NULL
+  to_date               DATE
+  description           TEXT
+  sort_order            INTEGER
+```
+
+### 5.3 Data Ownership Rules
+
+| Data Category | Owned By (Table) | Who Can Write | Who Can Read |
+|-------------|-----------------|--------------|-------------|
+| Identity (name, email, phone) | `profiles` | Employee (own), HR, Admin | Based on RBAC |
+| Employment (dept, designation, status) | `profiles` | HR, Admin only | Based on RBAC |
+| Personal Details (address, bank, PAN) | `employee_personal_details` | Employee (own), HR | Employee (own), HR, Admin |
+| Education | `employee_education` | Employee (own), HR | TL (team), HR, Admin |
+| Work Experience | `employee_work_experience` | Employee (own), HR | TL (team), HR, Admin |
+| Compensation | `salary_details` | HR, Admin only | Employee (own payslip), HR, Admin |
+| Performance | `performance_reviews` | TL (reviewer), Employee (self-review) | Employee (own), TL (team), HR, Admin |
+| Leave Balance | `leave_balances` | System (auto-calculated) | Employee (own), TL (team), HR |
+| Attendance | `work_sessions` | System (clock trigger) | Employee (own), TL (team), HR |
+
+---
+
+## 6. ONBOARDING ARCHITECTURE
+
+### 6.1 Current State Flaws
+
+| # | Flaw | Severity |
+|---|------|----------|
+| ONB-01 | Two competing onboarding pathways (OnboardingCenter + DocumentVault) | **Critical** |
+| ONB-02 | No offer letter persistence | **Critical** |
+| ONB-03 | No onboarding checklist | **Critical** |
+| ONB-04 | Employee code = `EMP-{Date.now()}` | **High** |
+| ONB-05 | BGC verification is AI rubber stamp (always "verified") | **Critical** |
+| ONB-06 | Department selection hardcoded to 4 values | **High** |
+| ONB-07 | No joining date management | **High** |
+| ONB-08 | Candidate record not linked to new employee profile | **High** |
+
+### 6.2 Enterprise Onboarding Flow
+
+```mermaid
+stateDiagram-v2
+    [*] --> OfferAccepted: Candidate accepts offer
+    OfferAccepted --> PreBoarding: HR initiates pre-boarding
+    
+    state PreBoarding {
+        [*] --> DocCollection: Request documents
+        DocCollection --> BGCInitiated: Submit for verification
+        BGCInitiated --> BGCCleared: Verification passed
+        BGCCleared --> ITProvisioning: Request laptop + email
+        ITProvisioning --> SystemAccessCreated: Accounts created
+    }
+    
+    PreBoarding --> Day1: Joining date arrives
+    
+    state Day1 {
+        [*] --> Orientation: Welcome session
+        Orientation --> PolicyAcknowledgment: Sign policies
+        PolicyAcknowledgment --> ManagerIntro: Meet reporting manager
+        ManagerIntro --> TeamIntro: Meet team
+    }
+    
+    Day1 --> Probation: Employee activated
+    
+    state Probation {
+        [*] --> Day30Review: 30-day check-in
+        Day30Review --> Day60Review: 60-day check-in
+        Day60Review --> Day90Review: 90-day check-in
+    }
+    
+    Probation --> Confirmed: Manager confirms
+    Probation --> Extended: Probation extended
+    Probation --> Terminated: Probation failed
+    Extended --> Confirmed
+    Confirmed --> [*]
+```
+
+### 6.3 Onboarding Data Model
+
+Already designed in Phase 6 (Section 7): `offer_letters` → `onboarding_records` → `onboarding_tasks`
+
+Additional HRMS-specific requirement — **Day 1 onboarding checklist auto-population** with 15 tasks across HR, IT, Finance, Admin, Legal, and Facilities departments.
+
+---
+
+## 7. PERFORMANCE MANAGEMENT MODEL
+
+### 7.1 Current State
+
+```
+CURRENT:
+  - HR clicks "Run Global AI Evaluation" button
+  - PerformanceEngine.tsx iterates ALL profiles sequentially
+  - For each employee: sends task count + shift count to HuggingFace AI
+  - AI returns a JSON { score: 85, reason: "..." }
+  - Score overwrites profiles.performance_score
+  - Entry appended to profiles.performance_history JSONB array
+  - 4-second delay between each employee (API rate limiting)
+  - Total time for 1000 employees: ~67 minutes
+  
+PROBLEMS:
+  ❌ No human manager review — AI is the sole evaluator
+  ❌ No review cycles (quarterly, annual)
+  ❌ No goals / KPIs / OKRs
+  ❌ No self-assessment by employee
+  ❌ No peer review
+  ❌ Performance history as unbounded JSONB (1NF violation)
+  ❌ Concurrent evaluations clobber each other
+  ❌ HF API token hardcoded as fallback
+```
+
+### 7.2 Enterprise Performance Architecture
+
+```mermaid
+erDiagram
+    performance_cycles ||--o{ performance_reviews : contains
+    performance_reviews ||--o{ review_goals : tracks
+    performance_reviews ||--o{ review_competencies : evaluates
+    profiles ||--o{ performance_reviews : "reviewed in"
+    profiles ||--o{ performance_improvement_plans : undergoes
+
+    performance_cycles {
+        uuid id PK
+        text name "e.g., 'Q2 2026 Review', 'Annual 2026'"
+        text cycle_type "CHECK: quarterly|half_yearly|annual"
+        date start_date "NOT NULL"
+        date end_date "NOT NULL"
+        date self_review_deadline
+        date manager_review_deadline
+        text status "CHECK: draft|active|in_review|closed"
+        uuid created_by FK
+        timestamptz created_at
+    }
+
+    performance_reviews {
+        uuid id PK
+        uuid cycle_id FK "performance_cycles(id) NOT NULL"
+        uuid employee_id FK "profiles(id) NOT NULL"
+        uuid reviewer_id FK "profiles(id) NOT NULL — reporting manager"
+        text self_assessment_text
+        integer self_rating "1-5 scale"
+        text manager_assessment_text
+        integer manager_rating "1-5 scale"
+        integer final_rating "1-5 scale — calibrated"
+        text final_rating_label "CHECK: exceeds|meets|needs_improvement|unsatisfactory"
+        text promotion_recommendation "CHECK: promote|retain|pip|none"
+        boolean is_self_submitted "DEFAULT false"
+        boolean is_manager_submitted "DEFAULT false"
+        timestamptz self_submitted_at
+        timestamptz manager_submitted_at
+        timestamptz created_at
+    }
+
+    review_goals {
+        uuid id PK
+        uuid review_id FK "performance_reviews(id) NOT NULL"
+        text goal_title "NOT NULL"
+        text goal_description
+        text goal_type "CHECK: kpi|okr|competency|project"
+        integer weight_percentage "Contribution to overall score"
+        integer achievement_percentage "0-100"
+        text employee_comments
+        text manager_comments
+        timestamptz created_at
+    }
+
+    performance_improvement_plans {
+        uuid id PK
+        uuid employee_id FK "profiles(id) NOT NULL"
+        uuid initiated_by FK "profiles(id) NOT NULL"
+        text reason "NOT NULL"
+        date start_date "NOT NULL"
+        date end_date "NOT NULL"
+        text status "CHECK: active|completed|extended|terminated"
+        text outcome "CHECK: improved|no_improvement|separated"
+        jsonb improvement_goals "Array of specific improvement targets"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+```
+
+### 7.3 Performance Review Workflow
+
+```
+1. HR creates performance_cycle (e.g., "Q2 2026 Review")
+2. System auto-creates performance_reviews for all active employees
+3. Employee fills self_assessment + self_rating by deadline
+4. Manager reviews, adds manager_assessment + manager_rating
+5. HR calibrates final_rating across departments (optional)
+6. Results released to employees
+7. If final_rating = 'unsatisfactory' → HR can initiate PIP
+
+AI's role (post-implementation):
+  - AI provides SUGGESTED score based on task/attendance data
+  - Manager uses AI suggestion as input, makes HUMAN decision
+  - AI analysis stored as ai_recommendation field, NOT as final score
+```
+
+---
+
+## 8. LEAVE MANAGEMENT MODEL
+
+### 8.1 Current State
+
+```
+CURRENT:
+  - Employee submits leave with: type, start_date, end_date, reason, status='Pending'
+  - Team Lead sees pending leaves for team → Approve/Reject
+  - Leave types hardcoded in dropdown: Casual, Sick, Vacation, Unpaid
+  - NO leave balance tracking
+  - NO accrual rules
+  - NO holiday calendar
+  - NO half-day leave
+  - NO comp-off
+  - NO approval escalation if TL doesn't respond
+```
+
+### 8.2 Enterprise Leave Architecture
+
+```mermaid
+erDiagram
+    leave_types ||--o{ leave_balances : "allocates per employee"
+    leave_types ||--o{ leave_requests : "requested as"
+    profiles ||--o{ leave_balances : has
+    profiles ||--o{ leave_requests : submits
+    holiday_calendars ||--o{ holidays : contains
+
+    leave_types {
+        uuid id PK
+        text name "NOT NULL UNIQUE — e.g., Casual Leave, Sick Leave"
+        text code "UNIQUE — e.g., CL, SL, EL, ML"
+        integer annual_quota "Per year allocation"
+        boolean is_paid "DEFAULT true"
+        boolean requires_document "DEFAULT false — sick leave > 3 days"
+        boolean allows_half_day "DEFAULT true"
+        integer max_consecutive_days "e.g., 3 for casual"
+        boolean carries_forward "DEFAULT false"
+        integer max_carry_forward "Max days that carry over"
+        boolean is_active "DEFAULT true"
+    }
+
+    leave_balances {
+        uuid id PK
+        uuid employee_id FK "profiles(id) NOT NULL"
+        uuid leave_type_id FK "leave_types(id) NOT NULL"
+        integer calendar_year "NOT NULL"
+        decimal total_allocated
+        decimal used
+        decimal pending "Currently pending approval"
+        decimal carried_forward "From previous year"
+        decimal available "GENERATED: total + carried - used - pending"
+        timestamptz updated_at
+    }
+
+    leave_requests {
+        uuid id PK
+        uuid employee_id FK "profiles(id) NOT NULL"
+        uuid leave_type_id FK "leave_types(id) NOT NULL"
+        date start_date "NOT NULL"
+        date end_date "NOT NULL"
+        decimal number_of_days "Calculated excluding holidays + weekends"
+        boolean is_half_day "DEFAULT false"
+        text half_day_type "CHECK: first_half|second_half"
+        text reason "NOT NULL"
+        text status "CHECK: pending|approved|rejected|cancelled"
+        uuid approved_by FK "profiles(id)"
+        text rejection_reason
+        text document_url "Sick note for medical leave"
+        timestamptz approved_at
+        timestamptz created_at
+    }
+
+    holiday_calendars {
+        uuid id PK
+        text name "e.g., 'India 2026', 'US 2026'"
+        integer calendar_year
+        boolean is_default "DEFAULT false"
+    }
+
+    holidays {
+        uuid id PK
+        uuid calendar_id FK "holiday_calendars(id) NOT NULL"
+        date holiday_date "NOT NULL"
+        text name "NOT NULL — e.g., 'Republic Day', 'Diwali'"
+        text type "CHECK: national|restricted|optional"
+        boolean is_mandatory "DEFAULT true"
+    }
+```
+
+### 8.3 Leave Workflow
+
+```
+1. Employee submits leave request
+2. System validates:
+   - Sufficient leave balance?
+   - Not exceeding max_consecutive_days?
+   - Document required (sick > 3 days)?
+   - Not overlapping with existing approved leave?
+3. Request goes to reporting_manager for approval
+4. If not approved within 48 hours → escalate to department head
+5. On approval: deduct from leave_balance; on rejection: release pending count
+6. On cancellation (before start_date): restore balance
+```
+
+---
+
+## 9. ATTENDANCE MODEL
+
+### 9.1 Current State
+
+```
+CURRENT (work_logs table):
+  - Employee clocks in via DashboardLayout (1-second interval timer)
+  - Clock in creates work_logs row: user_id, clock_in, status='Active', work_location='WFO'|'WFH'
+  - Clock out updates: clock_out, status='Completed'
+  - WorkLogs.tsx aggregates by day client-side
+  - AI Stand-up Polisher appends notes to work_logs.notes
+  
+PROBLEMS:
+  ❌ No UNIQUE constraint per user per day (multiple active shifts possible)
+  ❌ No overtime calculation
+  ❌ No late-coming / early-leaving tracking
+  ❌ No attendance regularization (forgot to clock out)
+  ❌ No shift management
+  ❌ Hours calculated entirely client-side
+  ❌ Global mutable state for clock status (globalClockedIn)
+```
+
+### 9.2 Enterprise Attendance Architecture
+
+```
+work_sessions (REPLACES work_logs):
+  id                UUID PK
+  employee_id       UUID FK → profiles(id) NOT NULL
+  session_date      DATE NOT NULL
+  clock_in          TIMESTAMPTZ NOT NULL
+  clock_out         TIMESTAMPTZ
+  work_location     TEXT CHECK (office|remote|hybrid|client_site)
+  status            TEXT CHECK (active|completed|regularized|auto_closed)
+  total_hours       DECIMAL GENERATED (clock_out - clock_in in hours)
+  overtime_hours    DECIMAL DEFAULT 0 (hours beyond 9)
+  is_late           BOOLEAN GENERATED (clock_in > expected_start + grace)
+  is_early_exit     BOOLEAN GENERATED (clock_out < expected_end - grace)
+  notes             TEXT
+  regularization_reason TEXT
+  regularized_by    UUID FK → profiles(id)
+  created_at        TIMESTAMPTZ
+  updated_at        TIMESTAMPTZ
+  
+  UNIQUE(employee_id, session_date) — Prevent duplicate daily entries
+
+attendance_regularization (NEW):
+  id                UUID PK
+  work_session_id   UUID FK → work_sessions(id) NOT NULL
+  employee_id       UUID FK → profiles(id) NOT NULL
+  original_clock_in TIMESTAMPTZ
+  original_clock_out TIMESTAMPTZ
+  requested_clock_in TIMESTAMPTZ
+  requested_clock_out TIMESTAMPTZ
+  reason            TEXT NOT NULL
+  status            TEXT CHECK (pending|approved|rejected)
+  approved_by       UUID FK → profiles(id)
+  created_at        TIMESTAMPTZ
+```
+
+### 9.3 Attendance Business Rules
+
+```
+Standard shift: 09:00 - 18:00 (9 hours)
+Grace period: 15 minutes
+Overtime: Any hours beyond 9h/day (requires manager acknowledgment)
+Auto-close: If clock_out missing by 23:59, auto-close at 18:00 with regularization flag
+Late threshold: clock_in > 09:15 → is_late = true
+Early exit threshold: clock_out < 17:45 → is_early_exit = true
+Monthly attendance report: Aggregated from work_sessions, cross-referenced with leave_requests + holidays
+```
+
+---
+
+## 10. PAYROLL READINESS MODEL
+
+### 10.1 Current State — 100% Fabricated
+
+```
+CURRENT (Payroll.tsx L108-118):
+  const basicPay = totalCtc * 0.50;     // Hardcoded 50%
+  const hra = totalCtc * 0.20;          // Hardcoded 20%
+  const ta = totalCtc * 0.10;           // Hardcoded 10%
+  const da = totalCtc * 0.10;           // Hardcoded 10%
+  const variablePay = totalCtc * 0.10;  // Hardcoded 10%
+  const tax = gross * 0.18;             // FLAT 18% for everyone
+  const providentFund = basicPay * 0.12; // Hardcoded 12%
+
+  - No actual payroll table written
+  - No payroll run concept
+  - Historical payslips fabricated with fake months
+  - CTC on profiles table (should be on salary_details)
+  - Employee/TL see full admin payroll (all salaries visible)
+```
+
+### 10.2 Enterprise Payroll Data Model
+
+```
+salary_details (NEW — replaces profiles.payroll_ctc):
+  id                UUID PK
+  employee_id       UUID FK → profiles(id) NOT NULL
+  annual_ctc        DECIMAL NOT NULL
+  salary_structure_id UUID FK → salary_structures(id) NOT NULL
+  effective_from    DATE NOT NULL
+  effective_to      DATE — NULL = current
+  approved_by       UUID FK → profiles(id)
+  created_at        TIMESTAMPTZ
+  
+  UNIQUE(employee_id, effective_from) — one salary per effective date
+
+salary_structures (NEW — replaces hardcoded percentages):
+  id                UUID PK
+  name              TEXT NOT NULL (e.g., 'Standard India', 'Consultant India')
+  basic_percentage  DECIMAL NOT NULL DEFAULT 50
+  hra_percentage    DECIMAL NOT NULL DEFAULT 20
+  ta_percentage     DECIMAL NOT NULL DEFAULT 10
+  da_percentage     DECIMAL NOT NULL DEFAULT 10
+  variable_percentage DECIMAL NOT NULL DEFAULT 10
+  pf_percentage     DECIMAL NOT NULL DEFAULT 12
+  is_active         BOOLEAN DEFAULT true
+  created_at        TIMESTAMPTZ
+
+payroll_runs (NEW):
+  id                UUID PK
+  pay_period_month  INTEGER NOT NULL (1-12)
+  pay_period_year   INTEGER NOT NULL
+  status            TEXT CHECK (draft|processing|processed|approved|disbursed)
+  total_gross       DECIMAL
+  total_deductions  DECIMAL
+  total_net         DECIMAL
+  processed_by      UUID FK → profiles(id)
+  approved_by       UUID FK → profiles(id)
+  disbursed_at      TIMESTAMPTZ
+  created_at        TIMESTAMPTZ
+  
+  UNIQUE(pay_period_month, pay_period_year)
+
+payroll_records (per Phase 6 design):
+  id                UUID PK
+  payroll_run_id    UUID FK → payroll_runs(id) NOT NULL
+  employee_id       UUID FK → profiles(id) NOT NULL
+  basic_pay         DECIMAL NOT NULL
+  hra               DECIMAL
+  transport_allowance DECIMAL
+  dearness_allowance DECIMAL
+  variable_pay      DECIMAL
+  gross_pay         DECIMAL NOT NULL
+  income_tax        DECIMAL
+  provident_fund    DECIMAL
+  professional_tax  DECIMAL
+  esi               DECIMAL
+  total_deductions  DECIMAL NOT NULL
+  net_pay           DECIMAL NOT NULL
+  days_worked       INTEGER
+  lop_days          INTEGER (loss of pay)
+  created_at        TIMESTAMPTZ
+```
+
+### 10.3 Payroll Processing Workflow
+
+```
+1. HR initiates monthly payroll run (draft)
+2. System auto-calculates for each active employee:
+   - Fetch salary_details WHERE effective_to IS NULL
+   - Apply salary_structure percentages
+   - Fetch attendance: work_sessions count vs working days
+   - Deduct LOP days (absent without approved leave)
+   - Apply tax based on regime + declarations
+   - Calculate PF/ESI statutory deductions
+3. HR reviews draft → processes
+4. Finance approves → marks approved
+5. Disburse → marks disbursed with timestamp
+6. Payslip auto-generated and accessible to employee
+```
+
+---
+
+## 11. NOTIFICATION ARCHITECTURE
+
+### 11.1 Current State
+
+```
+CURRENT:
+  - notifications table: user_id, title, message, is_read
+  - Notifications pushed via INSERT in various places
+  - No email notifications
+  - No event-driven triggers
+  - No approval reminders
+  - No escalation
+  - Badge count queries run on every route change (4 tables queried)
+```
+
+### 11.2 Enterprise Notification Model
+
+```
+notification_events (trigger definitions):
+  id                UUID PK
+  event_type        TEXT NOT NULL UNIQUE
+  template_title    TEXT NOT NULL
+  template_body     TEXT NOT NULL (with {{placeholders}})
+  channels          TEXT[] DEFAULT '{in_app}' (in_app|email|push)
+  recipient_role    TEXT (if role-based)
+  is_active         BOOLEAN DEFAULT true
+
+Event Types:
+  leave_submitted           → notify reporting_manager
+  leave_approved            → notify employee
+  leave_rejected            → notify employee
+  payroll_processed         → notify all employees
+  performance_cycle_started → notify all active employees
+  performance_review_due    → notify manager (7 days before deadline)
+  task_assigned             → notify assigned employee
+  interview_scheduled       → notify candidate + interviewer
+  offer_sent                → notify candidate
+  onboarding_task_due       → notify assigned owner
+  pip_initiated             → notify employee + HR
+  resignation_submitted     → notify reporting_manager + HR
+
+notifications (ENHANCED):
+  id                UUID PK
+  user_id           UUID FK → profiles(id) NOT NULL
+  event_type        TEXT NOT NULL
+  title             TEXT NOT NULL
+  message           TEXT NOT NULL
+  entity_type       TEXT (leave|payroll|performance|task|application)
+  entity_id         UUID (FK to the relevant record)
+  is_read           BOOLEAN DEFAULT false
+  read_at           TIMESTAMPTZ
+  channel           TEXT CHECK (in_app|email|push)
+  email_sent        BOOLEAN DEFAULT false
+  created_at        TIMESTAMPTZ
+  
+  INDEX(user_id, is_read, created_at DESC) — for badge count
+```
+
+### 11.3 Escalation Rules
+
+```
+If leave_request.status = 'pending' for > 48 hours:
+  → Notify department head
+  → Add escalation flag to notification
+
+If performance_review.is_manager_submitted = false AND deadline - 3 days:
+  → Reminder to manager
+  → Copy HR on escalation
+
+If onboarding_task.status = 'pending' AND due_date - 1 day:
+  → Urgent reminder to assigned owner
+  → Copy HR
+```
+
+---
+
+## 12. DOCUMENT MANAGEMENT ARCHITECTURE
+
+### 12.1 Current State
+
+```
+CURRENT:
+  - Resumes in public 'resumes' bucket (world-accessible)
+  - BGC docs in public 'bgc_docs' bucket (world-accessible)
+  - Avatars in public 'avatars' bucket
+  - No employee document management
+  - Offer letters generated in-memory (not persisted)
+  - No document versioning
+  - No access control on documents
+```
+
+### 12.2 Enterprise Document Architecture
+
+```
+employee_documents (NEW):
+  id                UUID PK
+  employee_id       UUID FK → profiles(id) NOT NULL
+  document_type     TEXT CHECK (
+    id_proof|address_proof|pan_card|aadhaar|passport|
+    education_certificate|experience_letter|relieving_letter|
+    offer_letter|appointment_letter|nda|policy_acknowledgment|
+    payslip|form16|salary_certificate|bonafide_letter|
+    resignation_letter|clearance_certificate|full_final_settlement
+  )
+  document_name     TEXT NOT NULL
+  storage_path      TEXT NOT NULL (private bucket)
+  file_size_bytes   INTEGER
+  mime_type         TEXT
+  uploaded_by       UUID FK → profiles(id) NOT NULL
+  is_verified       BOOLEAN DEFAULT false
+  verified_by       UUID FK → profiles(id)
+  verified_at       TIMESTAMPTZ
+  version           INTEGER DEFAULT 1
+  is_current        BOOLEAN DEFAULT true
+  expires_at        DATE (for passport, visa)
+  created_at        TIMESTAMPTZ
+
+Storage buckets (ALL PRIVATE):
+  employee_documents/  → Signed URL access only
+  resumes/            → Signed URL access only (migrated from public)
+  offer_letters/      → Signed URL access only
+  avatars/            → Can remain public (low sensitivity)
+
+RLS on employee_documents:
+  Employee: own documents only
+  HR/Admin: all documents
+  TL: none (documents are HR domain)
+```
+
+---
+
+## 13. DASHBOARD DATA CONSISTENCY STRATEGY
+
+### 13.1 Root Causes of Divergence
+
+| Dashboard | Metric | Source | Why It Differs |
+|-----------|--------|--------|---------------|
+| HR Dashboard | Headcount | `profiles` count WHERE role = 'employee' | ✅ Mostly correct |
+| Admin Dashboard | Headcount | `profiles` grouped by role | ✅ Same source, different view |
+| HR Dashboard | Payroll Total | `employees × ₹65,000` flat estimate | ❌ **Fabricated** |
+| Admin Dashboard | Payroll Total | Role-based (65k/95k/125k) estimate | ❌ **Different fabrication** |
+| HR Payroll Module | Payroll Total | `profiles.payroll_ctc` per employee | ⚠️ Actual data but wrong table |
+| Admin Analytics | Application Count | `candidate_onboarding` table | ❌ **Wrong table entirely** |
+| HR Dashboard | Application Count | `job_applications` count | ⚠️ One of two application tables |
+| Candidate Pipeline | Application Count | `candidate_applications` count | ⚠️ The other application table |
+
+### 13.2 Unified Metrics Architecture
+
+```
+RULE: Every metric derives from a DATABASE VIEW. 
+      No client-side calculations for dashboard metrics.
+
+v_org_metrics:
+  SELECT
+    COUNT(*) FILTER (WHERE role = 'employee' AND employment_status = 'active') AS active_employees,
+    COUNT(*) FILTER (WHERE role = 'candidate') AS active_candidates,
+    COUNT(DISTINCT department_id) AS departments,
+    COUNT(*) FILTER (WHERE employment_status = 'probation') AS on_probation,
+    COUNT(*) FILTER (WHERE employment_status = 'notice_period') AS in_notice
+  FROM profiles;
+
+v_payroll_summary:
+  SELECT
+    SUM(net_pay) AS total_net_pay,
+    SUM(gross_pay) AS total_gross_pay,
+    SUM(income_tax) AS total_tax,
+    COUNT(DISTINCT employee_id) AS employees_paid
+  FROM payroll_records pr
+  JOIN payroll_runs run ON pr.payroll_run_id = run.id
+  WHERE run.pay_period_month = EXTRACT(MONTH FROM CURRENT_DATE)
+    AND run.pay_period_year = EXTRACT(YEAR FROM CURRENT_DATE);
+
+v_leave_summary:
+  SELECT
+    COUNT(*) FILTER (WHERE status = 'pending') AS pending_approvals,
+    COUNT(*) FILTER (WHERE status = 'approved' AND start_date >= CURRENT_DATE) AS upcoming_leaves,
+    COUNT(DISTINCT employee_id) FILTER (WHERE status = 'approved' AND CURRENT_DATE BETWEEN start_date AND end_date) AS on_leave_today
+  FROM leave_requests;
+
+v_attendance_today:
+  SELECT
+    COUNT(*) FILTER (WHERE status = 'active') AS clocked_in_now,
+    COUNT(*) FILTER (WHERE status = 'completed') AS completed_today,
+    AVG(total_hours) FILTER (WHERE status = 'completed') AS avg_hours_today
+  FROM work_sessions
+  WHERE session_date = CURRENT_DATE;
+
+v_recruitment_summary:
+  SELECT
+    COUNT(*) FILTER (WHERE stage = 'applied') AS new_applications,
+    COUNT(*) FILTER (WHERE stage = 'interview') AS in_interview,
+    COUNT(*) FILTER (WHERE stage = 'offer_sent') AS offers_pending,
+    COUNT(*) FILTER (WHERE stage = 'hired' AND created_at >= DATE_TRUNC('month', CURRENT_DATE)) AS hired_this_month
+  FROM applications;
+
+ALL dashboards (Admin, HR, TL, Employee) query THESE views.
+Zero client-side Math.random() or hardcoded multipliers.
+```
+
+---
+
+## 14. SECURITY RECOMMENDATIONS
+
+### 14.1 Immediate Fixes (Phase 11 of Roadmap)
+
+| # | Fix | Current Risk | Priority |
+|---|-----|-------------|----------|
+| SEC-01 | Move role to `app_metadata` | Any user becomes admin | **P0** |
+| SEC-02 | Implement `<ProtectedRoute>` wrapper | Unauthorized page access | **P0** |
+| SEC-03 | RLS on `profiles` — own + team + HR/admin | All employee data exposed | **P0** |
+| SEC-04 | RLS on `payroll_records` — own + HR/admin only | All salary data exposed | **P0** |
+| SEC-05 | RLS on `leave_requests` — own + TL team + HR | All leave data exposed | **P1** |
+| SEC-06 | Remove hardcoded HF API token from 6 files | API abuse | **P0** |
+| SEC-07 | Make all storage buckets private | Resume/document PII exposure | **P0** |
+| SEC-08 | Remove employee/TL Payroll route pointing to AdminPayroll | Salary data leak | **P0** |
+| SEC-09 | Employee profile update restricted to name/phone/avatar | Employee can update own role | **P1** |
+| SEC-10 | Audit log on all sensitive tables | No compliance trail | **P1** |
+
+### 14.2 Employee Profile Update RLS
+
+```
+RLS on profiles UPDATE:
+  IF auth.uid() = id:
+    ALLOW UPDATE ON (full_name, phone, avatar_url) ONLY
+    DENY UPDATE ON (role, department_id, designation_id, employment_status, 
+                    employee_code, reporting_manager_id, date_of_joining)
+  IF role IN ('hr', 'admin'):
+    ALLOW UPDATE ON ALL columns
+```
+
+---
+
+## 15. SCALABILITY RECOMMENDATIONS
+
+### 15.1 HRMS-Specific Scale Targets
+
+| Dimension | Year 1 | Year 3 | Architecture Support |
+|-----------|--------|--------|---------------------|
+| Active employees | 1,000 | 5,000 | Indexed queries + pagination |
+| Leave requests/year | 12,000 | 60,000 | Partitioned by year |
+| Work sessions/year | 365,000 | 1,825,000 | Partitioned by month |
+| Payroll records/year | 12,000 | 60,000 | Indexed by period |
+| Performance reviews/year | 4,000 | 20,000 | Indexed by cycle |
+| Notifications/year | 200,000 | 1,000,000 | TTL auto-expiry (90 days) |
+| Documents | 10,000 | 50,000 | Cold storage after 3 years |
+
+### 15.2 Performance Optimization Priorities
+
+```
+1. Dashboard queries: Use pre-computed views (v_org_metrics, etc.)
+2. Leave balance: Computed column or materialized view, not client-side
+3. Attendance reports: Aggregated monthly view, not raw work_sessions
+4. Payroll calculations: Server-side (Edge Function), not browser
+5. Notification badge count: Single view query, not 4 separate table scans
+```
+
+---
+
+## 16. AI READINESS RECOMMENDATIONS
+
+### 16.1 HRMS AI Features Architecture
+
+| Feature | Data Required | Source | Status |
+|---------|-------------|--------|--------|
+| **AI Performance Assistant** | Task completion, attendance, goal progress | work_sessions + tasks + review_goals | ✅ Designable post-Phase 7 |
+| **AI Leave Prediction** | Historical leave patterns, team capacity | leave_requests + work_sessions | ✅ After leave model built |
+| **AI Attrition Risk** | Tenure, performance trends, leave patterns, complaints | profiles + performance_reviews + leave_requests + complaints | ✅ After performance + leave models |
+| **AI Workforce Planning** | Department headcount, hiring pipeline, attrition rate | departments + applications + employment_history | ✅ After employment_history built |
+| **AI Payroll Anomaly Detection** | Month-over-month payroll changes | payroll_records time series | ✅ After real payroll exists |
+| **AI Onboarding Assistant** | Onboarding checklist progress, FAQ responses | onboarding_tasks + company policies | ✅ After onboarding model built |
+| **AI HR Chatbot** | HR policies, leave balance, payslip data | All HRMS tables via Edge Function | ✅ After RLS + proxy in place |
+
+### 16.2 AI Architecture Principle
+
+```
+AI in HRMS = ADVISORY ONLY
+
+  ❌ AI decides performance score → WRONG (current)
+  ✅ AI suggests score, manager decides → CORRECT
+  
+  ❌ AI verifies BGC documents (rubber stamp) → WRONG (current)
+  ✅ AI flags anomalies, HR reviews → CORRECT
+  
+  ❌ AI calculates payroll → WRONG
+  ✅ AI detects anomalies in payroll data → CORRECT
+
+All AI outputs stored with:
+  - Input data hash (reproducibility)
+  - Confidence score
+  - Timestamp
+  - "AI-generated" flag
+  - Human override field
+```
+
+---
+
+## 17. ENTERPRISE HRMS TARGET STATE
+
+```mermaid
+graph TB
+    subgraph "Employee Self-Service"
+        ESS1["Profile Management"]
+        ESS2["Leave Requests"]
+        ESS3["Attendance / Clock"]
+        ESS4["Payslip View"]
+        ESS5["Performance Self-Review"]
+        ESS6["Document Upload"]
+        ESS7["Complaints / Grievances"]
+    end
+
+    subgraph "Manager Self-Service"
+        MSS1["Team Dashboard"]
+        MSS2["Leave Approvals"]
+        MSS3["Attendance Review"]
+        MSS4["Performance Reviews"]
+        MSS5["Hiring Requisitions"]
+        MSS6["Task Assignment"]
+    end
+
+    subgraph "HR Operations"
+        HR1["Employee Master"]
+        HR2["Onboarding Center"]
+        HR3["Payroll Processing"]
+        HR4["Performance Cycles"]
+        HR5["Leave Policy Config"]
+        HR6["Document Verification"]
+        HR7["Separation Management"]
+        HR8["Recruitment Pipeline"]
+    end
+
+    subgraph "Admin / Executive"
+        ADM1["Org Structure"]
+        ADM2["Analytics & Reports"]
+        ADM3["Audit Logs"]
+        ADM4["System Configuration"]
+        ADM5["Role Management"]
+    end
+
+    subgraph "Data Layer"
+        DB["PostgreSQL (RLS-enforced)"]
+        VIEWS["Dashboard Views"]
+        AUDIT["Audit Triggers"]
+        EF["Edge Functions"]
+    end
+
+    ESS1 & ESS2 & ESS3 & ESS4 & ESS5 & ESS6 & ESS7 --> DB
+    MSS1 & MSS2 & MSS3 & MSS4 & MSS5 & MSS6 --> DB
+    HR1 & HR2 & HR3 & HR4 & HR5 & HR6 & HR7 & HR8 --> DB
+    ADM1 & ADM2 & ADM3 & ADM4 & ADM5 --> DB
+    DB --> VIEWS & AUDIT
+    HR3 --> EF
+```
+
+---
+
+## 18. MIGRATION STRATEGY
+
+### 18.1 HRMS Migration Order (builds on Phase 6 ATS migrations)
+
+| # | Migration | Depends On | Risk |
+|---|-----------|-----------|------|
+| H1 | Create `departments` table + backfill from profile strings | None | 🟡 Medium |
+| H2 | Create `designations` table | H1 | 🟢 Low |
+| H3 | Add `department_id`, `designation_id`, `employment_status`, `date_of_joining`, `probation_end_date` to profiles | H1, H2 | 🟡 Medium |
+| H4 | Rename `team_lead_id` → `reporting_manager_id` on profiles | H3 | 🟡 Medium |
+| H5 | Create `employee_personal_details` table | H3 | 🟢 Low |
+| H6 | Create `employee_education` + `employee_work_experience` tables | H3 | 🟢 Low |
+| H7 | Create `employment_history` table | H3 | 🟢 Low |
+| H8 | Create `leave_types` + `leave_balances` + `holiday_calendars` + `holidays` | None | 🟢 Low |
+| H9 | Migrate existing `leaves` data → `leave_requests` with proper FK to `leave_types` | H8 | 🟡 Medium |
+| H10 | Rename `work_logs` → `work_sessions` + add `session_date`, `total_hours`, `is_late` columns | None | 🟡 Medium |
+| H11 | Add `UNIQUE(employee_id, session_date)` to work_sessions | H10 | 🟡 Medium |
+| H12 | Create `attendance_regularization` table | H10 | 🟢 Low |
+| H13 | Create `salary_structures` + `salary_details` tables | None | 🟢 Low |
+| H14 | Migrate `profiles.payroll_ctc` → `salary_details` | H13 | 🟡 Medium |
+| H15 | Create `payroll_runs` table | H13 | 🟢 Low |
+| H16 | Create `performance_cycles` + `performance_reviews` + `review_goals` tables | None | 🟢 Low |
+| H17 | Migrate `profiles.performance_history` JSONB → `performance_reviews` | H16 | 🔴 High |
+| H18 | Create `performance_improvement_plans` table | H16 | 🟢 Low |
+| H19 | Create `employee_documents` table | None | 🟢 Low |
+| H20 | Enhance `notifications` table (add event_type, entity_type, entity_id, channel) | None | 🟢 Low |
+| H21 | Drop deprecated columns from profiles (payroll_ctc, performance_score, performance_history, education, experience, core_skills, department text) | H3, H14, H17 | 🔴 High |
+| H22 | Make storage buckets private + update all getPublicUrl → createSignedUrl | None | 🟡 Medium |
+
+### 18.2 Total New Tables (HRMS-specific)
+
+| Category | Tables | New? |
+|----------|--------|------|
+| Organization | `departments`, `designations` | ✅ New |
+| Employee Data | `employee_personal_details`, `employee_education`, `employee_work_experience`, `employment_history` | ✅ New |
+| Leave | `leave_types`, `leave_balances`, `holiday_calendars`, `holidays` | ✅ New |
+| Attendance | `attendance_regularization` | ✅ New |
+| Payroll | `salary_structures`, `salary_details`, `payroll_runs` | ✅ New |
+| Performance | `performance_cycles`, `performance_reviews`, `review_goals`, `performance_improvement_plans` | ✅ New |
+| Documents | `employee_documents` | ✅ New |
+| **Total** | **17 new HRMS tables** | |
+
+---
+
+## 19. RISK ASSESSMENT
+
+### 19.1 HRMS Migration Risk Matrix
+
+| Migration | Data Loss | Feature Break | User Impact | Overall |
+|-----------|----------|--------------|-------------|---------|
+| H1-H2 (departments, designations) | 🟢 None | 🟢 None | 🟢 None | 🟢 Low |
+| H3-H4 (profiles restructure) | 🟡 Medium | 🔴 High | 🟡 Medium | 🔴 High |
+| H8-H9 (leave system) | 🟡 Medium | 🟡 Medium | 🟡 Medium | 🟡 Medium |
+| H10-H11 (attendance) | 🟡 Medium | 🟡 Medium | 🟡 Medium | 🟡 Medium |
+| H13-H14 (payroll) | 🟡 Medium | 🟢 Low | 🟢 Low | 🟡 Medium |
+| H16-H17 (performance) | 🔴 High | 🟡 Medium | 🟡 Medium | 🔴 High |
+| H21 (drop deprecated columns) | 🔴 High | 🔴 High | 🟡 Medium | 🔴 Critical |
+
+### 19.2 Critical Mitigations
+
+| Risk | Mitigation |
+|------|-----------|
+| Department name variations (Engg vs Engineering) | Pre-audit DISTINCT values; present cleanup list to HR for approval |
+| `team_lead_id` → `reporting_manager_id` rename breaks queries | Deploy column rename + code update in same transaction |
+| Performance history JSONB → table migration | Parse each entry; validate date/score integrity; keep JSONB as backup for 90 days |
+| Dropping `profiles.payroll_ctc` breaks Payroll.tsx | Payroll.tsx must be refactored to read `salary_details` BEFORE column drop |
+| Employee sees broken dashboard after migration | Feature flags: dual-read from old + new tables during transition |
+
+> [!IMPORTANT]
+> This HRMS execution plan introduces **17 new tables** and restructures the `profiles` table that is referenced by **25+ frontend files**. The profiles restructure (H3-H4, H21) is the highest-risk migration and must be coordinated with the frontend refactor. Deploy the ATS migrations (Phase 6) first, then HRMS migrations, to avoid conflicting schema changes.
+
+> [!CAUTION]
+> **Migration H21 (drop deprecated columns) is irreversible.** It must be the LAST migration executed, after ALL frontend files have been updated to use the new table structure. Full `pg_dump` backup required before execution. 90-day rollback window with backup retention.

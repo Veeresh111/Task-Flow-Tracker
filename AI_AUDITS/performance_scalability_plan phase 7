@@ -1,0 +1,918 @@
+# PHASE 8 — ENTERPRISE PERFORMANCE & SCALABILITY EXECUTION PLAN
+
+**System:** FWC AI-Powered HRMS + ATS Platform  
+**Document Type:** Principal Performance Engineer Execution Blueprint  
+**Date:** June 13, 2026  
+**Inputs:** Phases 1-7 audit findings (255 architecture issues + 52 ATS flaws + 78 HRMS gaps)  
+**Codebase:** 134 TSX files · ~31K LOC · 65+ page routes · 37 DB tables  
+**Benchmark:** Workday · SAP SuccessFactors · Greenhouse · Oracle HCM  
+
+---
+
+## 1. CURRENT PERFORMANCE ASSESSMENT
+
+### 1.1 Performance Severity Score
+
+| Dimension | Current Score | Enterprise Target | Gap |
+|-----------|-------------|------------------|-----|
+| Initial Load Time (estimated) | ~8-12s (65+ eager imports, no splitting) | <2s | 🔴 Critical |
+| Re-render Rate | ~60/min (1s timer in DashboardLayout) | <5/min | 🔴 Critical |
+| API Calls per Page Load | 4-7 queries per page | 1-2 queries per page | 🔴 Critical |
+| Bundle Size (estimated) | ~3MB+ (all routes in one chunk) | <400KB initial | 🔴 Critical |
+| Memory Leaks | 3 unbounded subscriptions | 0 | 🟠 High |
+| Concurrent User Capacity | ~50 (estimated before connection exhaustion) | 500+ | 🔴 Critical |
+| Client-Side Computation | Payroll, attendance, joins, aggregations | Zero client-side business logic | 🔴 Critical |
+
+### 1.2 Top 5 Performance Killers (ranked by user impact)
+
+| # | Bottleneck | File | Impact | Users Affected |
+|---|-----------|------|--------|---------------|
+| 1 | **1-second `setInterval` in DashboardLayout** — re-renders entire page tree 60 times/minute | [DashboardLayout.tsx L243](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/components/layout/DashboardLayout.tsx#L243) | Every child component re-renders every second | All users (100%) |
+| 2 | **Zero code splitting** — 65+ pages imported eagerly in App.tsx | [App.tsx L1-74](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/App.tsx#L1) | Initial bundle loads every route for every role | All users (100%) |
+| 3 | **FloatingChatbot wildcard realtime subscription** — listens to ALL changes on ALL tables | [FloatingChatbot.tsx L72](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/components/FloatingChatbot.tsx#L72) | Fires on every DB write across entire system | All users (100%) |
+| 4 | **Badge count: 4-7 queries per realtime event** — every `postgres_changes` event triggers full badge recount | [DashboardLayout.tsx L396-445](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/components/layout/DashboardLayout.tsx#L396) | Cascade: realtime event → 4 count queries → re-render | All users (100%) |
+| 5 | **`select('*')` on all tables** — full table scans without pagination or column selection | Multiple files (25+) | Browser crashes at 5K+ rows | HR, Admin |
+
+---
+
+## 2. REACT ARCHITECTURE ASSESSMENT
+
+### 2.1 Component Hierarchy Map
+
+```mermaid
+graph TB
+    APP["App.tsx (Router)"]
+    FC["FloatingChatbot (GLOBAL, always mounted)"]
+    
+    APP --> DL_A["DashboardLayout role=admin"]
+    APP --> DL_TL["DashboardLayout role=team_lead"]
+    APP --> DL_E["DashboardLayout role=employee"]
+    APP --> DL_HR["DashboardLayout role=hr"]
+    APP --> DL_C["DashboardLayout role=candidate"]
+    APP --> FC
+    
+    DL_A --> SIDEBAR_A["Sidebar (14 items)"]
+    DL_A --> TOPBAR_A["TopBar + Clock + Timer"]
+    DL_A --> OUTLET_A["Outlet (page content)"]
+    
+    DL_E --> SIDEBAR_E["Sidebar (13 items)"]
+    DL_E --> TOPBAR_E["TopBar + Clock + Timer"]
+    DL_E --> OUTLET_E["Outlet (page content)"]
+
+    style FC fill:#ff6b6b,stroke:#c92a2a
+    style DL_A fill:#ff6b6b,stroke:#c92a2a
+    style DL_E fill:#ff6b6b,stroke:#c92a2a
+```
+
+### 2.2 Architecture Flaws
+
+| # | Flaw | Severity | Impact |
+|---|------|----------|--------|
+| ARCH-01 | **DashboardLayout is a 573-line god component** — handles auth, clock in/out, timers, badges, routing, AI report generation, sidebar, topbar, and daily report modals | **Critical** | Any change risks breaking unrelated features |
+| ARCH-02 | **Global mutable variables** — `globalProfile`, `globalClockedIn`, `globalLogId`, `globalWorkLoc`, `globalClockInTime`, `globalBadges` are module-level `let` variables | **Critical** | Race conditions, stale state, not reactive |
+| ARCH-03 | **No component decomposition** — DashboardLayout contains sidebar, topbar, clock widget, daily report modal, and EOD AI generation in ONE component | **High** | Impossible to memoize sub-trees |
+| ARCH-04 | **Location-based re-initialization** — `useEffect` depends on `[currentRole, location.pathname]`, re-running full init logic on every navigation | **High** | Redundant auth + profile fetches per route change |
+| ARCH-05 | **Props drilling** — `role` passed through DashboardLayout → every page also fetches `role` independently | **High** | Inconsistent role state across components |
+| ARCH-06 | **No error boundaries** — Zero `<ErrorBoundary>` components; any runtime error crashes entire app | **High** | One failing component takes down all functionality |
+| ARCH-07 | **No Suspense boundaries** — Zero `<Suspense>` wrappers for async loading states | **Medium** | No graceful loading UX |
+| ARCH-08 | **FloatingChatbot renders on every route** (except `/assessment`) even when closed — it initializes AI context on mount | **High** | Unnecessary API calls + memory consumption |
+
+### 2.3 Component Responsibility Violations
+
+| Component | Current Responsibilities | Should Only Handle |
+|-----------|------------------------|-------------------|
+| `DashboardLayout` | Auth, profile fetch, role routing, clock in/out, timer, badge counts, realtime subscriptions, AI EOD report, sidebar, topbar, layout rendering | Layout rendering (sidebar + topbar + content slot) |
+| `FloatingChatbot` | AI chat, Supabase ALL-table wildcard listener, company valuation calculation, user profile fetch | AI chat (open/close toggle + message send) |
+| `App.tsx` | 65+ eager imports, routing, chatbot mounting, role detection via pathname | Lazy route definitions only |
+
+---
+
+## 3. RENDERING OPTIMIZATION PLAN
+
+### 3.1 The 1-Second Timer Re-Render Storm
+
+```
+CURRENT FLOW (every second when clocked in):
+  setInterval (1000ms)
+    → setElapsedTimer(new string)
+    → DashboardLayout re-renders (573 lines)
+    → Sidebar re-renders (14 nav items)
+    → TopBar re-renders
+    → Clock widget re-renders
+    → {children} (Outlet) re-renders
+    → Current page component re-renders
+    → All child components of current page re-render
+
+RESULT: 60 full-tree re-renders per minute for every user who is clocked in.
+
+FIX STRATEGY:
+  1. Extract timer into isolated <ClockTimer> component
+  2. Use React.memo on Sidebar, TopBar, and Outlet wrapper
+  3. Timer state stays local to <ClockTimer> — parent never re-renders
+  4. Timer uses requestAnimationFrame instead of setInterval for better perf
+  
+ESTIMATED IMPACT: 99% reduction in unnecessary re-renders
+```
+
+### 3.2 Component-Level Memoization Plan
+
+| Component | Re-render Trigger | Fix | Priority |
+|-----------|------------------|-----|----------|
+| Sidebar nav items | Every timer tick | `React.memo(Sidebar)` — nav items are static per role | **P0** |
+| TopBar | Every timer tick | `React.memo(TopBar)` — only changes on profile update | **P0** |
+| Page outlet (`{children}`) | Every timer tick | Wrap in `React.memo` container | **P0** |
+| Badge counts | Every realtime event | Debounce with 5s cooldown + `React.memo` | **P1** |
+| Nav item list rendering | Every parent render | `useMemo` for nav item array filtering | **P1** |
+| Table rows (all list views) | Parent re-render | `React.memo(TableRow)` with key-based comparison | **P2** |
+
+### 3.3 Screens That Will Break at Scale
+
+| Screen | Component | Rows at Scale | Current Pattern | Breaking Point |
+|--------|----------|-------------|----------------|---------------|
+| Application Hub | [ApplicationHub.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/ApplicationHub.tsx) | 50K+ applications | `select('*')` + client-side join + no pagination | ~500 rows |
+| Candidate Pipeline | [CandidatePipeline.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/recruitment/CandidatePipeline.tsx) | 50K+ applications | `select(*, candidates(*), job_forms(*))` N+1 | ~200 rows |
+| HR Payroll | [Payroll.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/Payroll.tsx) | 5K employees | `select('*')` + client-side salary calculation for each | ~500 rows |
+| Employee Work Logs | [WorkLogs.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/employee/WorkLogs.tsx) | 365K+ work_logs | `select('*')` by user_id, client-side daily aggregation | ~1K rows |
+| Performance Engine | [PerformanceEngine.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/PerformanceEngine.tsx) | 5K employees | Sequential AI call per employee (4s delay each) | ~50 employees |
+| Admin Analytics | [Analytics.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/admin/Analytics.tsx) | All tables | 7 simultaneous full table scans | ~500 total rows |
+| My Team | [MyTeam.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/team-lead/MyTeam.tsx) | 5K profiles | Fetches ALL profiles, filters client-side | ~500 profiles |
+
+---
+
+## 4. STATE MANAGEMENT STRATEGY
+
+### 4.1 Current State Architecture
+
+```
+CURRENT:
+  Module-level globals: globalProfile, globalClockedIn, globalLogId, globalBadges
+  Component-level useState: 10-15 state variables per page component
+  No shared state management library
+  No query caching
+  Every page fetches its own profile from supabase.auth.getUser() + profiles.select
+  
+PROBLEMS:
+  ✗ Profile fetched 3-5 times per navigation (DashboardLayout + page + sub-components)
+  ✗ Global mutables are not reactive — updates don't trigger re-renders in other components
+  ✗ No cache invalidation — stale data served until full page refresh
+  ✗ No optimistic updates — every action waits for DB round-trip
+  ✗ Role stored in 3 places: user_metadata, profiles table, and component prop
+```
+
+### 4.2 Recommended Architecture: TanStack Query + Zustand
+
+```
+LAYER 1: TanStack Query (Server State — DB data)
+  Purpose: Fetch, cache, and synchronize all Supabase data
+  Benefits:
+    - Automatic caching with configurable staleTime
+    - Background refetching
+    - Deduplication (same query from 3 components = 1 API call)
+    - Optimistic updates for mutations
+    - Pagination/infinite scroll built-in
+    
+  Example:
+    const { data: profile } = useQuery({
+      queryKey: ['profile', userId],
+      queryFn: () => supabase.from('profiles').select('*').eq('id', userId).single(),
+      staleTime: 5 * 60 * 1000, // 5 minutes
+    });
+
+LAYER 2: Zustand (Client State — UI state)
+  Purpose: Clock state, sidebar toggle, active modals, UI preferences
+  Benefits:
+    - Replaces global mutable variables with reactive store
+    - No provider nesting (unlike React Context)
+    - Selective subscription (component subscribes to specific slice)
+    - DevTools support
+    
+  Store design:
+    useAppStore: { clockedIn, logId, clockInTime, workLocation }
+    useUIStore: { sidebarOpen, activeModal, theme }
+    useAuthStore: { profile, role, isAuthenticated }
+
+WHY NOT:
+  ✗ Redux: Overkill boilerplate for this scale; TanStack Query handles server state
+  ✗ React Context: Causes full sub-tree re-render on any value change
+  ✗ Zustand alone: Not designed for async server state (no caching, refetching)
+  ✗ MobX: Learning curve + complex observables
+```
+
+### 4.3 Migration Path
+
+```
+Phase A: Install TanStack Query + Zustand
+Phase B: Create useAuthStore (replace globalProfile, globalClockedIn, etc.)
+Phase C: Create query hooks (useProfile, useLeaves, useApplications, etc.)
+Phase D: Migrate pages one-by-one from useState+useEffect to useQuery
+Phase E: Remove all raw supabase.from().select() calls from components
+```
+
+---
+
+## 5. SUPABASE QUERY AUDIT
+
+### 5.1 Query Pattern Catalog
+
+| # | File | Query | Problem | Fix |
+|---|------|-------|---------|-----|
+| Q-01 | DashboardLayout L169 | `profiles.select('*').eq('id', userId).maybeSingle()` | Called on every route change | Cache with TanStack Query (5 min stale) |
+| Q-02 | DashboardLayout L201 | `work_logs.select('id, work_location, clock_in, created_at').eq(...).eq('status','Active')` | Called on every route change | Cache in Zustand store |
+| Q-03 | DashboardLayout L396-445 | 4-7 count queries for badge counts | Called on every realtime event (could be 100+/min) | Debounce 5s + single aggregate view query |
+| Q-04 | DashboardLayout L230-235 | 4 realtime channels on complaints, tasks, leaves, notifications | Each triggers full badge recount | Single channel + debounced callback |
+| Q-05 | FloatingChatbot L45 | `profiles.select('*')` — fetches ALL profiles for "company valuation" | Loads entire employee table for chat context | Remove; use pre-computed org_metrics view |
+| Q-06 | FloatingChatbot L71-75 | Wildcard realtime: `event: '*', schema: 'public'` | Fires on EVERY write to ANY table | Remove entirely or scope to notifications only |
+| Q-07 | ApplicationHub | `job_applications.select('*')` + `job_forms.select('*')` then client-side join | 2 full table scans + O(n×m) join in browser | Server-side JOIN with pagination |
+| Q-08 | CandidatePipeline | `candidate_applications.select('*, candidates(*), job_forms(*)')` | N+1: for each application, fetches candidate + form | Server-side JOIN + pagination |
+| Q-09 | Payroll.tsx L86-93 | `profiles.select('*').not('employment_status','eq','terminated')` with fallback | Fetches ALL profiles for payroll calculation | DB view `v_payroll_summary` |
+| Q-10 | PerformanceEngine L20 | `profiles.select('*').order('department')` | Fetches ALL profiles including non-employees | Filter: `.eq('role', 'employee')` + pagination |
+| Q-11 | MyTeam L39-42 | `profiles.select('*').order('name')` | Fetches ALL profiles, filters client-side | Filter: `.eq('team_lead_id', userId)` or `.eq('department_id', dept)` |
+| Q-12 | Approvals L35 | `profiles.select('id, team_lead_id, department, role')` | Fetches ALL profiles to find team members | Filter: `.eq('team_lead_id', userId)` |
+| Q-13 | EmployeeDashboard L19 | `profiles.select('*').eq('id', userId)` | Duplicate of DashboardLayout profile fetch | Use cached profile from TanStack Query |
+| Q-14 | WorkLogs L31 | `work_logs.select('*').eq('user_id', userId)` | All work logs for all time, no pagination | Date range filter + cursor pagination |
+| Q-15 | Multiple files | `supabase.auth.getUser()` | Called 3-5 times per page load across components | Cache auth state in Zustand; single call in auth provider |
+
+### 5.2 Query Optimization Priority
+
+```
+HIGH IMPACT (fix first):
+  1. Badge count debouncing → eliminates 80% of redundant queries
+  2. Profile caching → eliminates 3-5 duplicate fetches per navigation
+  3. FloatingChatbot wildcard → eliminates unbounded realtime events
+  4. ApplicationHub server-side join → eliminates O(n×m) client computation
+
+MEDIUM IMPACT:
+  5. Pagination on all list views → prevents browser crashes at scale
+  6. Column selection (replace select('*') with specific columns) → reduces payload
+  7. auth.getUser() consolidation → eliminates 3-5 redundant auth calls
+
+LOW IMPACT:
+  8. Optimistic updates on mutations (toast immediately, sync in background)
+  9. Prefetching on hover (load next page's data before click)
+```
+
+---
+
+## 6. DATABASE PERFORMANCE STRATEGY
+
+### 6.1 Index Strategy Summary (from Phase 6)
+
+32 production indexes designed. Critical additions:
+
+| Index | Table | Columns | Query Pattern |
+|-------|-------|---------|--------------|
+| `idx_applications_posting_stage` | applications | (job_posting_id, stage) | Pipeline funnel: WHERE posting = $1 AND stage = $2 |
+| `idx_profiles_role` | profiles | role | Dashboard filters: WHERE role = 'employee' |
+| `idx_profiles_department` | profiles | department_id | Team queries: WHERE department_id = $1 |
+| `idx_notifications_user_unread` | notifications | (user_id, is_read, created_at DESC) | Badge count: WHERE user_id = $1 AND is_read = false |
+| `idx_leaves_status_user` | leaves | (status, user_id) | Approvals: WHERE status = 'Pending' AND user_id IN (...) |
+| `idx_work_sessions_user_date` | work_sessions | (employee_id, session_date) | Attendance: WHERE employee_id = $1 AND session_date = $2 |
+
+### 6.2 Database View Strategy (from Phases 6-7)
+
+| View | Replaces | Query Count Reduction |
+|------|---------|---------------------|
+| `v_org_metrics` | 7 separate profile count queries across dashboards | 7 → 1 |
+| `v_payroll_summary` | Per-employee client-side calculation loop | N → 1 |
+| `v_recruitment_funnel` | Multiple application count queries | 5 → 1 |
+| `v_badge_counts(user_id)` | 4-7 count queries per realtime event | 7 → 1 (function) |
+| `v_attendance_today` | Client-side work_log aggregation | N → 1 |
+
+### 6.3 Query Execution Plan Targets
+
+| Query | Current Est. Cost | With Indexes | Target |
+|-------|------------------|-------------|--------|
+| Candidate search by name | Seq Scan (~100ms at 10K rows) | GIN trgm Index Scan (~5ms) | <10ms |
+| Applications by job + stage | Seq Scan (~200ms at 50K) | Composite B-tree (~2ms) | <5ms |
+| Badge count (4 tables) | 4 × Seq Scan (~100ms each) | Single view + indexes (~10ms) | <15ms |
+| Employee by department | Seq Scan on profiles (~50ms) | B-tree on department_id (~1ms) | <5ms |
+| Payroll summary | Full table scan + client math | Materialized view (~1ms read) | <5ms |
+
+---
+
+## 7. SEARCH OPTIMIZATION STRATEGY
+
+### 7.1 Current Search Capability
+
+| Search Context | Implementation | Performance |
+|---------------|---------------|-------------|
+| Candidate search | Client-side `String.includes()` on loaded array | O(n) per keystroke, freezes at 5K+ |
+| Employee search | Client-side `String.toLowerCase().includes()` | O(n) per keystroke |
+| Job search | None | N/A |
+| Application search | Client-side filter on loaded array | O(n) per keystroke |
+
+### 7.2 Enterprise Search Architecture
+
+```
+TIER 1: Database-level search (pg_trgm)
+  CREATE EXTENSION pg_trgm;
+  
+  Fuzzy name search:
+    CREATE INDEX idx_candidates_name_trgm ON candidates USING GIN (full_name gin_trgm_ops);
+    SELECT * FROM candidates WHERE full_name % 'John Doe' ORDER BY similarity(full_name, 'John Doe') DESC LIMIT 20;
+  
+  Email prefix search:
+    SELECT * FROM candidates WHERE email ILIKE 'john%' LIMIT 20;
+    (B-tree index on email handles prefix matching)
+
+TIER 2: Frontend debounced search
+  const debouncedSearch = useDebouncedCallback((term) => {
+    queryClient.fetchQuery(['candidates', 'search', term], () =>
+      supabase.rpc('search_candidates', { search_term: term, page_size: 20 })
+    );
+  }, 300); // 300ms debounce
+
+TIER 3: Search RPC function (server-side)
+  CREATE FUNCTION search_candidates(search_term TEXT, page_size INT DEFAULT 20)
+  RETURNS SETOF candidates AS $$
+    SELECT * FROM candidates
+    WHERE full_name % search_term OR email ILIKE (search_term || '%')
+    ORDER BY similarity(full_name, search_term) DESC
+    LIMIT page_size;
+  $$ LANGUAGE sql STABLE;
+```
+
+---
+
+## 8. DSA OPTIMIZATION OPPORTUNITIES
+
+### 8.1 Practical Production-Grade DSA Applications
+
+| # | Module | Current Approach | DSA Optimization | Complexity Improvement | Priority |
+|---|--------|-----------------|-----------------|----------------------|----------|
+| **DSA-01** | ApplicationHub client-side join | `Array.find()` in `.map()` = O(n×m) | **HashMap lookup** — Build `Map<formId, form>` first, then O(1) lookup per application | O(n×m) → O(n+m) | **P0** |
+| **DSA-02** | Team member resolution (Approvals, MyTeam) | Fetch ALL profiles, filter client-side = O(n) over entire org | **Server-side WHERE clause** + indexed FK lookup | O(n) → O(log n) | **P0** |
+| **DSA-03** | Badge count computation | 4 sequential count queries | **Single aggregate query** via DB view returning all 4 counts | 4 round-trips → 1 | **P0** |
+| **DSA-04** | Candidate search | Linear scan `Array.filter().includes()` = O(n×k) per keystroke | **pg_trgm GIN index** for fuzzy search, debounced | O(n×k) → O(log n) | **P1** |
+| **DSA-05** | Work log daily aggregation | Client-side `.forEach()` building `dailySummaries` object | **Server-side GROUP BY session_date** | O(n) client → O(1) client | **P1** |
+| **DSA-06** | Notification priority | No priority concept; all notifications equal | **Priority queue** (heap) — urgent notifications surface first | Unsorted → O(log n) insert/extract | **P2** |
+| **DSA-07** | Skill filter in MyTeam | `String.includes()` on comma-separated text | **Inverted index** via `GIN(skills_array)` on structured skills array column | O(n×k) → O(1) | **P2** |
+| **DSA-08** | Org hierarchy traversal | No hierarchy query exists | **Recursive CTE** (tree traversal) for reporting chain | N/A → O(d) where d = depth | **P2** |
+| **DSA-09** | Application dedup check | Sequential scan + error code catch | **UNIQUE constraint** (B-tree) → O(log n) duplicate rejection at DB level | O(n) → O(log n) | **P1** |
+| **DSA-10** | Pipeline stage counts | Multiple `COUNT` queries with different `WHERE` | **Single-pass partition** — `COUNT(*) FILTER(WHERE stage = X)` | k queries → 1 query | **P0** |
+| **DSA-11** | Autocomplete (candidate/employee name) | No autocomplete | **Trie-based** client-side suggestion with server-side pg_trgm fallback | N/A → O(m) where m = prefix length | **P3** |
+| **DSA-12** | Interview scheduling conflict detection | No conflict detection | **Interval tree** or simple sorted-list overlap check | N/A → O(n log n) | **P3** |
+
+### 8.2 Highest-Impact DSA Transformation
+
+```
+CURRENT (ApplicationHub client-side join):
+  const localizedJoinedApplications = (rawApps || []).map((app) => {
+    const targetFormId = app.form_id || app.job_form_id;
+    const matchingForm = rawForms?.find((f) => f.id === targetFormId); // O(m) per app
+    ...
+  });
+  // Total: O(n × m) where n=applications, m=forms
+  // At 50K apps × 100 forms = 5,000,000 operations
+
+FIX (HashMap lookup):
+  const formMap = new Map(rawForms.map(f => [f.id, f])); // O(m) build
+  const joined = rawApps.map(app => ({
+    ...app,
+    form: formMap.get(app.form_id || app.job_form_id), // O(1) lookup
+  }));
+  // Total: O(n + m) = 50,100 operations → 100x faster
+
+BEST FIX (server-side JOIN — eliminates client computation entirely):
+  supabase.from('applications')
+    .select('*, job_postings(*)')
+    .range(0, 49) // pagination
+  // Total: O(1) client, O(n) server with index
+```
+
+---
+
+## 9. ANALYTICS OPTIMIZATION PLAN
+
+### 9.1 Current Analytics Problems
+
+| Problem | Source | Impact |
+|---------|--------|--------|
+| HR Dashboard payroll = `employees × ₹65,000` | Fabricated in client | Wrong data |
+| Admin Dashboard payroll = role-based (65k/95k/125k) | Different fabrication | Different wrong data |
+| Application count from `job_applications` table | One of two application tables | Half the data |
+| Candidate count from `candidate_applications` | The other application table | Other half |
+| FloatingChatbot "valuation" = `payroll × 12 × 1.8 × 4.5` | Fantasy math | Misleading |
+| Analytics dashboard fetches 7 tables simultaneously | Full table scans | 3-10s load time |
+
+### 9.2 Enterprise Analytics Architecture
+
+```
+RULE: All analytics derive from DATABASE VIEWS. Zero client-side computation.
+
+Dashboard views (from Phases 6-7):
+  v_org_metrics              → Headcount, dept breakdown
+  v_recruitment_funnel       → Applications by stage
+  v_pipeline_velocity        → Avg time per stage
+  v_payroll_summary          → Total pay by month
+  v_attendance_today         → Who's clocked in now
+  v_leave_summary            → Pending/upcoming/on-leave-today
+  v_source_effectiveness     → Recruitment channel ROI
+  v_offer_acceptance_rate    → Accepted vs declined
+  v_time_to_hire             → Applied-to-hired duration
+  v_recruiter_productivity   → Stage transitions per recruiter
+
+Materialized views (for expensive aggregations):
+  mv_department_headcount    → REFRESH every 15 minutes
+  mv_monthly_attrition       → REFRESH daily
+  mv_assessment_pass_rates   → REFRESH hourly
+```
+
+---
+
+## 10. CACHING ARCHITECTURE
+
+### 10.1 Multi-Layer Caching Strategy
+
+```
+LAYER 1: TanStack Query (Client-Side)
+  ┌──────────────────────────────────────────────────┐
+  │ Cache Key          │ staleTime    │ gcTime       │
+  ├────────────────────┼──────────────┼──────────────┤
+  │ ['profile', id]    │ 5 min        │ 30 min       │
+  │ ['dashboard']      │ 30 sec       │ 5 min        │
+  │ ['applications', page] │ 1 min    │ 10 min       │
+  │ ['badges']         │ 10 sec       │ 1 min        │
+  │ ['org_metrics']    │ 5 min        │ 30 min       │
+  │ ['payroll', month] │ 10 min       │ 1 hour       │
+  │ ['notifications']  │ 15 sec       │ 5 min        │
+  └──────────────────────────────────────────────────┘
+  
+  Invalidation triggers:
+    Realtime event on table X → invalidate queries keyed to X
+
+LAYER 2: Database Views (Server-Side)
+  Regular views: Computed on read (always fresh)
+  Materialized views: Pre-computed, refreshed on schedule
+    mv_department_headcount: REFRESH MATERIALIZED VIEW CONCURRENTLY every 15 min
+    mv_monthly_attrition: REFRESH daily at 00:00 UTC
+
+LAYER 3: Edge Function Response Cache (Vercel)
+  AI proxy responses: Cache-Control: max-age=300 (5 min for same input)
+  Assessment grading: No cache (unique per submission)
+  Resume parsing: Cache parsed result on candidate_resumes table
+```
+
+### 10.2 Cache Invalidation Strategy
+
+```
+Event-driven invalidation via Supabase Realtime:
+
+  supabase.channel('cache-invalidation')
+    .on('postgres_changes', { event: '*', table: 'applications' }, () => {
+      queryClient.invalidateQueries({ queryKey: ['applications'] });
+      queryClient.invalidateQueries({ queryKey: ['recruitment_funnel'] });
+    })
+    .on('postgres_changes', { event: '*', table: 'leaves' }, () => {
+      queryClient.invalidateQueries({ queryKey: ['leaves'] });
+      queryClient.invalidateQueries({ queryKey: ['badges'] });
+    })
+    .subscribe();
+
+IMPORTANT: This is 1 channel with targeted invalidation, NOT
+the current pattern of 4 channels each triggering 4-7 fresh queries.
+```
+
+---
+
+## 11. NETWORK OPTIMIZATION PLAN
+
+### 11.1 Current Request Volume per Page Load
+
+| Page | API Calls | Breakdown |
+|------|----------|-----------|
+| Any page (DashboardLayout) | 5-9 | auth.getUser() + profiles.select + work_logs.select + 4-7 badge counts |
+| Employee Dashboard | +3 | tasks.select + complaints.select + work_logs.select |
+| HR Payroll | +2 | profiles.select('*') ALL + payroll calculations |
+| Application Hub | +2 | job_applications.select('*') + job_forms.select('*') |
+| **Total per navigation** | **8-14** | Multiplicative with realtime triggers |
+
+### 11.2 Target Request Volume
+
+| Page | Target | Strategy |
+|------|--------|---------|
+| Any page (layout) | 0-1 | Profile cached; badges from single view query, debounced |
+| Employee Dashboard | 1 | Single view query `v_employee_dashboard(userId)` |
+| HR Payroll | 1 | Single view `v_payroll_summary` with pagination |
+| Application Hub | 1 | Server-side JOIN with cursor pagination |
+| **Total per navigation** | **1-2** | 85% reduction |
+
+### 11.3 Network Optimizations
+
+| Optimization | Technique | Impact |
+|-------------|----------|--------|
+| **Request deduplication** | TanStack Query auto-dedup | Eliminate 3-5 duplicate profile/auth fetches |
+| **Column selection** | Replace `select('*')` with specific columns | 50-70% payload reduction |
+| **Pagination** | Cursor-based, 50 items per page | 99% payload reduction on large tables |
+| **Debounced search** | 300ms debounce on search input | 80% fewer search queries |
+| **Prefetching** | `queryClient.prefetchQuery` on sidebar hover | Perceived-instant navigation |
+| **Batch operations** | Single RPC call for dashboard data | 5-8 queries → 1 |
+
+---
+
+## 12. BUNDLE OPTIMIZATION PLAN
+
+### 12.1 Current Bundle Architecture
+
+```
+CURRENT: 
+  App.tsx imports ALL 65+ page components eagerly at the top level.
+  
+  import AdminDashboard from "./pages/admin/Dashboard";       // ~7KB
+  import AdminEmployees from "./pages/admin/Employees";       // ~15KB
+  import AdminAnalytics from "./pages/admin/Analytics";       // ~20KB
+  import HRPayroll from "./pages/hr/Payroll";                 // ~48KB
+  import HRRecruitment from "./pages/hr/Recruitment";         // ~25KB
+  ... × 65+ imports
+  
+  RESULT:
+    - Single main.js bundle containing ALL code for ALL roles
+    - Employee loads Admin payroll code (48KB) even though they'll never see it
+    - Candidate loads HR recruitment code (25KB) even though they can't access it
+    - Estimated total bundle: ~3MB+ (uncompressed)
+
+ALSO:
+  - Recharts imported in 8+ files (~180KB)
+  - @google/generative-ai imported in 4+ files (~50KB)
+  - GoogleGenerativeAI used in FloatingChatbot (mounted globally)
+```
+
+### 12.2 Route-Based Code Splitting Plan
+
+```typescript
+// AFTER: Lazy imports with role-based grouping
+const AdminDashboard = React.lazy(() => import('./pages/admin/Dashboard'));
+const AdminEmployees = React.lazy(() => import('./pages/admin/Employees'));
+const AdminAnalytics = React.lazy(() => import('./pages/admin/Analytics'));
+const HRPayroll = React.lazy(() => import('./pages/hr/Payroll'));
+// ... all 65+ routes become lazy
+
+// Route groups wrapped in Suspense
+<Suspense fallback={<PageSkeleton />}>
+  <Route path="/admin" element={<AdminDashboard />} />
+</Suspense>
+```
+
+### 12.3 Bundle Size Impact Projection
+
+| Metric | Current (estimated) | After Splitting | Improvement |
+|--------|-------------------|----------------|------------|
+| Initial JS bundle | ~3MB | ~400KB (shell + auth + layout) | **87% reduction** |
+| First Contentful Paint | ~4-6s | ~1-2s | **70% faster** |
+| Route chunk size (avg) | N/A (all in main) | ~30-80KB per route | Loaded on demand |
+| Admin-only code loaded by Employee | ~500KB+ | 0 | **100% eliminated** |
+| Recharts loaded for non-analytics pages | ~180KB | 0 (loaded only when visiting analytics) | **100% eliminated** |
+
+### 12.4 Shared Chunk Strategy (Vite)
+
+```javascript
+// vite.config.ts
+build: {
+  rollupOptions: {
+    output: {
+      manualChunks: {
+        'vendor-react': ['react', 'react-dom', 'react-router-dom'],
+        'vendor-ui': ['@radix-ui/react-*'],     // Shadcn dependencies
+        'vendor-charts': ['recharts'],            // Only loaded by analytics pages
+        'vendor-supabase': ['@supabase/supabase-js'],
+        'vendor-ai': ['@google/generative-ai'],   // Only loaded by AI features
+      }
+    }
+  }
+}
+```
+
+---
+
+## 13. MEMORY MANAGEMENT PLAN
+
+### 13.1 Memory Leak Inventory
+
+| # | Leak | File | Mechanism | Severity |
+|---|------|------|-----------|----------|
+| MEM-01 | **FloatingChatbot wildcard realtime subscription** — listens to ALL table changes, accumulates `liveDbPulse` array | [FloatingChatbot.tsx L71-74](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/components/FloatingChatbot.tsx#L71) | Unbounded array growth `.slice(0, 5)` mitigates slightly, but channel stays open | **High** |
+| MEM-02 | **DashboardLayout realtime channel** — 4 table listeners that fire badge recount | [DashboardLayout.tsx L230-235](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/components/layout/DashboardLayout.tsx#L230) | Cleanup exists but depends on `[currentRole, location.pathname]` — re-subscribes on every navigation | **High** |
+| MEM-03 | **1-second setInterval** — creates new interval on every `isClockedIn` or `clockInTime` change | [DashboardLayout.tsx L240-258](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/components/layout/DashboardLayout.tsx#L240) | Properly cleaned up via return, but re-creates frequently | **Medium** |
+| MEM-04 | **Global mutable variables** — `globalProfile`, `globalBadges` persist across route changes, never garbage collected | [DashboardLayout.tsx L13-18](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/components/layout/DashboardLayout.tsx#L13) | Memory accumulation across session lifetime | **Medium** |
+| MEM-05 | **Chat message history** — messages stored in component state, never paginated or trimmed | Multiple Chat.tsx files | Unbounded growth during long sessions | **Low** |
+| MEM-06 | **Work log aggregation** — all historical work logs loaded into memory for client-side processing | [WorkLogs.tsx L31](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/employee/WorkLogs.tsx#L31) | 365K+ rows in memory after 1 year | **High** |
+
+### 13.2 Fixes
+
+| Leak | Fix | Priority |
+|------|-----|----------|
+| MEM-01 | Remove wildcard subscription; scope to `notifications` table only | **P0** |
+| MEM-02 | Single shared channel manager; don't re-subscribe on navigation | **P0** |
+| MEM-03 | Extract to isolated `<ClockTimer>` component; no parent re-renders | **P1** |
+| MEM-04 | Replace with Zustand store (proper lifecycle management) | **P1** |
+| MEM-05 | Paginate chat history (load last 50, infinite scroll up for older) | **P2** |
+| MEM-06 | Date-range filter (default: last 30 days) + cursor pagination | **P1** |
+
+---
+
+## 14. AI SCALABILITY PLAN
+
+### 14.1 Current AI Architecture
+
+```
+CURRENT:
+  Client → HuggingFace API (direct, with hardcoded token)
+  Client → Google Generative AI (direct, with env var key)
+  
+  Sequential processing: 1 employee at a time, 4s delay
+  No queuing, no batching, no caching
+  
+  At 1000 employees: 4000 seconds = 67 minutes for one performance run
+  At 5000 employees: 20000 seconds = 5.5 hours
+```
+
+### 14.2 Enterprise AI Architecture
+
+```mermaid
+graph LR
+    subgraph "Client (Zero AI calls)"
+        UI["React UI"]
+    end
+    
+    subgraph "API Gateway"
+        EF["Supabase Edge Functions"]
+    end
+    
+    subgraph "AI Processing"
+        Q["Job Queue Table"]
+        W1["Worker 1"]
+        W2["Worker 2"]
+        W3["Worker 3"]
+    end
+    
+    subgraph "AI Providers"
+        HF["HuggingFace"]
+        GG["Google Gemini"]
+    end
+    
+    UI -->|"POST /ai-proxy"| EF
+    EF -->|"INSERT job"| Q
+    Q -->|"Process batch"| W1 & W2 & W3
+    W1 & W2 & W3 --> HF & GG
+    W1 & W2 & W3 -->|"UPDATE result"| Q
+```
+
+### 14.3 AI Processing Targets
+
+| AI Feature | Current Time | Target Time | Strategy |
+|-----------|-------------|-------------|---------|
+| Resume ATS screening (1 candidate) | 4-8s | 2-4s | Edge Function with streaming |
+| Resume batch screening (100 candidates) | 400-800s | 30-60s | 10 concurrent workers |
+| Performance evaluation (1000 employees) | 67 min | 5-10 min | Queue + 10 parallel workers |
+| Assessment grading | 404 error (doesn't exist) | <2s | Create edge function |
+| Interview AI summarization | N/A (AI generates scores instead) | <5s per round | Post-submission summarization |
+
+---
+
+## 15. MONITORING & OBSERVABILITY PLAN
+
+### 15.1 Current Monitoring: Zero
+
+```
+CURRENT:
+  ✗ No error tracking
+  ✗ No performance monitoring
+  ✗ No API latency tracking
+  ✗ No user analytics
+  ✗ console.error() is the only error handling
+  ✗ try/catch → toast("Error") pattern with no reporting
+```
+
+### 15.2 Enterprise Monitoring Stack
+
+```
+LAYER 1: Frontend Error Tracking
+  Tool: Sentry (free tier: 5K errors/month)
+  Captures: Unhandled exceptions, Promise rejections, component errors
+  Integration: ErrorBoundary → Sentry.captureException()
+  
+LAYER 2: API Performance Monitoring
+  Tool: Supabase Dashboard (built-in)
+  Captures: Query latency, connection pool usage, RLS policy evaluation time
+  Alerts: Query > 500ms, connection pool > 80%
+
+LAYER 3: Frontend Performance
+  Tool: Vercel Analytics (built-in)
+  Captures: Web Vitals (LCP, FID, CLS), page load times, route transitions
+  
+LAYER 4: Database Monitoring
+  Tool: pg_stat_statements (Supabase extension)
+  Captures: Slow queries, most frequent queries, index usage
+  Alert: Query > 100ms, table seq scan on > 10K rows
+
+LAYER 5: Audit Trail
+  Tool: audit_log table (from Phase 6)
+  Captures: All sensitive data changes with actor, timestamp, old/new values
+```
+
+---
+
+## 16. STRESS TEST PROJECTIONS
+
+### 16.1 Simulated Load Scenarios
+
+| Concurrent Users | API Calls/sec | DB Connections | Response Time | Status |
+|-----------------|-------------|---------------|--------------|--------|
+| 10 | ~20 | ~10 | <500ms | ✅ OK |
+| 50 | ~100 | ~50 | <1s | ✅ OK |
+| 100 | ~200 | ~100 | 1-3s | ⚠️ Degraded |
+| 500 | ~1,000 | ~200 (pool limit) | 3-10s | 🔴 **Failing** |
+| 1,000 | ~2,000 | 200 (exhausted) | Timeout | 🔴 **Down** |
+| 5,000 | ~10,000 | 200 (exhausted) | 503 | 🔴 **Down** |
+
+### 16.2 Breaking Points Analysis
+
+| Breaking Point | Root Cause | Fix |
+|---------------|-----------|-----|
+| **~100 users: Degradation** | Each user's DashboardLayout fires 4-7 badge queries on each realtime event. 100 users × 5 events/min × 5 queries = 2,500 queries/min | Badge debouncing + aggregate view |
+| **~200 users: Connection exhaustion** | Supabase free tier: 200 max connections. Each user holds 1-3 connections (page + realtime channels) | Connection pooling (pgBouncer transaction mode) + shared realtime channels |
+| **~500 users: Timeout** | Realtime channels multiply: each user × 5 channels (DashboardLayout + FloatingChatbot) = 2,500 channels | Single shared channel per user |
+| **~1000 users: Full outage** | All above compounded + full table scans on every query | All optimizations required |
+
+### 16.3 Target Performance After Optimization
+
+| Concurrent Users | Target Response | Required Optimizations |
+|-----------------|----------------|----------------------|
+| 500 | <500ms | Phases 1-4 of optimization (caching, debouncing, pagination) |
+| 1,000 | <1s | + connection pooling + shared channels |
+| 5,000 | <2s | + materialized views + read replicas |
+| 10,000 | <3s | + Redis cache layer + CDN for static assets |
+
+---
+
+## 17. MICROSERVICE READINESS ASSESSMENT
+
+### 17.1 Current Monolith Architecture
+
+```
+CURRENT:
+  1 React SPA → 1 Supabase instance → 1 PostgreSQL database
+  All business logic in client-side React components
+  All AI calls from browser directly
+  
+MICROSERVICE READINESS: 15% (not ready)
+```
+
+### 17.2 Service Boundary Analysis
+
+| Service | Current Location | Can Be Extracted? | Dependencies |
+|---------|-----------------|-------------------|-------------|
+| **ATS Service** | 8 React components + 2 edge functions | ✅ Yes (well-bounded domain) | `applications`, `candidates`, `job_postings`, `assessments`, `interviews` |
+| **HRMS Service** | 15 React components + 0 edge functions | ✅ Yes (well-bounded domain) | `profiles`, `leaves`, `work_sessions`, `payroll`, `performance` |
+| **AI Service** | Inline in 6 React components | ✅ Yes (extract to Edge Functions) | All tables (read-only) |
+| **Notification Service** | Inline inserts in 10+ components | ✅ Yes (event-driven extraction) | `notifications`, `profiles` (for routing) |
+| **Analytics Service** | Inline in 5 dashboard components | ✅ Yes (view-based extraction) | All tables (read-only views) |
+
+### 17.3 Path to Service-Oriented Architecture (without full microservices)
+
+```
+RECOMMENDED: "Service Layer" pattern within monolith
+
+  src/
+    services/
+      ats/
+        applicationService.ts    — CRUD for applications
+        assessmentService.ts     — Assessment assignment + grading
+        interviewService.ts      — Interview scheduling + feedback
+      hrms/
+        employeeService.ts       — Profile management
+        leaveService.ts          — Leave requests + balances
+        payrollService.ts        — Payroll processing
+        attendanceService.ts     — Work sessions
+      ai/
+        aiProxyService.ts        — Route all AI calls through Edge Functions
+      notifications/
+        notificationService.ts   — Event → notification mapping
+
+  This gives 80% of microservice benefits (separation, testability, 
+  single responsibility) without the infrastructure overhead.
+  
+  Can be extracted to actual microservices later if scale demands it.
+```
+
+---
+
+## 18. ENTERPRISE PERFORMANCE TARGET STATE
+
+```mermaid
+graph TB
+    subgraph "Client Layer"
+        REACT["React (Lazy Loaded Routes)"]
+        TQ["TanStack Query (Cache)"]
+        ZS["Zustand (UI State)"]
+        EB["Error Boundaries"]
+    end
+    
+    subgraph "Service Layer"
+        SVC["TypeScript Service Functions"]
+        HOOK["Custom Query Hooks"]
+    end
+    
+    subgraph "API Layer"
+        SUP["Supabase Client (typed)"]
+        RT["Single Realtime Channel"]
+        EF["Edge Functions (AI proxy)"]
+    end
+    
+    subgraph "Database Layer"
+        PG["PostgreSQL"]
+        RLS["RLS Policies"]
+        IDX["32 Production Indexes"]
+        VW["12 Dashboard Views"]
+        MVW["Materialized Views"]
+        AUDIT["Audit Triggers"]
+    end
+    
+    REACT --> TQ & ZS
+    TQ --> HOOK
+    HOOK --> SVC
+    SVC --> SUP
+    SUP --> PG
+    RT --> TQ
+    EF --> PG
+    PG --> RLS & IDX & VW & MVW & AUDIT
+```
+
+### Performance Targets Summary
+
+| Metric | Current | Target | Improvement |
+|--------|---------|--------|------------|
+| Initial Load | ~8-12s | <2s | **6x faster** |
+| Page Navigation | ~2-5s | <500ms | **5x faster** |
+| Dashboard Load | ~3-10s | <500ms | **10x faster** |
+| Re-renders/min | ~60 (timer) | <5 (event-driven) | **12x reduction** |
+| API Calls/navigation | 8-14 | 1-2 | **7x reduction** |
+| Bundle Size (initial) | ~3MB | ~400KB | **87% smaller** |
+| Concurrent Users | ~50 | 500+ | **10x capacity** |
+| Search Latency | ~500ms-5s (client) | <50ms (pg_trgm) | **100x faster** |
+
+---
+
+## 19. MIGRATION STRATEGY
+
+### 19.1 Performance Optimization Order
+
+| # | Optimization | Files Affected | Risk | Effort | Impact |
+|---|-------------|---------------|------|--------|--------|
+| P1 | Extract `<ClockTimer>` from DashboardLayout | 1 file | 🟢 Low | 2 hrs | 🔴 Eliminates 60/min re-renders |
+| P2 | Add `React.lazy()` to all 65+ route imports in App.tsx | 1 file | 🟢 Low | 4 hrs | 🔴 87% bundle reduction |
+| P3 | Install TanStack Query + create `useProfile` hook | 3-5 files | 🟡 Medium | 1 day | 🟠 Eliminate duplicate profile fetches |
+| P4 | Replace global mutables with Zustand store | 1 file | 🟡 Medium | 1 day | 🟠 Reactive state, no race conditions |
+| P5 | Debounce badge count queries (5s cooldown) | 1 file | 🟢 Low | 2 hrs | 🔴 80% query reduction |
+| P6 | Remove FloatingChatbot wildcard subscription | 1 file | 🟢 Low | 1 hr | 🟠 Eliminate unbounded events |
+| P7 | Add `<ErrorBoundary>` wrappers per route group | 1 file | 🟢 Low | 2 hrs | 🟡 Prevent full-app crashes |
+| P8 | Replace `select('*')` with column-specific selects | 25+ files | 🟡 Medium | 3 days | 🟡 50-70% payload reduction |
+| P9 | Add cursor-based pagination to all list views | 8 files | 🟡 Medium | 3 days | 🔴 Prevent browser crashes |
+| P10 | Migrate all queries to TanStack Query hooks | 30+ files | 🟠 High | 5 days | 🔴 Automatic caching + dedup |
+| P11 | Create service layer functions | 10 new files | 🟡 Medium | 3 days | 🟡 Separation of concerns |
+| P12 | Implement pg_trgm search | 3 files + DB | 🟡 Medium | 1 day | 🟠 100x faster search |
+
+### 19.2 Quick Wins (< 1 day, massive impact)
+
+```
+1. React.lazy() on App.tsx          → 87% bundle reduction (4 hrs)
+2. Extract ClockTimer component     → 99% fewer re-renders (2 hrs)
+3. Debounce badge counts            → 80% fewer DB queries (2 hrs)
+4. Remove chatbot wildcard channel  → Eliminate unbounded events (1 hr)
+
+Total: ~9 hours of work for ~80% overall performance improvement
+```
+
+---
+
+## 20. RISK ASSESSMENT
+
+### 20.1 Performance Migration Risk Matrix
+
+| Optimization | Feature Break Risk | Data Risk | Rollback Difficulty | Overall |
+|-------------|-------------------|-----------|-------------------|---------|
+| P1 (ClockTimer extraction) | 🟢 Low | 🟢 None | 🟢 Easy | 🟢 Low |
+| P2 (React.lazy) | 🟢 Low | 🟢 None | 🟢 Easy | 🟢 Low |
+| P3-P4 (TanStack + Zustand) | 🟡 Medium | 🟢 None | 🟡 Medium | 🟡 Medium |
+| P5 (Badge debounce) | 🟢 Low | 🟢 None | 🟢 Easy | 🟢 Low |
+| P6 (Chatbot fix) | 🟢 Low | 🟢 None | 🟢 Easy | 🟢 Low |
+| P8 (Column selection) | 🟡 Medium | 🟢 None | 🟢 Easy | 🟢 Low |
+| P9 (Pagination) | 🟡 Medium | 🟢 None | 🟡 Medium | 🟡 Medium |
+| P10 (Full TanStack migration) | 🟠 High | 🟢 None | 🟠 Hard | 🟠 High |
+| P12 (pg_trgm search) | 🟢 Low | 🟢 None | 🟢 Easy | 🟢 Low |
+
+### 20.2 Key Mitigations
+
+| Risk | Mitigation |
+|------|-----------|
+| React.lazy breaks route transitions | Add `<Suspense fallback>` with skeleton screens at route group level |
+| TanStack Query stale data served | Conservative staleTime (30s for dashboards) + realtime invalidation |
+| Zustand store migration breaks clock state | Test clock in/out flow thoroughly; keep global vars as fallback during transition |
+| Pagination breaks "total count" displays | Use `count: 'exact'` Supabase option alongside paginated data |
+| Service layer adds indirection | TypeScript types ensure compile-time safety; services return same shapes |
+
+> [!IMPORTANT]
+> The **four quick wins** (lazy loading, clock timer extraction, badge debouncing, and chatbot channel fix) should be executed first as a single coordinated change. Together they deliver ~80% of the total performance improvement with <1 day of effort and near-zero risk. This transforms the application from "prototype under load" to "responsive under moderate use" before the heavier migrations begin.
+
+> [!CAUTION]
+> **Do NOT attempt the full TanStack Query migration (P10) before the service layer (P11) is in place.** Without a service layer, you'll be writing query functions inline in 30+ component files, making future refactors extremely painful. The sequence must be: P1-P7 (quick wins) → P11 (service layer) → P10 (TanStack migration) → P8-P9 (query optimization) → P12 (search).
