@@ -6,10 +6,10 @@ const SUPABASE_URL = "https://txwxtsdsbuddqfrtllsf.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_ahamP8gR3qcYvJx0ulaMvw_yRn42OWB";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-const ADMIN_EMAIL = "prakashmulge912@gmail.com";
-const ADMIN_PASSWORD = "changeme";
-const HR_EMAIL = "jack@email.com";
-const HR_PASSWORD = "changeme";
+const ADMIN_EMAIL = process.env.TEST_ADMIN_EMAIL || "admin@example.com";
+const ADMIN_PASSWORD = process.env.TEST_ADMIN_PASSWORD || "changeme";
+const HR_EMAIL = process.env.TEST_HR_EMAIL || "hr@example.com";
+const HR_PASSWORD = process.env.TEST_HR_PASSWORD || "changeme";
 
 let adminSession: any = null;
 let adminClient: any = null;

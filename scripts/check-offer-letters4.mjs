@@ -8,7 +8,7 @@ async function main() {
     auth: { autoRefreshToken: false, persistSession: false },
   });
   const { data: si } = await a.auth.signInWithPassword({
-    email: "prakashmulge912@gmail.com",
+    email: "admin@example.com",
     password: "changeme",
   });
   if (!si?.session) return;

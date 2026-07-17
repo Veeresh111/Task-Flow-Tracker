@@ -31,8 +31,8 @@ export async function getAdminClient() {
   if (_adminClient) return _adminClient;
   const anon = getAnonClient();
   const { data } = await anon.auth.signInWithPassword({
-    email: "prakashmulge912@gmail.com",
-    password: "changeme",
+    email: process.env.TEST_ADMIN_EMAIL || "admin@example.com",
+    password: process.env.TEST_ADMIN_PASSWORD || "changeme",
   });
   if (!data?.session) throw new Error("Failed to sign in as admin");
   _adminClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {

@@ -6,7 +6,7 @@ const KEY = "sb_publishable_ahamP8gR3qcYvJx0ulaMvw_yRn42OWB";
 async function main() {
   const a = createClient(URL, KEY, { auth: { autoRefreshToken: false, persistSession: false } });
   const { data: admin } = await a.auth.signInWithPassword({
-    email: "prakashmulge912@gmail.com", password: "changeme",
+    email: "admin@example.com", password: "changeme",
   });
   if (!admin?.session) return;
   const adminClient = createClient(URL, KEY, {

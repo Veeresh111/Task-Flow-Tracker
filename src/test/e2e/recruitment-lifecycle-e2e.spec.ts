@@ -42,7 +42,7 @@ test.describe("E2E Recruitment Lifecycle", () => {
     const pageErrors: string[] = [];
     page.on("pageerror", (e) => pageErrors.push(e.message));
 
-    const adminEmail = process.env.TEST_ADMIN_EMAIL || "prakashmulge912@gmail.com";
+    const adminEmail = process.env.TEST_ADMIN_EMAIL || "admin@example.com";
     const adminPassword = process.env.TEST_ADMIN_PASSWORD || "changeme";
     const hr = await signInAs(adminEmail, adminPassword);
     const hrRole = (await hr.client.from("profiles").select("role").eq("id", hr.user.id).single()).data?.role;

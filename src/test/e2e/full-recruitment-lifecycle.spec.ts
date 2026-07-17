@@ -13,8 +13,8 @@ function anon() {
 async function adminClient() {
   const a = anon();
   const { data } = await a.auth.signInWithPassword({
-    email: "prakashmulge912@gmail.com",
-    password: "changeme",
+    email: process.env.TEST_ADMIN_EMAIL || "admin@example.com",
+    password: process.env.TEST_ADMIN_PASSWORD || "changeme",
   });
   if (!data?.session) throw new Error("Failed to sign in as admin");
   const { data: { user } } = await a.auth.getUser();

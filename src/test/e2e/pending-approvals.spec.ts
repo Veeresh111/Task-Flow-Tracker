@@ -72,9 +72,9 @@ async function cleanupUser(sb: any, userId: string) {
 
 // ── Test Data ────────────────────────────────────────────────────
 
-const HR_EMAIL = process.env.TEST_HR_EMAIL || "jack@email.com";
+const HR_EMAIL = process.env.TEST_HR_EMAIL || "hr@example.com";
 const HR_PASSWORD = process.env.TEST_HR_PASSWORD || "changeme";
-const ADMIN_EMAIL = process.env.TEST_ADMIN_EMAIL || "prakashmulge912@gmail.com";
+const ADMIN_EMAIL = process.env.TEST_ADMIN_EMAIL || "admin@example.com";
 const ADMIN_PASSWORD = process.env.TEST_ADMIN_PASSWORD || "changeme";
 
 const TEST_EMAIL_PREFIX = `pending-test-${Date.now()}`;

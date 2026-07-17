@@ -65,7 +65,7 @@ test.describe("Enterprise PASS/FAIL Matrix — Full Recruitment Lifecycle Audit"
 
   test.beforeAll(async () => {
     // Sign in as pre-existing admin (no self-elevation needed)
-    const adminEmail = process.env.TEST_ADMIN_EMAIL || "prakashmulge912@gmail.com";
+    const adminEmail = process.env.TEST_ADMIN_EMAIL || "admin@example.com";
     const adminPassword = process.env.TEST_ADMIN_PASSWORD || "changeme";
     hr = await signInAs(adminEmail, adminPassword);
   });

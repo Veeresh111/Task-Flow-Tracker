@@ -7,7 +7,7 @@ async function main() {
   // Sign in as admin to get an application id
   const a = createClient(URL, KEY, { auth: { autoRefreshToken: false, persistSession: false } });
   const { data: admin } = await a.auth.signInWithPassword({
-    email: "prakashmulge912@gmail.com", password: "changeme",
+    email: "admin@example.com", password: "changeme",
   });
   if (!admin?.session) { console.log("admin signin failed"); return; }
   const adminClient = createClient(URL, KEY, {

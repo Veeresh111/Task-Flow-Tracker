@@ -6,7 +6,7 @@ const KEY = "sb_publishable_ahamP8gR3qcYvJx0ulaMvw_yRn42OWB";
 async function main() {
   const a = createClient(URL, KEY, { auth: { autoRefreshToken: false, persistSession: false } });
   const { data: si } = await a.auth.signInWithPassword({
-    email: "prakashmulge912@gmail.com", password: "changeme",
+    email: "admin@example.com", password: "changeme",
   });
   if (!si?.session) { console.log("signin failed"); return; }
   const admin = createClient(URL, KEY, {
@@ -20,7 +20,7 @@ async function main() {
     console.log("profiles columns:", Object.keys(p[0]).join(", "));
   } else {
     console.log("no profiles found, trying via email filter");
-    const { data: p2 } = await admin.from("profiles").select("*").eq("email", "prakashmulge912@gmail.com").limit(1);
+    const { data: p2 } = await admin.from("profiles").select("*").eq("email", "admin@example.com").limit(1);
     if (p2 && p2.length > 0) {
       console.log("profiles columns:", Object.keys(p2[0]).join(", "));
     }

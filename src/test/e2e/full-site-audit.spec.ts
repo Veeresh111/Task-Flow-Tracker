@@ -39,7 +39,7 @@ async function loginViaSession(page: any, session: any) {
 }
 
 // ── Test Data ────────────────────────────────────────────────────
-const ADMIN_EMAIL = process.env.TEST_ADMIN_EMAIL || "prakashmulge912@gmail.com";
+const ADMIN_EMAIL = process.env.TEST_ADMIN_EMAIL || "admin@example.com";
 const ADMIN_PASSWORD = process.env.TEST_ADMIN_PASSWORD || "changeme";
 
 test.describe("1. Welcome Screen (Landing Page)", () => {

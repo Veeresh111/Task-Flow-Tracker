@@ -5,8 +5,8 @@ const TEST_EMAIL = `test_candidate_${Date.now()}@test.com`;
 const TEST_PASSWORD = "TestPass123!";
 const TEST_NAME = "Test Candidate";
 
-const ADMIN_EMAIL = "prakashmulge912@gmail.com";
-const ADMIN_PASSWORD = "changeme";
+const ADMIN_EMAIL = process.env.TEST_ADMIN_EMAIL || "admin@example.com";
+const ADMIN_PASSWORD = process.env.TEST_ADMIN_PASSWORD || "changeme";
 
 // ==============================================================
 // FULL LIFECYCLE VERIFICATION TESTS

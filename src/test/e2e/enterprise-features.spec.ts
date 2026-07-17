@@ -65,8 +65,8 @@ test.describe("Enterprise Security & Identity Features", () => {
   });
 
   test("4. Employee invitation page (admin) loads", async ({ page }) => {
-    const adminEmail = "prakashmulge912@gmail.com";
-    const adminPassword = "changeme";
+    const adminEmail = process.env.TEST_ADMIN_EMAIL || "admin@example.com";
+    const adminPassword = process.env.TEST_ADMIN_PASSWORD || "changeme";
 
     await page.goto("/login", { waitUntil: "networkidle", timeout: 15000 });
     await page.fill('input[type="email"]', adminEmail);
@@ -183,8 +183,8 @@ test.describe("Enterprise Security & Identity Features", () => {
   test("9. Admin-created employee invitation respects RLS", async () => {
     const a = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
     const { data: u } = await a.auth.signInWithPassword({
-      email: "prakashmulge912@gmail.com",
-      password: "changeme",
+      email: process.env.TEST_ADMIN_EMAIL || "admin@example.com",
+      password: process.env.TEST_ADMIN_PASSWORD || "changeme",
     });
     if (!u?.session) throw new Error("Admin auth fail");
     const c = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
