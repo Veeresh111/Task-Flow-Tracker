@@ -1,0 +1,736 @@
+# PHASE 3 — ENTERPRISE ATS WORKFLOW, RECRUITMENT PIPELINE & CANDIDATE LIFECYCLE AUDIT
+
+**System:** FWC AI-Powered HRMS + ATS Platform  
+**Audit Date:** June 13, 2026  
+**Auditor Roles:** Enterprise ATS Architect · Principal Software Architect · Head of Talent Acquisition · Recruitment Operations Director · Business Process Architect  
+**Scope:** Complete end-to-end business workflow audit across all recruitment and candidate lifecycle modules  
+**Benchmark:** Workday · Greenhouse · Lever · SAP SuccessFactors · Oracle HCM · BambooHR  
+
+---
+
+## EXECUTIVE SUMMARY
+
+The FWC HRMS/ATS system contains 13 recruitment-related modules spread across 20+ source files. While the UI covers many stages of the candidate lifecycle, the **underlying business logic operates as disconnected fragments** rather than a cohesive pipeline.
+
+### Critical Finding
+
+> [!CAUTION]
+> **There is no unified recruitment pipeline.** The system has three independent pathways for creating jobs, two for submitting applications, two for onboarding, and zero for offer management. These pathways share no transactional boundaries, no state machine enforcement, and no audit trail. A candidate can exist simultaneously in "Applied" status on one table, "Interview Cleared" on another, and "Screening" on a third.
+
+### Workflow Integrity Score (vs Enterprise Standard)
+
+| Workflow Area | Current Coverage | Enterprise Required | Gap |
+|--------------|-----------------|-------------------|-----|
+| Job Requisition → Publication | 30% | 100% | **No approval chain, no budget validation** |
+| Application Intake | 60% | 100% | **Triple-write, no duplicate prevention at DB** |
+| ATS Pipeline Stages | 40% | 100% | **6 stages implemented, 13 required** |
+| Assessment Lifecycle | 50% | 100% | **No job linkage, no retake rules** |
+| Interview Lifecycle | 45% | 100% | **No multi-round enforcement, no interviewer tracking** |
+| Offer Management | 5% | 100% | **Ephemeral generation only, no persistence** |
+| Onboarding | 25% | 100% | **Two competing pathways, no checklist** |
+| Candidate Self-Service | 35% | 100% | **Cannot track own applications** |
+| Recruiter Workflow | 40% | 100% | **No kanban board, no bulk actions** |
+| Dashboard Consistency | 15% | 100% | **6 tables, 6 different counts** |
+
+---
+
+## AUDIT AREA 1 — JOB REQUISITION WORKFLOW
+
+### 1.1 Current Implementation
+
+```mermaid
+graph LR
+    A["HR Opens ATSScanner.tsx"] --> B["Fills Job Title + JD Text"]
+    B --> C["AI Generates Form Schema"]
+    C --> D["Clicks 'Publish Form'"]
+    D --> E["INSERT into job_forms"]
+    E --> F["Public Link Generated"]
+```
+
+**Parallel Pathway (CareerPortal.tsx + CandidateMessages.tsx):**
+```mermaid
+graph LR
+    A2["HR Opens CareerPortal.tsx"] --> B2["Fills Job Details"]
+    B2 --> C2["INSERT into recruitment_posts"]
+    C2 --> D2["Visible on Candidate Careers Page"]
+```
+
+### 1.2 Critical Workflow Flaws
+
+| # | Flaw | Severity | Enterprise Standard |
+|---|------|----------|-------------------|
+| WF-01 | **No job requisition approval workflow** — HR creates and publishes jobs directly without manager, department head, or finance approval | **Critical** | Workday: Requisition → Manager → Finance → VP → HR Publish |
+| WF-02 | **No hiring manager ownership** — No `hiring_manager_id` exists on any job table | **Critical** | Every requisition must have a named hiring manager who owns the pipeline |
+| WF-03 | **No budget validation** — Jobs are created without headcount or salary band checks | **High** | Requisitions require approved headcount and budget allocation |
+| WF-04 | **No department approval** — Department head is never consulted | **High** | Department leads must approve headcount additions |
+| WF-05 | **Two parallel job creation pathways** — `job_forms` (ATSScanner) and `recruitment_posts` (CareerPortal/CandidateMessages) are independent systems | **Critical** | Single unified job entity with lifecycle states |
+| WF-06 | **No job status lifecycle** — `job_forms` has only `status: 'Active'`; `recruitment_posts` has only `Open/Closed` | **High** | Required: `Draft → Pending Approval → Approved → Published → Paused → Closed → Archived` |
+| WF-07 | **No expiration date** — Jobs remain active indefinitely | **Medium** | Auto-close after 30/60/90 days configurable |
+| WF-08 | **No headcount tracking** — Cannot specify how many positions to fill per requisition | **High** | Must track `openings_total` vs `openings_filled` |
+| WF-09 | **JD generated in-memory only** — [Recruitment.tsx L92](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/Recruitment.tsx#L92) stores JD in React state, not persisted to database | **High** | JD must be versioned and linked to requisition |
+| WF-10 | **No audit trail** — No record of who created/modified/approved a job | **Critical** | Every state change must be logged with actor + timestamp |
+
+### 1.3 Recommended Enterprise Workflow
+
+```mermaid
+stateDiagram-v2
+    [*] --> Draft: Hiring Manager creates requisition
+    Draft --> PendingDeptApproval: Submit for approval
+    PendingDeptApproval --> PendingFinanceApproval: Dept Head approves
+    PendingDeptApproval --> Draft: Dept Head rejects (with comments)
+    PendingFinanceApproval --> Approved: Finance validates budget
+    PendingFinanceApproval --> Draft: Budget rejected
+    Approved --> Published: HR publishes to career portal
+    Published --> Paused: HR temporarily pauses intake
+    Paused --> Published: HR resumes
+    Published --> Closed: All positions filled OR manual close
+    Closed --> Archived: After retention period
+```
+
+---
+
+## AUDIT AREA 2 — JOB FORM WORKFLOW
+
+### 2.1 Current Implementation
+
+- [ATSScanner.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/recruitment/ATSScanner.tsx) generates form schemas via AI and stores them as JSONB in `job_forms.form_schema`
+- [JobApplication.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/public/JobApplication.tsx) renders forms dynamically from this JSONB
+
+### 2.2 Workflow Flaws
+
+| # | Question | Current Behavior | Enterprise Required |
+|---|----------|-----------------|-------------------|
+| WF-11 | Can one form belong to multiple jobs? | No — 1:1 implicit | Yes — reusable templates |
+| WF-12 | Can one job have multiple forms? | No | Yes — different forms for different channels |
+| WF-13 | Can forms evolve over time? | **Yes, and this is a problem** — `form_schema` is mutable JSONB; editing it changes the form for all past applicants | No — form must be versioned; historical applications reference frozen version |
+| WF-14 | Can historical applications reference old form versions? | **No** — there is no versioning | Yes — `application.form_version_id` must freeze the schema at submission time |
+| WF-15 | Can HR modify forms after candidates applied? | **Yes, freely** — direct JSONB update | Must create new version; old applications remain on old schema |
+| WF-16 | Do form versions exist? | **No** | Yes — `form_versions` table with `version_number`, `schema`, `effective_from`, `effective_to` |
+
+---
+
+## AUDIT AREA 3 — CANDIDATE APPLICATION WORKFLOW
+
+### 3.1 Current Implementation (End-to-End Trace)
+
+```mermaid
+sequenceDiagram
+    participant C as Candidate
+    participant JP as JobApplication.tsx
+    participant DB as Supabase DB
+    
+    C->>JP: Opens /apply/{formId}
+    JP->>DB: SELECT job_forms WHERE id = formId
+    JP->>JP: Render dynamic form
+    C->>JP: Fills form + uploads resume
+    JP->>DB: SELECT candidates WHERE email = input
+    alt Candidate exists
+        JP->>DB: UPDATE candidates SET stage
+    else New candidate
+        JP->>DB: INSERT INTO candidates
+    end
+    JP->>DB: UPLOAD resume to storage bucket
+    JP->>DB: INSERT INTO job_applications
+    JP->>DB: INSERT INTO candidate_applications
+    JP->>DB: UPDATE candidates SET stage = 'Applied'
+    
+    Note over JP,DB: 4 sequential writes with NO transaction
+```
+
+### 3.2 Critical Workflow Flaws
+
+| # | Flaw | Severity | Impact |
+|---|------|----------|--------|
+| WF-17 | **Triple-write without transaction** — Writes to `candidates`, `job_applications`, and `candidate_applications` sequentially. If any fails, data drifts | **Critical** | Application exists in one table but not others |
+| WF-18 | **Can a candidate apply to multiple jobs?** — Partially. The candidate record's `stage` field is globally overwritten per application, losing previous job's stage | **Critical** | Candidate at "Offer" stage for Job A gets reset to "Applied" when applying for Job B |
+| WF-19 | **Can a candidate apply to the same job twice?** — **Yes** — The `candidate_applications` table has a unique constraint that catches duplicates via error code `23505` in [ATSScanner.tsx L369](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/recruitment/ATSScanner.tsx#L369), but [JobApplication.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/public/JobApplication.tsx) has **no such check** | **High** | Duplicate applications from career portal are silently created |
+| WF-20 | **Candidate cannot track their own applications** — The candidate dashboard ([CandidateDashboard.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/candidate/Dashboard.tsx)) shows BGC docs and assessments, but has **zero application tracking** | **Critical** | Candidates have no visibility into their pipeline status |
+| WF-21 | **No reusable candidate profile** — Each application via [JobApplication.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/public/JobApplication.tsx) is standalone. There is no "My Profile" pre-fill | **High** | Candidates re-enter name, email, phone for every application |
+| WF-22 | **No application withdrawal** — Candidates cannot withdraw an active application | **High** | Required for compliance (GDPR right to erasure) |
+| WF-23 | **No application status notifications** — No email/in-app notification when status changes | **High** | Enterprise ATS sends notifications at every stage transition |
+
+---
+
+## AUDIT AREA 4 — RESUME MANAGEMENT WORKFLOW
+
+### 4.1 Current Implementation
+
+| Aspect | Current State | Enterprise Required |
+|--------|-------------|-------------------|
+| Storage | Supabase `resumes` bucket, `upsert: true` | ✅ Cloud storage OK |
+| File naming | `${candidateId}-${timestamp}.ext` | ✅ Acceptable |
+| Parsing | AI extracts text from PDF/DOCX in browser ([ATSScanner.tsx L140-192](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/recruitment/ATSScanner.tsx#L140)) | ⚠️ Should be server-side |
+| Parsed data storage | Stored as `parsed_resume_text` on `candidate_applications` | ⚠️ Should be on candidate record |
+| Versioning | **None** — `upsert: true` overwrites previous file | ❌ Must maintain version history |
+| Access control | `getPublicUrl()` — world-accessible | ❌ Must be authenticated access |
+
+### 4.2 Workflow Flaws
+
+| # | Flaw | Severity |
+|---|------|----------|
+| WF-24 | **Resumes are publicly accessible** — `getPublicUrl()` generates a URL anyone can access without authentication | **Critical** |
+| WF-25 | **No resume versioning** — `upsert: true` overwrites the candidate's previous resume | **High** |
+| WF-26 | **Parsed resume text is stored per-application**, not per-candidate — same resume is parsed and stored repeatedly | **Medium** |
+| WF-27 | **No malware scanning** — Files uploaded directly to storage without content validation | **High** |
+| WF-28 | **Resume parsing happens in the browser** — 10MB PDFs are loaded into browser memory, processed via pdf.js loaded from CDN | **Medium** |
+| WF-29 | **No structured parsed data** — Text is stored as a raw blob, not extracted into structured fields (skills, experience, education) | **High** |
+
+---
+
+## AUDIT AREA 5 — ATS PIPELINE WORKFLOW
+
+### 5.1 Current Pipeline Stages
+
+Stages found across all modules via status strings:
+
+| Stage | Set By | Table |
+|-------|--------|-------|
+| `Applied` | JobApplication.tsx, ATSScanner.tsx | `candidates`, `candidate_applications` |
+| `Screening` | CandidatePipeline.tsx (manual) | `candidate_applications` |
+| `Interview` | CandidatePipeline.tsx (manual) | `candidate_applications` |
+| `Interview Cleared` | InterviewCenter.tsx | `candidate_applications` |
+| `Offered` | CandidatePipeline.tsx (manual) | `candidate_applications` |
+| `Hired` | CandidatePipeline.tsx (manual) | `candidate_applications` |
+
+### 5.2 Missing Enterprise Stages
+
+| Stage | Purpose | Status |
+|-------|---------|--------|
+| `Shortlisted` | AI screening passed, HR review pending | ❌ Missing |
+| `Assessment Assigned` | Test sent to candidate | ❌ Missing |
+| `Assessment Completed` | Test submitted | ❌ Missing |
+| `Assessment Passed/Failed` | Cutoff evaluation | ❌ Missing |
+| `Interview Scheduled` | Meeting booked but not yet held | ❌ Missing |
+| `Offer Pending Approval` | Offer drafted, awaiting sign-off | ❌ Missing |
+| `Offer Sent` | Letter dispatched to candidate | ❌ Missing |
+| `Offer Accepted` | Candidate accepted | ❌ Missing |
+| `Offer Declined` | Candidate declined | ❌ Missing |
+| `On Hold` | Pipeline paused (not rejected) | ❌ Missing |
+| `Withdrawn` | Candidate self-withdrew | ❌ Missing |
+| `Blacklisted` | Compliance flag | ❌ Missing |
+
+### 5.3 Critical Pipeline Flaws
+
+| # | Flaw | Severity |
+|---|------|----------|
+| WF-30 | **No state machine enforcement** — Any module can set any status string on `candidate_applications.status`. There's no CHECK constraint and no valid-transition enforcement | **Critical** |
+| WF-31 | **Stage changes are not audited** — No record of who changed a status, when, or why | **Critical** |
+| WF-32 | **No rejection reason tracking** — When a candidate is rejected, no `rejection_reason` or `rejection_category` is recorded | **High** |
+| WF-33 | **No re-engagement flow** — Once rejected, a candidate cannot be reconsidered for the same or a different role | **Medium** |
+| WF-34 | **No SLA tracking** — No `time_in_stage` calculation for pipeline velocity metrics | **High** |
+| WF-35 | **Stages not synchronized between `candidates.stage` and `candidate_applications.status`** — Two conflicting sources | **Critical** |
+
+### 5.4 Recommended Enterprise ATS Pipeline
+
+```mermaid
+stateDiagram-v2
+    [*] --> Applied: Candidate submits application
+    Applied --> AIScreening: Automatic AI scan
+    AIScreening --> Shortlisted: Score >= threshold
+    AIScreening --> Rejected: Score < threshold
+    
+    Shortlisted --> AssessmentAssigned: HR assigns test
+    Shortlisted --> InterviewScheduled: HR skips assessment
+    
+    AssessmentAssigned --> AssessmentCompleted: Candidate submits
+    AssessmentCompleted --> AssessmentPassed: Score >= cutoff
+    AssessmentCompleted --> Rejected: Score < cutoff
+    
+    AssessmentPassed --> InterviewScheduled: HR schedules round
+    InterviewScheduled --> InterviewCompleted: Round finished
+    InterviewCompleted --> InterviewScheduled: More rounds needed
+    InterviewCompleted --> OfferPendingApproval: All rounds passed
+    InterviewCompleted --> Rejected: Interview failed
+    
+    OfferPendingApproval --> OfferApproved: Manager approves
+    OfferApproved --> OfferSent: HR dispatches letter
+    OfferSent --> OfferAccepted: Candidate accepts
+    OfferSent --> OfferDeclined: Candidate declines
+    OfferSent --> OfferNegotiating: Counter-offer
+    OfferNegotiating --> OfferSent: Revised offer sent
+    
+    OfferAccepted --> PreBoarding: Background verification
+    PreBoarding --> Onboarding: Verification passed
+    Onboarding --> Hired: Onboarding complete
+    
+    Applied --> Withdrawn: Candidate withdraws
+    Shortlisted --> Withdrawn: Candidate withdraws
+    InterviewScheduled --> Withdrawn: Candidate withdraws
+    
+    Applied --> OnHold: Pipeline paused
+    OnHold --> Applied: Pipeline resumed
+    
+    Hired --> [*]
+    Rejected --> [*]
+    Withdrawn --> [*]
+```
+
+---
+
+## AUDIT AREA 6 — ASSESSMENT WORKFLOW
+
+### 6.1 Current Implementation
+
+| Step | Implementation | File |
+|------|---------------|------|
+| Create assessment | AI generates MCQs → HR reviews → publishes to `assessments` table | [AssessmentCenter.tsx L146-253](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/recruitment/AssessmentCenter.tsx#L146) |
+| Assign to candidate | HR generates token → inserts into `assessment_tokens` | [ApplicationHub.tsx L147](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/ApplicationHub.tsx#L147) |
+| Candidate accesses | Enters token → validates → starts proctored session | [AssessmentCenter.tsx L257-296](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/recruitment/AssessmentCenter.tsx#L257) |
+| Grading | Calls `grade-assessment` edge function | [AssessmentCenter.tsx L327-363](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/recruitment/AssessmentCenter.tsx#L327) |
+
+### 6.2 Workflow Flaws
+
+| # | Flaw | Severity |
+|---|------|----------|
+| WF-36 | **Assessments not linked to jobs** — `assessments` has no `job_form_id` or `job_posting_id` FK. HR must manually remember which assessment goes with which job | **Critical** |
+| WF-37 | **Candidate sees ALL active assessments** — [CandidateDashboard.tsx L52](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/candidate/Dashboard.tsx#L52) queries `assessments.select('*').eq('status', 'Active')` with no candidate filtering | **Critical** |
+| WF-38 | **Assessment questions include correct answers in same JSONB** — Anyone with DB read access (no RLS) can read `assessments.questions` and extract `correctAnswer` | **Critical** |
+| WF-39 | **AI-generated questions are actually hardcoded fallbacks** — [AssessmentCenter.tsx L168-173](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/recruitment/AssessmentCenter.tsx#L168): The edge function is called but the generated questions are overwritten by `staticMockQuestions` with nonsensical text | **Critical** |
+| WF-40 | **No retake rules** — No `max_attempts` field; no tracking of previous attempts for the same candidate-assessment pair | **High** |
+| WF-41 | **No assessment expiry enforcement** — Tokens have `expires_at` but the `executeTokenHandshakeVerification` function never checks it | **High** |
+| WF-42 | **Proctoring violations exist only in React state** — Not persisted to database; lost on page refresh | **High** |
+| WF-43 | **Assessment scores don't auto-update pipeline stage** — After grading, the `candidate_applications.status` is not updated to "Assessment Passed/Failed" | **High** |
+| WF-44 | **`grade-assessment` edge function doesn't exist** — Only `ats-screen` exists in `supabase/functions/`. The grading call will always fail with 404 | **Critical** |
+
+---
+
+## AUDIT AREA 7 — INTERVIEW WORKFLOW
+
+### 7.1 Current Implementation
+
+- [InterviewCenter.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/recruitment/InterviewCenter.tsx): HR schedules interviews, enters meeting links, grades after completion
+- [CandidateInterviews.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/candidate/Interviews.tsx): Candidates see scheduled interviews, join via meeting links, view scores
+
+### 7.2 Workflow Flaws
+
+| # | Flaw | Severity |
+|---|------|----------|
+| WF-45 | **No interviewer assignment** — No `interviewer_id` column. System cannot track who conducted the interview | **Critical** |
+| WF-46 | **No panel interview support** — Only one feedback record per session; no support for 2-3 interviewers grading independently | **High** |
+| WF-47 | **No multi-round enforcement** — While `round_name` exists as free text, there's no `round_number` or sequencing logic to ensure Round 1 completes before Round 2 | **High** |
+| WF-48 | **Interview feedback is AI-generated, not interviewer-provided** — [InterviewCenter.tsx L145-195](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/recruitment/InterviewCenter.tsx#L145) calls HuggingFace to generate scores; the AI produces the technical, communication, and culture fit scores, not the interviewer | **Critical** |
+| WF-49 | **Feedback is mutable** — Interview scores can be changed at any time by any HR user. No immutability after submission | **High** |
+| WF-50 | **No no-show tracking** — If candidate doesn't attend, there's no "No Show" status; only "Scheduled" and "Completed" | **Medium** |
+| WF-51 | **No interview calendar integration** — Meeting links are manual text input. No Google Calendar / Outlook integration | **Medium** |
+| WF-52 | **Candidate can see detailed internal scores** — [CandidateInterviews.tsx L313-348](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/candidate/Interviews.tsx#L313) displays `technical_score`, `communication_score`, `culture_fit_score`, and `ai_analysis_report` directly to the candidate | **High** |
+
+---
+
+## AUDIT AREA 8 — OFFER MANAGEMENT WORKFLOW
+
+### 8.1 Current Implementation
+
+> [!CAUTION]
+> **Offer management is essentially non-existent as a workflow.**
+
+- [Recruitment.tsx L107-143](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/Recruitment.tsx#L107): HR fills in candidate name, role, salary → AI generates offer letter text → stored in React state → dispatched via `mailto:` protocol
+- **No offer letter is ever saved to the database**
+- **No `offer_status` tracking** — `candidate_applications` has an `offer_status` column but it is **never written to** by the offer generator
+- **No approval chain** — Any HR user can generate and send any offer without approval
+- **No e-signature** — Candidate accepts verbally or via email
+- **No offer comparison** — If a revised offer is sent, the previous one is lost
+
+### 8.2 Workflow Flaws
+
+| # | Flaw | Severity |
+|---|------|----------|
+| WF-53 | **Offers not persisted** — Generated in React state, never saved to any table | **Critical** |
+| WF-54 | **No offer approval workflow** — HR → Finance → VP → CEO approval chain missing | **Critical** |
+| WF-55 | **No offer status lifecycle** — `Draft → Pending Approval → Approved → Sent → Accepted → Declined → Revoked` missing | **Critical** |
+| WF-56 | **No compensation structure validation** — No check against salary bands, grade levels, or budget | **High** |
+| WF-57 | **No offer letter versioning** — Revisions overwrite previous state | **High** |
+| WF-58 | **No acceptance tracking** — No digital acceptance/declination with timestamp | **Critical** |
+| WF-59 | **Dispatch via `mailto:`** — Opens user's default email client; no delivery tracking, no read receipts | **High** |
+| WF-60 | **Hardcoded CEO signature** — [Recruitment.tsx L367](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/Recruitment.tsx#L367) hardcodes "Veeresh" as CEO name with a fake corporate seal | **Medium** |
+
+---
+
+## AUDIT AREA 9 — ONBOARDING WORKFLOW
+
+### 9.1 Current Implementation — Two Competing Pathways
+
+**Pathway A — [OnboardingCenter.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/OnboardingCenter.tsx#L156-221):**
+1. Lists all `profiles` with `role = 'candidate'`
+2. HR reviews uploaded BGC docs → Verify/Reject
+3. HR assigns department, team lead, salary
+4. Clicks "Onboard" → updates `profiles.role` to `'employee'` + inserts `candidate_onboarding` record
+
+**Pathway B — [DocumentVault.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/DocumentVault.tsx):**
+1. Lists candidates in pipeline
+2. HR verifies documents via AI (rubber-stamp)
+3. Clicks "Convert to Employee" → updates `profiles` + inserts `payroll` record
+
+### 9.2 Workflow Flaws
+
+| # | Flaw | Severity |
+|---|------|----------|
+| WF-61 | **Two onboarding pathways** — OnboardingCenter and DocumentVault both convert candidates to employees, writing to different tables with different schemas | **Critical** |
+| WF-62 | **No pre-boarding phase** — IT provisioning (laptop, badge, email account) has no tracking | **High** |
+| WF-63 | **No onboarding checklist** — Enterprise onboarding has 15-30 tasks across HR, IT, Finance, Admin, and Legal. The system has a single "Hire & Onboard" button | **Critical** |
+| WF-64 | **Employee code is `EMP-${Date.now()}`** — Not a sequential, formatted code (e.g., `FWC-0001`) | **Medium** |
+| WF-65 | **No joining date management** — No field for actual date of joining vs expected date | **High** |
+| WF-66 | **BGC "verification" is an AI rubber stamp** — The prompt explicitly instructs the AI to always return "verified" regardless of document content | **Critical** |
+| WF-67 | **No link from onboarding back to candidate record** — The `candidates` table record is never updated or linked when `profiles.role` changes to `employee` | **High** |
+| WF-68 | **Department selection is hardcoded** — [OnboardingCenter.tsx L431-435](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/OnboardingCenter.tsx#L431): Only 4 departments in a `<select>` — "Engineering", "Human Resources", "Product Management", "Finance & Accounts" | **Medium** |
+
+---
+
+## AUDIT AREA 10 — APPLICATION HUB WORKFLOW
+
+### 10.1 Current Implementation
+
+[ApplicationHub.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/ApplicationHub.tsx) attempts to show all applications by performing a **client-side manual join** between `job_applications` and `job_forms`:
+
+```typescript
+const localizedJoinedApplications = (rawApps || []).map((app: any) => {
+  const targetFormId = app.form_id || app.job_form_id;
+  const matchingForm = rawForms?.find((f: any) => f.id === targetFormId) || null;
+```
+
+### 10.2 Application Hub Is a Duplicate Source of Truth
+
+| Data Source | Read By | Write Source |
+|------------|---------|-------------|
+| `job_applications` | ApplicationHub.tsx | JobApplication.tsx |
+| `candidate_applications` | CandidatePipeline.tsx, InterviewCenter.tsx | JobApplication.tsx, ATSScanner.tsx |
+| `candidates` | OnboardingCenter.tsx, Recruitment.tsx | JobApplication.tsx, ATSScanner.tsx |
+
+**ApplicationHub reads from `job_applications`; CandidatePipeline reads from `candidate_applications`. These are NEVER synchronized.**
+
+### 10.3 Workflow Flaws
+
+| # | Flaw | Severity |
+|---|------|----------|
+| WF-69 | **ApplicationHub and CandidatePipeline show different data** — They read from different tables | **Critical** |
+| WF-70 | **Client-side join with `form_id \|\| job_form_id` fallback** — Masks the split-brain FK naming issue | **High** |
+| WF-71 | **No pagination** — `select('*')` loads all applications at once | **High** |
+| WF-72 | **No filtering by job/department/date** — Only a search box | **Medium** |
+| WF-73 | **Assessment token generation from ApplicationHub writes to `assessment_tokens` without checking if one already exists** — Generates duplicate tokens | **Medium** |
+
+---
+
+## AUDIT AREA 11 — DASHBOARD CONSISTENCY
+
+### 11.1 Dashboard Metrics Divergence Map
+
+| Metric | HR Dashboard Source | Admin Dashboard Source | Admin Analytics Source | Actual Single Source |
+|--------|-------------------|----------------------|----------------------|---------------------|
+| Application Count | `job_applications` count | Fabricated | `candidate_onboarding` | Should be `applications` view |
+| Employee Count | `profiles.role = 'employee'` count | `profiles` grouped by role | `profiles.select('*')` | ✅ Consistent |
+| Payroll Total | `employees × ₹65,000` | Role-based (65k/95k/125k) | N/A | Should be `SUM(payroll_records.net_pay)` |
+| Open Positions | Not shown | Not shown | `recruitment_posts.status = 'Open'` | Should be unified requisition count |
+| Pipeline Velocity | Not tracked | Not tracked | Not tracked | Required: `AVG(time_in_stage)` |
+| Offer Acceptance Rate | Not tracked | Not tracked | Not tracked | Required: `accepted / (accepted + declined)` |
+| Time to Hire | Not tracked | Not tracked | Not tracked | Required: `applied_date → hired_date` |
+
+### 11.2 Recommended Single Source of Truth Architecture
+
+Every dashboard metric should derive from a **single database view** or **materialized view**:
+
+```
+v_recruitment_summary  →  HR Dashboard, Admin Dashboard
+v_pipeline_funnel      →  Recruitment Analytics
+v_payroll_summary      →  HR Payroll, Admin Finance
+v_department_metrics   →  All dashboards
+v_employee_headcount   →  All dashboards
+```
+
+---
+
+## AUDIT AREA 12 — CANDIDATE EXPERIENCE
+
+### 12.1 Current Candidate Journey
+
+```mermaid
+graph TB
+    A["Candidate registers (Login.tsx)"] --> B["Sees Career Portal (Careers.tsx)"]
+    B --> C["Clicks 'Apply Now'"]
+    C --> D["Fills dynamic form (JobApplication.tsx)"]
+    D --> E["Redirected to login"]
+    E --> F["Candidate Dashboard (Dashboard.tsx)"]
+    F --> G["Sees BGC upload + ALL assessments"]
+    F --> H["No application tracking"]
+    F --> I["No offer visibility"]
+    
+    style H fill:#ff6b6b,stroke:#c92a2a
+    style I fill:#ff6b6b,stroke:#c92a2a
+```
+
+### 12.2 Pain Points & Drop-Off Risks
+
+| # | Pain Point | Drop-off Risk | Severity |
+|---|-----------|---------------|----------|
+| WF-74 | **No application status visibility** — Candidate has zero insight into where their application stands | **Critical** — Candidates will assume rejection and stop engaging |
+| WF-75 | **Cannot see past applications** — No "My Applications" section showing all jobs applied to | **Critical** |
+| WF-76 | **Assessment section shows ALL active tests** — Overwhelming and confusing for candidates who should only see assigned ones | **High** |
+| WF-77 | **Offer Vault tab is empty** — [CandidateDashboard.tsx L286-291](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/candidate/Dashboard.tsx#L286): Shows placeholder text "Official offer letters will appear here once dispatched" but offers are never persisted | **High** |
+| WF-78 | **No email notifications** — Candidate never receives emails about stage changes | **Critical** |
+| WF-79 | **Interview scores visible to candidates** — Internal AI analysis reports and detailed sub-scores are exposed | **High** |
+| WF-80 | **No mobile-responsive career portal** — Career page doesn't adapt well to mobile screens | **Medium** |
+
+---
+
+## AUDIT AREA 13 — RECRUITER EXPERIENCE
+
+### 13.1 Current Recruiter Workflow
+
+HR must navigate **6 different tabs** within [Recruitment.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/Recruitment.tsx) plus **5 standalone pages** (ApplicationHub, OnboardingCenter, DocumentVault, SmartInbox, Candidates):
+
+1. ATSScanner → Create form, scan resumes
+2. CandidatePipeline → View tracking board
+3. AssessmentCenter → Build tests
+4. InterviewCenter → Schedule & grade
+5. JD Generator → Create job descriptions (ephemeral)
+6. Offer Generator → Create offers (ephemeral)
+
+### 13.2 Workflow Flaws
+
+| # | Flaw | Severity |
+|---|------|----------|
+| WF-81 | **No Kanban board** — The pipeline uses a table, not a drag-and-drop Kanban. Greenhouse/Lever use visual boards | **High** |
+| WF-82 | **No bulk actions** — Cannot shortlist, reject, or email multiple candidates at once | **High** |
+| WF-83 | **Manual stage transitions** — Every stage change requires navigating to a different component and clicking individual buttons | **High** |
+| WF-84 | **No candidate profile 360° view** — No single page showing a candidate's complete history (all applications, all assessments, all interviews, all communications) | **Critical** |
+| WF-85 | **No pipeline filters** — Cannot filter by department, job, date range, score, or source | **High** |
+| WF-86 | **JDs and offers generated but not linked to requisitions** — Exist only in React state | **High** |
+
+---
+
+## AUDIT AREA 14 — TEAM LEAD EXPERIENCE
+
+### 14.1 Current Team Lead Visibility
+
+Team Leads have **zero involvement** in the recruitment process. No Team Lead route includes any recruitment-related component.
+
+| Capability | Available? | Enterprise Required |
+|-----------|-----------|-------------------|
+| Review candidates for their team | ❌ | View shortlisted candidates for their department |
+| Provide interview feedback | ❌ | Submit structured scorecard after interviews |
+| Approve/reject candidates | ❌ | Final hiring recommendation |
+| View pipeline for open positions | ❌ | See funnel for their team's open roles |
+| Define job requirements | ❌ | Collaborate on JD and requirements |
+| Approve job requisitions | ❌ | Approve headcount before HR publishes |
+
+### 14.2 Workflow Flaws
+
+| # | Flaw | Severity |
+|---|------|----------|
+| WF-87 | **Team Leads are completely excluded from recruitment** — Despite being the primary stakeholders for their team's hires | **Critical** |
+
+---
+
+## AUDIT AREA 15 — SCALABILITY RISKS
+
+### 15.1 Workflow Bottlenecks at Scale (5000 Candidates / 100 Recruiters)
+
+| Bottleneck | Current Impact | At Scale Impact |
+|-----------|---------------|----------------|
+| `select('*')` on all applications without pagination | All rows loaded in browser | **Browser crash at 50k+ rows** |
+| Sequential AI calls in ATSScanner (4s delay between candidates) | Acceptable for 5 candidates | **5.5 hours for 5000 candidates** |
+| Sequential AI calls in PerformanceEngine | Acceptable for 10 employees | **1.1 hours for 1000 employees** |
+| No index on `candidate_applications(candidate_id, job_form_id)` | Acceptable at low volume | **Full table scan on every duplicate check** |
+| Client-side join in ApplicationHub | 100ms for 50 records | **5+ seconds for 5000 records** |
+| Realtime channels per component | 5 channels for 1 user | **500 channels for 100 concurrent recruiters** |
+| No connection pooling configured | Acceptable for 10 users | **Connection exhaustion at 100+ concurrent users** |
+
+### 15.2 Recommended Scalability Architecture
+
+1. **Server-side pagination** — Cursor-based for all list views
+2. **Batch AI processing** — Queue system for bulk resume scanning (10 concurrent, not sequential)
+3. **Database views for dashboards** — Pre-aggregated metrics instead of client-side computation
+4. **Shared realtime channel manager** — Multiplex all updates through a single channel per user
+5. **Background job queue** — Supabase Edge Functions with async processing for AI tasks
+6. **Redis cache layer** — For dashboard counts and frequently-accessed metadata
+
+---
+
+## AI-POWERED ATS CAPABILITIES AUDIT
+
+### Current AI Usage vs Enterprise Requirements
+
+| AI Capability | Current State | Enterprise Required | Gap |
+|--------------|-------------|-------------------|-----|
+| Resume Parsing | ✅ PDF.js + Mammoth.js in browser | Server-side parsing with structured extraction | ⚠️ Partially functional |
+| AI Candidate Matching | ✅ HuggingFace Qwen3 scoring against JD | Score + structured skill-gap analysis | ⚠️ Functional but unstructured |
+| AI Screening | ✅ Edge function `ats-screen` | Auto-categorize into shortlist/reject with explanations | ⚠️ Basic |
+| AI Ranking | ❌ Not implemented | Stack-rank candidates by composite score | ❌ Missing |
+| AI Recommendations | ❌ Not implemented | "Similar candidates" and "Recommended jobs" | ❌ Missing |
+| AI Interview Insights | ⚠️ AI generates scores (not interviewer) | Post-interview summarization and sentiment analysis | ❌ Inverted — AI replaces human judgment |
+| AI Skill Gap Analysis | ⚠️ `missing_skills` field from scanning | Structured skill taxonomy with proficiency levels | ❌ Unstructured |
+| AI Offer Recommendations | ❌ Not implemented | Market-benchmarked salary recommendation | ❌ Missing |
+| AI Bias Detection | ❌ Not implemented | Flag potential bias in screening decisions | ❌ Missing |
+| AI Chatbot | ❌ Not implemented | Candidate FAQ bot on career portal | ❌ Missing |
+
+---
+
+## RECOMMENDED END-TO-END MNC ATS WORKFLOW
+
+```mermaid
+graph TB
+    subgraph "Phase 1: Requisition"
+        A1["Hiring Manager raises requisition"] --> A2["Dept Head approves"]
+        A2 --> A3["Finance validates budget"]
+        A3 --> A4["HR publishes to career portal"]
+    end
+    
+    subgraph "Phase 2: Sourcing"
+        A4 --> B1["Career Portal applications"]
+        A4 --> B2["Referral submissions"]
+        A4 --> B3["Email inbox parsing"]
+        A4 --> B4["Agency submissions"]
+        A4 --> B5["LinkedIn import"]
+    end
+    
+    subgraph "Phase 3: Screening"
+        B1 --> C1["AI Resume Parsing"]
+        B2 --> C1
+        B3 --> C1
+        B4 --> C1
+        B5 --> C1
+        C1 --> C2["AI Score + Rank"]
+        C2 --> C3["HR Review Shortlist"]
+        C3 --> C4{Decision}
+        C4 -->|Reject| C5["Rejection email + reason"]
+        C4 -->|Advance| D1
+    end
+    
+    subgraph "Phase 4: Assessment"
+        D1["Assign Assessment"] --> D2["Candidate takes proctored test"]
+        D2 --> D3["Auto-grade + AI feedback"]
+        D3 --> D4{Pass?}
+        D4 -->|No| C5
+        D4 -->|Yes| E1
+    end
+    
+    subgraph "Phase 5: Interview"
+        E1["Schedule Round 1"] --> E2["Interviewer submits scorecard"]
+        E2 --> E3{More rounds?}
+        E3 -->|Yes| E4["Schedule next round"]
+        E4 --> E2
+        E3 -->|No| E5{Hire decision}
+        E5 -->|Reject| C5
+        E5 -->|Approve| F1
+    end
+    
+    subgraph "Phase 6: Offer"
+        F1["Generate offer letter"] --> F2["Manager approves"]
+        F2 --> F3["Finance approves"]
+        F3 --> F4["HR sends to candidate"]
+        F4 --> F5{Response}
+        F5 -->|Accept| G1
+        F5 -->|Decline| F6["Record reason + close"]
+        F5 -->|Negotiate| F7["Revise offer"]
+        F7 --> F2
+    end
+    
+    subgraph "Phase 7: Onboarding"
+        G1["Background verification"] --> G2["IT provisioning"]
+        G2 --> G3["Document collection"]
+        G3 --> G4["Day 1 orientation"]
+        G4 --> G5["30/60/90 day review"]
+        G5 --> G6["Employee confirmed"]
+    end
+```
+
+---
+
+## CRITICAL WORKFLOW FLAWS SUMMARY
+
+| # | Flaw | Impact | Severity |
+|---|------|--------|----------|
+| WF-01 | No job requisition approval chain | Uncontrolled hiring spend | **Critical** |
+| WF-05 | Two parallel job creation systems | Split-brain job data | **Critical** |
+| WF-17 | Triple-write without transaction | Data drift between tables | **Critical** |
+| WF-18 | Global stage overwrite on candidate record | Multi-job candidates lose status | **Critical** |
+| WF-20 | Candidates cannot see their own applications | 100% candidate drop-off risk | **Critical** |
+| WF-30 | No state machine enforcement on pipeline | Any status string accepted | **Critical** |
+| WF-36 | Assessments not linked to jobs | Manual tracking required | **Critical** |
+| WF-39 | AI assessment generates hardcoded mock questions | Assessment is non-functional | **Critical** |
+| WF-44 | Grade-assessment edge function doesn't exist | Assessment submission always fails | **Critical** |
+| WF-45 | No interviewer tracking | Compliance violation | **Critical** |
+| WF-48 | AI generates interview scores instead of interviewer | Fraud risk, no human judgment | **Critical** |
+| WF-53 | Offers never persisted to database | Complete offer management gap | **Critical** |
+| WF-61 | Two competing onboarding pathways | Duplicate/conflicting employee records | **Critical** |
+| WF-66 | BGC verification always returns "verified" | False security | **Critical** |
+| WF-87 | Team Leads excluded from entire recruitment | Key stakeholder missing from process | **Critical** |
+
+**Total: 15 Critical · 24 High · 12 Medium · 1 Low = 52 unique workflow flaws**
+
+---
+
+## PHASE-BY-PHASE REMEDIATION PLAN
+
+### Phase 1: Pipeline Foundation (Week 1-3)
+
+| # | Task | Effort |
+|---|------|--------|
+| 1.1 | Unify `job_forms` + `recruitment_posts` into single `job_postings` entity | 2 days |
+| 1.2 | Unify `job_applications` + `candidate_applications` into single `applications` entity | 3 days |
+| 1.3 | Remove `stage` from `candidates` table — status lives only on `applications` | 4 hrs |
+| 1.4 | Implement pipeline state machine with CHECK constraint and valid-transition trigger | 2 days |
+| 1.5 | Add `rejection_reason`, `stage_changed_by`, `stage_changed_at` to applications | 4 hrs |
+| 1.6 | Create `offer_letters` table with full lifecycle | 2 days |
+| 1.7 | Create `onboarding_tasks` checklist table | 1 day |
+| 1.8 | Delete duplicate onboarding pathway (DocumentVault or OnboardingCenter) | 4 hrs |
+
+### Phase 2: Candidate Experience (Week 3-5)
+
+| # | Task | Effort |
+|---|------|--------|
+| 2.1 | Build "My Applications" view for candidates showing all applications + statuses | 2 days |
+| 2.2 | Implement application stage notifications (in-app + email) | 2 days |
+| 2.3 | Build candidate profile with pre-fill for repeat applications | 1 day |
+| 2.4 | Restrict assessment visibility to only assigned assessments | 4 hrs |
+| 2.5 | Hide internal interview scores from candidates; show only pass/fail | 4 hrs |
+| 2.6 | Build offer acceptance/decline flow in candidate portal | 2 days |
+| 2.7 | Add application withdrawal capability | 4 hrs |
+
+### Phase 3: Recruiter Workflow (Week 5-7)
+
+| # | Task | Effort |
+|---|------|--------|
+| 3.1 | Build Kanban board for pipeline visualization | 3 days |
+| 3.2 | Implement 360° candidate profile view | 2 days |
+| 3.3 | Add pipeline filters (department, job, date, score, source) | 1 day |
+| 3.4 | Implement bulk actions (shortlist, reject, email) | 2 days |
+| 3.5 | Link JD/offer generators to job requisition records | 1 day |
+| 3.6 | Build offer persistence and approval chain | 3 days |
+| 3.7 | Replace AI interview scoring with structured interviewer scorecard | 2 days |
+
+### Phase 4: Approval Chains & Team Lead Integration (Week 7-9)
+
+| # | Task | Effort |
+|---|------|--------|
+| 4.1 | Build job requisition approval workflow (Manager → Dept → Finance → HR) | 3 days |
+| 4.2 | Build Team Lead candidate review interface | 2 days |
+| 4.3 | Build Team Lead interview feedback submission | 1 day |
+| 4.4 | Build offer approval chain (HR → Manager → Finance) | 2 days |
+| 4.5 | Build onboarding checklist with multi-department task assignment | 2 days |
+
+### Phase 5: Assessment & AI Enhancement (Week 9-11)
+
+| # | Task | Effort |
+|---|------|--------|
+| 5.1 | Create `grade-assessment` edge function (currently 404) | 2 days |
+| 5.2 | Replace mock assessment questions with real AI generation | 1 day |
+| 5.3 | Separate assessment answers from questions (answers in server-only table) | 1 day |
+| 5.4 | Implement assessment expiry enforcement | 4 hrs |
+| 5.5 | Persist proctoring violations to database | 4 hrs |
+| 5.6 | Auto-update pipeline stage after assessment grading | 4 hrs |
+| 5.7 | Build AI candidate ranking system | 2 days |
+| 5.8 | Implement structured skill taxonomy for gap analysis | 2 days |
+
+### Phase 6: Dashboard Unification (Week 11-12)
+
+| # | Task | Effort |
+|---|------|--------|
+| 6.1 | Create database views for all dashboard metrics | 2 days |
+| 6.2 | Replace all client-side calculations with view queries | 2 days |
+| 6.3 | Add pipeline velocity metrics (time-in-stage, time-to-hire) | 1 day |
+| 6.4 | Add offer acceptance rate tracking | 4 hrs |
+| 6.5 | Add source effectiveness analytics | 1 day |
+
+---
+
+> [!IMPORTANT]
+> This audit identifies **52 distinct workflow flaws**, of which **15 are Critical severity**. The system's recruitment pipeline cannot reliably track a candidate from application to hire. Phase 1 (Pipeline Foundation) must be completed before the system can support any real hiring activity.

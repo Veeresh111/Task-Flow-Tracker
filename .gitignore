@@ -1,0 +1,50 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+dist
+.env
+.env.*
+.DS_Store
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Environment Variables
+.env
+
+# Test artifacts
+playwright-report/
+test-results/
+*.timestamp-*.mjs
+
+# Debug / temp files
+nav-logo-debug.png
+flowtracker/db_inspect.cjs
+flowtracker/probe_recruitment.cjs
+recruitment_triggers_verification.mjs
+recruitment_triggers_evidence.json
+recruitment_workflow_execution.mjs
+recruitment_workflow_evidence.json
+
+# Audit/analysis reports (tracked separately)
+MASTER_ANALYSIS_REPORT.md
+MASTER_SYSTEM_VALIDATION_REPORT.md
+.git_disabled/

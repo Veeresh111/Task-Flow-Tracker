@@ -1,0 +1,271 @@
+# PRIORITY 0: DATA INTEGRITY — Implementation Plan
+
+## Mission
+Fix all data integrity issues that cause conflicting metrics, duplicate records, dashboard inconsistencies, multiple sources of truth, orphan records, and broken relationships. Establish **one authoritative source of truth** for every entity in the system.
+
+---
+
+## Executive Summary of Issues Found
+
+After exhaustive audit of every file in the codebase, **7 critical data integrity violations** have been identified:
+
+| # | Issue | Severity | Root Cause |
+|---|-------|----------|------------|
+| DI-1 | Dual Candidate Identity System | 🔴 Critical | `profiles` table AND `candidates` table both store candidate data with no FK relationship |
+| DI-2 | Dual Application Tracking | 🔴 Critical | `job_applications` AND `candidate_applications` store the same data independently |
+| DI-3 | Fabricated Financial Metrics | 🟡 High | Admin Dashboard computes fake valuations, balance sheets from headcount × hardcoded multipliers |
+| DI-4 | Role Source of Truth Conflict | 🟡 High | Auth metadata, profiles table, and login "self-heal" create circular role overwrites |
+| DI-5 | Inconsistent Headcount Metrics | 🟠 Medium | Admin Dashboard, HR Dashboard, and Analytics page each compute "Total Employees" differently |
+| DI-6 | Analytics Computed Differently Across Pages | 🟠 Medium | Performance scores, completion rates, department counts have different formulas per page |
+| DI-7 | Payroll Figures from Multiple Sources | 🟠 Medium | `payroll_ledger`, `profiles.payroll_ctc`, and hardcoded salary estimates all used in different places |
+
+---
+
+## User Review Required
+
+> [!IMPORTANT]
+> **DI-3 (Fabricated Financial Metrics)**: The Admin Dashboard currently shows a "Corporate Balance Sheet," "Company Valuation Distribution," and "FWC Valuation Distribution" that are entirely computed from `headcount × hardcoded salary × multipliers` — these are not real financial data. The plan is to **label these clearly as "Estimated Projections"** and add a disclaimer banner. Alternatively, they could be removed entirely. **Please confirm your preference.**
+
+> [!WARNING]
+> **DI-1 (Dual Candidate Identity)**: Currently, public job applicants go into the `candidates` table, while registered candidate users go into `profiles`. The CandidatePipeline joins on `candidates`, while OnboardingCenter queries `profiles` with `role='candidate'`. This means **HR sees two different sets of candidates** depending on which page they visit. The fix links these via `candidate_id` in profiles, without deleting either table. **This is the highest-impact change.**
+
+## Open Questions
+
+> [!IMPORTANT]
+> 1. **Do you have direct SQL access to your Supabase dashboard?** Several fixes require adding columns, indexes, or database views. If not, I'll provide the SQL for you to run manually.
+> 2. **Is the `payroll_ledger` table populated with real payroll data**, or is it also synthetic? This affects how we fix DI-7.
+> 3. **For DI-3**: Should we (A) relabel estimated metrics with "Estimated" badges, or (B) remove the fabricated financial section entirely?
+
+---
+
+## Proposed Changes
+
+### DI-1: Dual Candidate Identity System (CRITICAL)
+
+**Root Cause**: Two separate tables store candidate data:
+- `candidates` — populated by [JobApplication.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/public/JobApplication.tsx) when a public user applies
+- `profiles` — populated when a user registers via [Register.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/auth/Register.tsx) with role `candidate`
+
+**Current Behavior**: 
+- [CandidatePipeline.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/recruitment/CandidatePipeline.tsx) queries `candidate_applications` joined to `candidates` — shows public applicants
+- [OnboardingCenter.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/OnboardingCenter.tsx) queries `profiles` where `role='candidate'` — shows registered candidates
+- [Candidates.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/Candidates.tsx) also queries `profiles` where `role='candidate'`
+- A person who both registers AND applies is stored **twice** with no link between records
+
+**Expected Enterprise Behavior**: One person = one identity. The `candidates` table is the ATS source of truth for applicants. The `profiles` table links to it via a `candidate_id` FK when a candidate also registers as a user.
+
+**Impacted Files**:
+- `src/pages/public/JobApplication.tsx` — Add profile linking when email matches
+- `src/pages/hr/OnboardingCenter.tsx` — Query from `candidates` instead of `profiles` for candidate listing
+- `src/pages/hr/Candidates.tsx` — Same fix
+- `src/pages/candidate/Dashboard.tsx` — Link to `candidates` record for ATS data
+
+**Impacted Tables**: `profiles` (add `candidate_id` column), `candidates`
+
+**Risk**: Medium — adds a new column but doesn't modify existing data flows
+
+**Rollback**: Drop the `candidate_id` column from profiles; revert file changes
+
+#### Implementation Steps:
+1. Add `candidate_id` UUID nullable column to `profiles` table
+2. In `JobApplication.tsx`: after inserting into `candidates`, check if a `profiles` row exists with same email and link them
+3. In `Register.tsx`: when role is `candidate`, check if `candidates` record exists with same email and set `candidate_id`
+4. In `OnboardingCenter.tsx`: change candidate query to use `candidates` table joined to `candidate_applications` for ATS pipeline context, while still reading `profiles` for auth-linked candidates
+5. In `Candidates.tsx`: join `profiles` with `candidates` via `candidate_id` to show unified view
+
+---
+
+### DI-2: Dual Application Tracking (CRITICAL)
+
+**Root Cause**: Two tables track the same application data:
+- `job_applications` — written by [JobApplication.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/public/JobApplication.tsx#L248-L262) and read by [ApplicationHub.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/ApplicationHub.tsx)
+- `candidate_applications` — written by [JobApplication.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/public/JobApplication.tsx#L316-L326) and read by [CandidatePipeline.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/recruitment/CandidatePipeline.tsx)
+
+**Current Behavior**:
+- Both tables are written to during application submission (lines 248-262 and 316-326 of JobApplication.tsx)
+- Status updates in ApplicationHub only update `job_applications` AND attempt to sync to `candidate_applications`, but this sync can fail silently
+- CandidatePipeline reads ONLY from `candidate_applications` — if sync fails, it shows stale data
+- Analytics page reads from `candidate_onboarding` for pipeline metrics, which is yet a THIRD source
+
+**Expected Enterprise Behavior**: `job_applications` is the **single source of truth** for all application data. `candidate_applications` should be a **view** or should be eliminated. Until we can modify the database schema, we make `job_applications` authoritative and always read from it.
+
+**Impacted Files**:
+- `src/pages/hr/recruitment/CandidatePipeline.tsx` — Read from `job_applications` joined to `candidates` instead of `candidate_applications`
+- `src/pages/hr/ApplicationHub.tsx` — Remove redundant sync to `candidate_applications`
+- `src/pages/admin/Analytics.tsx` — Use `job_applications` for pipeline metrics instead of `candidate_onboarding`
+
+**Impacted Tables**: `job_applications` (authoritative), `candidate_applications` (demoted to secondary sync)
+
+**Risk**: Low — reading from a single table is safer than dual reads
+
+**Rollback**: Revert file changes to restore dual-read pattern
+
+#### Implementation Steps:
+1. Refactor `CandidatePipeline.tsx` to query `job_applications` joined to `candidates` and `job_forms`
+2. In `ApplicationHub.tsx`: keep the sync to `candidate_applications` as a best-effort secondary write but don't block on errors
+3. In `Analytics.tsx` (line 246-258): derive pipeline metrics from `job_applications` status values instead of `candidate_onboarding.onboarding_stage`
+
+---
+
+### DI-3: Fabricated Financial Metrics
+
+**Root Cause**: [Admin Dashboard.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/admin/Dashboard.tsx#L44-L92) computes:
+- Payroll estimates from `headcount × hardcoded salary` (₹65k employee, ₹95k TL, ₹125k admin)
+- "Company Valuation" from `payroll × 12 × 1.8 × 4.5` 
+- "Balance Sheet" from valuation with hardcoded percentages
+- "Growth Index" includes `Math.random()` — literally random data on each page load (line 69)
+
+**Current Behavior**: Dashboard shows "Corporate Balance Sheet" and "FWC Valuation Distribution" that are completely fictional and change on every refresh
+
+**Expected Enterprise Behavior**: Only show metrics backed by real database data. Estimates must be clearly labeled. Random numbers must never appear in any dashboard.
+
+**Impacted Files**: `src/pages/admin/Dashboard.tsx`
+
+**Risk**: Very Low — only adding labels and removing `Math.random()`
+
+**Rollback**: Revert label changes
+
+#### Implementation Steps:
+1. Remove `Math.random()` from growth index calculation (line 69) — replace with deterministic formula
+2. Add "Estimated" badge/label to all computed financial metrics
+3. Add disclaimer text: "Projections based on headcount and estimated salary bands"
+4. In HR Dashboard: replace hardcoded `₹65,000 × headcount` payroll with actual `payroll_ledger` sum if available
+
+---
+
+### DI-4: Role Source of Truth Conflict
+
+**Root Cause**: [auth.ts](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/lib/auth.ts#L37-L51) contains a "self-heal" mechanism that **overwrites** the database role with the auth metadata role on every login:
+
+```typescript
+// Line 42: Overwrites profiles.role with auth metadata on EVERY login
+await supabase.from('profiles').update({ role: trueRole }).eq('id', authData.user.id);
+```
+
+**Current Behavior**: 
+- If HR onboards a candidate → changes `profiles.role` from `candidate` to `employee`
+- Next time the user logs in → auth.ts overwrites it back to `candidate` (from original registration metadata)
+- The candidate can never become an employee
+
+**Expected Enterprise Behavior**: The `profiles` table is the authoritative source for current role. Auth metadata stores the **original registration role** only. The self-heal should only apply when profiles.role is NULL (new user bootstrap).
+
+**Impacted Files**: `src/lib/auth.ts`
+
+**Impacted Tables**: `profiles`
+
+**Risk**: Medium — this changes login behavior, but the fix is more correct
+
+**Rollback**: Revert auth.ts to original self-heal behavior
+
+#### Implementation Steps:
+1. In `signIn()`: only set `profiles.role` from auth metadata if the profile row doesn't exist yet or role is null
+2. Always trust `profiles.role` over auth metadata for the return value
+3. Remove the unconditional `update({ role: trueRole })` on every login
+
+---
+
+### DI-5: Inconsistent Headcount Metrics
+
+**Root Cause**: Three different dashboards compute "Total Employees" differently:
+
+| Dashboard | Formula | File |
+|-----------|---------|------|
+| Admin Dashboard | `profiles.length` (ALL roles) | [Dashboard.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/admin/Dashboard.tsx#L35) |
+| HR Dashboard | `profiles.length` (ALL roles) | [Dashboard.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/Dashboard.tsx#L39) |
+| Analytics | `profiles.filter(role === 'employee' && status !== 'terminated')` | [Analytics.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/admin/Analytics.tsx#L180-L219) |
+
+**Current Behavior**: Admin sees 50 "employees," Analytics shows 30 "employees" for the same database
+
+**Expected Enterprise Behavior**: 
+- "Total Headcount" = all profiles (includes admin, TL, employee, HR, candidate)
+- "Active Employees" = profiles where `role IN ('employee')` AND `employment_status != 'terminated'`
+- These must be consistently defined and used across all dashboards
+
+**Impacted Files**: 
+- `src/pages/admin/Dashboard.tsx`
+- `src/pages/hr/Dashboard.tsx`
+- `src/pages/admin/Analytics.tsx`
+
+**Risk**: Very Low — terminology and filter alignment only
+
+**Rollback**: Revert label changes
+
+#### Implementation Steps:
+1. Create a shared utility function `getHeadcountMetrics(profiles)` that returns standardized counts
+2. Apply consistent labels: "Total Headcount" for all users, "Active Employees" for employee-role only
+3. HR Dashboard "Headcount" should match Admin Dashboard "Total Headcount"
+4. All pages filter out `employment_status === 'terminated'` consistently
+
+---
+
+### DI-6: Analytics Computed Differently Across Pages
+
+**Root Cause**: Performance scores are computed using 3 different formulas:
+1. `employee_analytics.ai_performance_score` (if exists)
+2. `profiles.performance_score` (fallback)
+3. `completionRate` from task completion ratio (final fallback)
+
+The [Analytics.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/admin/Analytics.tsx#L196-L197) waterfall means different employees get scored by different methods depending on whether their `employee_analytics` row exists.
+
+**Current Behavior**: A "Solid Core" employee on the table could be "Top Performer" in the pie chart if data sources disagree
+
+**Expected Enterprise Behavior**: One formula, applied consistently. Priority: `employee_analytics.ai_performance_score` → `profiles.performance_score` → `0` (not task completion rate, which is a different metric)
+
+**Impacted Files**: `src/pages/admin/Analytics.tsx`
+
+**Risk**: Very Low — formula standardization
+
+**Rollback**: Revert formula changes
+
+#### Implementation Steps:
+1. Standardize the performance score waterfall to use only 2 sources (remove task completion as a performance proxy)
+2. Ensure pie chart and table use the same computed values
+3. Add fallback to `0` with "No Score" label instead of using completion rate as a proxy
+
+---
+
+### DI-7: Payroll Figures from Multiple Sources
+
+**Root Cause**: Payroll data comes from 3 places:
+1. `payroll_ledger.net_payroll_pay` — used by [ApplicationHub.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/hr/ApplicationHub.tsx#L62-L73)
+2. `profiles.payroll_ctc` — used by [Analytics.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/admin/Analytics.tsx#L214)
+3. Hardcoded salary estimates (₹65k, ₹95k, ₹125k) — used by [Admin Dashboard.tsx](file:///c:/Users/veere/Downloads/Task-Flow-Tracker-hackathon/Task-Flow-Tracker-hackathon/flowtracker/src/pages/admin/Dashboard.tsx#L57-L59)
+
+**Current Behavior**: Three different "payroll" numbers shown in three different places
+
+**Expected Enterprise Behavior**: `profiles.payroll_ctc` is the authoritative per-employee salary. `payroll_ledger` is for processed payroll records. Dashboards must prefer `profiles.payroll_ctc` for current salary estimates.
+
+**Impacted Files**:
+- `src/pages/admin/Dashboard.tsx` — Use `profiles.payroll_ctc` instead of hardcoded
+- `src/pages/hr/Dashboard.tsx` — Use `profiles.payroll_ctc` sum
+
+**Risk**: Low — source alignment only
+
+**Rollback**: Revert to hardcoded estimates
+
+#### Implementation Steps:
+1. Admin Dashboard: compute payroll from `profiles.payroll_ctc` sum instead of hardcoded multipliers
+2. HR Dashboard: replace `headcount × 65000` with actual `profiles.payroll_ctc` sum
+3. Keep `payroll_ledger` reads in ApplicationHub (it's showing processed payroll, not estimates)
+
+---
+
+## Verification Plan
+
+### Automated Tests
+- No automated test suite exists currently. Verification will be manual.
+
+### Manual Verification
+1. **DI-1**: Register as candidate, apply to job → confirm same identity appears in both CandidatePipeline and OnboardingCenter
+2. **DI-2**: Submit application → confirm CandidatePipeline shows same status as ApplicationHub
+3. **DI-3**: Load Admin Dashboard → confirm no random values, all estimates labeled
+4. **DI-4**: Onboard a candidate to employee → login as that user → confirm role stays `employee`
+5. **DI-5**: Compare headcount numbers across all 3 dashboards → must match
+6. **DI-6**: Compare Analytics table badges with pie chart segments → must be consistent
+7. **DI-7**: Compare payroll figures across Admin Dashboard, HR Dashboard, ApplicationHub → must use same source
+
+### Build Verification
+```bash
+cd flowtracker && npm run build
+```
+Confirm zero TypeScript errors after all changes.
