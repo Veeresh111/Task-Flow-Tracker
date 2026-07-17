@@ -63,7 +63,7 @@ Pick up at G1.5-F (RLS Matrix) — requires creating Recruiter and Anonymous aut
 6. **Deploy** and record demo video
 
 ### Deployment Info
-- **Supabase**: `https://txwxtsdsbuddqfrtllsf.supabase.co`
-- **Admin**: `prakashmulge912@gmail.com` / `changeme`
-- **HR**: `jack@email.com` / `changeme`
+- **Supabase**: `[REDACTED - use env vars]`
+- **Admin**: `[REDACTED - use env vars]`
+- **HR**: `[REDACTED - use env vars]`
 - **Live DB**: 514 profiles, 64 job forms, 50 candidates, 50 job applications

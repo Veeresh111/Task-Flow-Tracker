@@ -281,12 +281,11 @@ Measure: dashboard load time, payroll gen time, AI response time, DB latency, me
 | `src/pages/candidate/Interviews.tsx` | Added Jitsi Meet embedded room for Jitsi links |
 
 ## Supabase Context
-- URL: `https://txwxtsdsbuddqfrtllsf.supabase.co`
-- Anon key: `sb_publishable_ahamP8gR3qcYvJx0ulaMvw_yRn42OWB`
+- Supabase project: `[REDACTED - set via Vercel env vars]`
 - Storage buckets exist: `resumes` ✅ `bgc_docs` ✅ `avatars` ✅ (`offer_letters` ❌)
 - 11+ pending migrations (14 applied on remote, 11+ local-only incl. RLS trigger + offer schema)
-- Admin: `prakashmulge912@gmail.com` / `changeme`
-- HR: `jack@email.com` / `changeme`
+- Admin: `[REDACTED - set via Vercel env vars]`
+- HR: `[REDACTED - set via Vercel env vars]`
 - RLS role-change bypass FIXED via trigger
 
 ## Production Checklist

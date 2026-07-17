@@ -29,6 +29,12 @@ dist
 
 # Environment Variables
 .env
+.env.*
+
+# Security: development scripts with hardcoded credentials (use env vars instead)
+scripts/*.mjs
+scripts/*.js
+scripts/*.sql
 
 # Test artifacts
 playwright-report/
