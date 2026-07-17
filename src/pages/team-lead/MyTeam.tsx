@@ -70,7 +70,6 @@ export default function MyTeam() {
   // SECURE NOTIFICATION & FOOLPROOF ROUTING
   const handleWorkspaceDispatch = async (member: any) => {
     try {
-      // 1. Push immediate database notification
       const { error } = await supabase.from('notifications').insert([{
         user_id: member.id,
         title: "Workspace Dispatch",
@@ -79,13 +78,15 @@ export default function MyTeam() {
         created_at: new Date().toISOString()
       }]);
 
-      if (!error) {
-        toast({ title: "Notification Sent", description: `${member.name} was notified.` });
-      } else {
-        console.error("Supabase Notification Error:", error);
+      if (error) {
+        if (error.code === '42501') {
+          console.warn("Notification insert blocked by RLS (team_lead not in allowlist). Routing directly to chat.");
+        } else {
+          console.warn("Notification insert warning:", error.message);
+        }
       }
-    } catch (error) {
-      console.error("Failed to push notification", error);
+    } catch (error: any) {
+      console.warn("Notification dispatch warning:", error?.message);
     }
 
     // 2. Set strict local storage fallback so the chat page CANNOT fail to find the user

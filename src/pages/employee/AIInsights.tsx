@@ -131,7 +131,7 @@ Write a highly professional, 2-paragraph analysis evaluating their personal effi
     csvContent += `Overall Progress,${metrics.progress}%\n`;
     csvContent += `Total Logged Hours,${metrics.totalHours}\n`;
     csvContent += `Task Velocity,${metrics.velocity} tasks/hr\n`;
-    csvContent += `AI Performance Rating,${metrics.aiRating} / 5.0\n\n`;
+    csvContent += `Task Performance Score,${metrics.aiRating} / 5.0\n\n`;
     
     csvContent += `POSITIVE CAREER ATTRIBUTES\n`;
     metrics.attributes.positive.forEach((attr: string) => csvContent += `"${attr}"\n`);
@@ -158,14 +158,14 @@ Write a highly professional, 2-paragraph analysis evaluating their personal effi
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-6 rounded-xl shadow-sm border border-slate-200">
           <div>
             <h1 className="text-3xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
-              <Sparkles className="w-8 h-8 text-blue-600" /> Personal AI Analytics
+              <Sparkles className="w-8 h-8 text-blue-600" /> Personal Analytics & Insights
             </h1>
-            <p className="text-slate-500 mt-1">Deep analytics on your personal velocity, positive/negative attributes, and AI rating.</p>
+            <p className="text-slate-500 mt-1">Deep analytics on your personal velocity, positive/negative attributes, and performance score.</p>
           </div>
           <div className="flex gap-2">
             <Button onClick={generateAISummary} disabled={generatingAI} className="bg-blue-600 hover:bg-blue-700 text-white font-bold shadow-sm">
               {generatingAI ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />} 
-              Generate Career Evaluation
+              Generate Career Evaluation (AI Prediction)
             </Button>
             <Button onClick={exportReport} variant="outline" className="text-slate-700 font-bold border-slate-300 shadow-sm">
               <Download className="w-4 h-4 mr-2"/> Download Report
@@ -215,7 +215,7 @@ Write a highly professional, 2-paragraph analysis evaluating their personal effi
 
           <Card className="shadow-sm border-slate-200 border-b-4 border-b-amber-500">
             <CardContent className="p-5">
-              <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 flex items-center gap-1"><Star className="w-3 h-3"/> AI Performance Rating</p>
+              <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 flex items-center gap-1"><Star className="w-3 h-3"/> Task Performance Score</p>
               <h2 className="text-2xl font-black text-amber-600">⭐ {metrics.aiRating} <span className="text-sm text-slate-400">/ 5.0</span></h2>
             </CardContent>
           </Card>
@@ -294,7 +294,7 @@ Write a highly professional, 2-paragraph analysis evaluating their personal effi
               <h3 className="text-2xl font-black mb-2">Total Hours Logged</h3>
               <p className="text-5xl font-black text-indigo-200 mb-4">{metrics.totalHours} <span className="text-xl text-indigo-300 font-medium">Hrs</span></p>
               <p className="text-indigo-200/80 text-sm leading-relaxed">
-                Your total accumulated time actively working and tracking productivity within the FWC ecosystem. High hours combined with high velocity yields top AI ratings.
+                Your total accumulated time actively working and tracking productivity within the FWC ecosystem. High hours combined with high velocity yields top performance scores.
               </p>
             </CardContent>
           </Card>

@@ -1,287 +1,384 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/lib/supabase";
-import { Loader2, Wallet, Download, TrendingUp, Building2, Briefcase, FileText, X, Landmark } from "lucide-react";
+import { formatINR } from "@/lib/payroll";
+import { Loader2, Wallet, TrendingUp, Search, Calendar, ShieldCheck, Download, AlertCircle, Users } from "lucide-react";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, LineChart, Line } from "recharts";
 
-export default function UniversalPayroll() {
-  useEffect(() => { document.title = "Payroll - TaskFlow"; }, []);
-  const [profile, setProfile] = useState<any>(null);
+type TabKey = 'overview' | 'cycles' | 'audit' | 'revisions';
+
+interface CycleSummary {
+  month: number;
+  year: number;
+  total_gross: number;
+  total_net: number;
+  total_pf: number;
+  total_tds: number;
+  total_employees: number;
+  status: string;
+  id: string;
+}
+
+interface AuditRecord {
+  id: string;
+  evidence_code: string;
+  entity: string;
+  entity_id: string | null;
+  action: string;
+  performed_by: string | null;
+  performed_at: string;
+  reason: string | null;
+  details: Record<string, unknown> | null;
+}
+
+interface RevisionRecord {
+  id: string;
+  employee_id: string;
+  old_ctc: number | null;
+  new_ctc: number;
+  effective_from: string;
+  reason: string | null;
+  created_at: string;
+  employee_name?: string;
+}
+
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+const STATUS_BADGE: Record<string, string> = {
+  draft: 'bg-slate-100 text-slate-600',
+  generated: 'bg-blue-100 text-blue-700',
+  verified: 'bg-indigo-100 text-indigo-700',
+  finance_approved: 'bg-purple-100 text-purple-700',
+  hr_approved: 'bg-emerald-100 text-emerald-700',
+  released: 'bg-green-100 text-green-700',
+};
+
+export default function AdminPayroll() {
+  const [activeTab, setActiveTab] = useState<TabKey>('overview');
   const [loading, setLoading] = useState(true);
+  const [dbReady, setDbReady] = useState<boolean | null>(null);
+  const [cycles, setCycles] = useState<CycleSummary[]>([]);
   const [payslips, setPayslips] = useState<any[]>([]);
-  const [selectedSlip, setSelectedSlip] = useState<any>(null);
+  const [auditRecords, setAuditRecords] = useState<AuditRecord[]>([]);
+  const [revisions, setRevisions] = useState<RevisionRecord[]>([]);
+  const [search, setSearch] = useState('');
+  const [auditSearch, setAuditSearch] = useState('');
+  const [employeeCount, setEmployeeCount] = useState(0);
 
-  useEffect(() => {
-    fetchPayrollData();
+  const checkDb = useCallback(async () => {
+    try {
+      const { error } = await supabase.rpc('preview_payslip_breakdown', { p_annual_ctc: 1200000 });
+      setDbReady(!error || !error.message?.includes('PGRST202'));
+    } catch { setDbReady(false); }
   }, []);
 
-  const fetchPayrollData = async () => {
+  const fetchData = useCallback(async () => {
     setLoading(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+    try {
+      const { data: cyclesData } = await supabase.from('payroll_cycles').select('*').order('year', { ascending: false }).order('month', { ascending: false });
+      if (cyclesData) setCycles(cyclesData);
 
-    const { data: userProfile } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', user.id)
-      .single();
+      const { data: payslipsData } = await supabase.from('payslips').select('*, payroll_cycles!inner(month, year, status)').order('created_at', { ascending: false });
+      if (payslipsData) setPayslips(payslipsData.map((s: any) => ({ ...s, month: s.payroll_cycles?.month, year: s.payroll_cycles?.year })));
 
-    if (userProfile) {
-      setProfile(userProfile);
-      
-      // Determine MNC simulated salary metrics (Annual CTC in INR)
-      const r = (userProfile.role || '').toLowerCase();
-      let annualCTC = 600000; // Base Employee (6 LPA)
-      if (r.includes('admin')) annualCTC = 1500000; // Admin (15 LPA)
-      if (r.includes('lead') || r === 'tl') annualCTC = 1200000; // Team Lead (12 LPA)
+      const { data: auditData } = await supabase.from('payroll_audit').select('*').order('performed_at', { ascending: false }).limit(200);
+      if (auditData) setAuditRecords(auditData);
 
-      // Generate the last 6 months of Payslip History dynamically using precise Indian Corporate Math
-      const generatedSlips = [];
-      for (let i = 0; i < 6; i++) {
-        const d = new Date();
-        d.setMonth(d.getMonth() - i);
-        
-        const monthlyCTC = Math.round(annualCTC / 12);
-        
-        // EARNINGS
-        const basic = Math.round(monthlyCTC * 0.40); // Basic Pay is 40% of CTC
-        const hra = Math.round(basic * 0.50); // HRA is 50% of Basic
-        const lta = Math.round(monthlyCTC * 0.10); // Leave Travel Allowance
-        const specialAllowance = Math.round(monthlyCTC * 0.10); 
-        
-        // Dynamic Variable Pay (Simulating 85% to 100% payout based on month)
-        const performanceMultiplier = 0.85 + (Math.random() * 0.15);
-        const variablePay = Math.round((monthlyCTC * 0.10) * performanceMultiplier); 
-
-        const grossEarnings = basic + hra + lta + specialAllowance + variablePay;
-
-        // DEDUCTIONS
-        const pf = Math.round(basic * 0.12); // Employee PF Contribution (12% of Basic)
-        const pt = 200; // Standard Professional Tax in Bangalore, Karnataka
-        const tds = Math.round(grossEarnings * 0.15); // Simulated 15% Income Tax Bracket
-        
-        const totalDeductions = pf + pt + tds;
-        const netPay = grossEarnings - totalDeductions;
-        
-        generatedSlips.push({
-          id: `FWC-PS-${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}-${Math.floor(Math.random() * 9000) + 1000}`,
-          month: d.toLocaleString('en-US', { month: 'long', year: 'numeric' }),
-          daysWorked: new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate(),
-          earnings: { basic, hra, lta, specialAllowance, variablePay, gross: grossEarnings },
-          deductions: { pf, pt, tds, total: totalDeductions },
-          net: netPay,
-          status: "Processed & Credited"
-        });
+      const { data: revisionsData } = await supabase.from('salary_revisions').select('*, profiles!inner(name)').order('created_at', { ascending: false }).limit(100);
+      if (revisionsData) {
+        setRevisions(revisionsData.map((r: any) => ({ ...r, employee_name: r.profiles?.name })));
       }
-      setPayslips(generatedSlips);
-    }
-    setLoading(false);
-  };
 
-  const formatINR = (val: number) => {
-    return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(val);
-  };
+      const { count } = await supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('status', 'active');
+      if (count !== null) setEmployeeCount(count);
+    } catch (e: any) {
+      if (e.code !== 'PGRST202' && e.code !== '42P01') console.error(e);
+    } finally { setLoading(false); }
+  }, []);
 
-  const handleDownloadCSV = (slip: any) => {
-    const csvContent = `data:text/csv;charset=utf-8,FWC CORPORATE PAYSLIP\n` +
-      `PAYSLIP ID,${slip.id}\nMONTH,${slip.month}\nEMPLOYEE,${profile.name}\nROLE,${profile.role}\n\n` +
-      `EARNINGS,AMOUNT\nBasic Pay,${slip.earnings.basic}\nHRA,${slip.earnings.hra}\nLTA,${slip.earnings.lta}\nSpecial Allowance,${slip.earnings.specialAllowance}\nVariable Pay,${slip.earnings.variablePay}\nGROSS EARNINGS,${slip.earnings.gross}\n\n` +
-      `DEDUCTIONS,AMOUNT\nProvident Fund (PF),${slip.deductions.pf}\nProfessional Tax (PT),${slip.deductions.pt}\nTDS (Income Tax),${slip.deductions.tds}\nTOTAL DEDUCTIONS,${slip.deductions.total}\n\n` +
-      `NET PAY CREDITED,${slip.net}`;
+  useEffect(() => { checkDb(); }, [checkDb]);
+  useEffect(() => { if (dbReady === true) fetchData(); else if (dbReady === false) setLoading(false); }, [dbReady, fetchData]);
 
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `${slip.id}_Payslip.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
+  const totalGross = cycles.reduce((s, c) => s + Number(c.total_gross), 0);
+  const totalNet = cycles.reduce((s, c) => s + Number(c.total_net), 0);
+  const totalPf = cycles.reduce((s, c) => s + Number(c.total_pf), 0);
+  const totalTds = cycles.reduce((s, c) => s + Number(c.total_tds), 0);
+  const totalEmployeesPaid = cycles.reduce((s, c) => s + c.total_employees, 0);
 
-  if (!profile && !loading) return null;
+  const chartData = [...cycles].reverse().map(c => ({
+    label: `${MONTHS[c.month-1]} ${c.year}`,
+    gross: Number(c.total_gross),
+    net: Number(c.total_net),
+    pf: Number(c.total_pf),
+    tds: Number(c.total_tds),
+  }));
+
+  const deptData = (() => {
+    const map: Record<string, number> = {};
+    payslips.forEach(p => {
+      const dept = p.employee_department || 'Unknown';
+      map[dept] = (map[dept] || 0) + Number(p.net);
+    });
+    return Object.entries(map).map(([name, value]) => ({ name, value }));
+  })();
+
+  const filteredAudit = auditRecords.filter(r =>
+    !auditSearch || r.action.toLowerCase().includes(auditSearch.toLowerCase()) || r.evidence_code.toLowerCase().includes(auditSearch.toLowerCase())
+  );
+
+  const filteredCycles = cycles.filter(c =>
+    !search || `${MONTHS[c.month-1]} ${c.year}`.toLowerCase().includes(search.toLowerCase())
+  );
+
+  if (dbReady === false) {
+    return (
+      <DashboardLayout>
+        <div className="max-w-3xl mx-auto p-12 text-center space-y-4">
+          <AlertCircle className="w-16 h-16 text-amber-500 mx-auto" />
+          <h2 className="text-2xl font-bold text-slate-800">Payroll Backend Not Configured</h2>
+          <p className="text-slate-500">Apply migration to enable payroll administration.</p>
+        </div>
+      </DashboardLayout>
+    );
+  }
 
   return (
     <DashboardLayout>
-      <div className="max-w-6xl mx-auto space-y-6 animate-fade-in pb-12">
+      <div className="max-w-7xl mx-auto space-y-6 animate-fade-in pb-12">
         <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight text-slate-900 flex items-center gap-3">
-              <Wallet className="w-8 h-8 text-emerald-600" /> FWC Payroll Center
+            <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-2">
+              <Wallet className="text-emerald-600" /> Payroll Administration
             </h1>
-            <p className="text-slate-500 mt-1">Review your compensation structures, variable payouts, and corporate tax deductions.</p>
+            <p className="text-slate-500 mt-1">Enterprise payroll analytics, cycle management, and audit explorer.</p>
           </div>
-          <div className="hidden md:flex items-center gap-3 px-4 py-2 bg-slate-50 border border-slate-100 rounded-lg">
-            {/* The Logo dynamically pulls from your public folder */}
-            <img src="/fwc-logo.png" alt="FWC Logo" className="h-10 object-contain drop-shadow-sm" onError={(e) => (e.currentTarget.style.display = 'none')} />
-            <div className="flex flex-col">
-              <span className="text-sm font-black text-slate-800 tracking-tight">FWC India</span>
-              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Bangalore HQ</span>
-            </div>
+          <div className="flex gap-2">
+            {(['overview', 'cycles', 'audit', 'revisions'] as TabKey[]).map(tab => (
+              <Button key={tab} variant={activeTab === tab ? 'default' : 'outline'} size="sm"
+                onClick={() => setActiveTab(tab)}
+                className={activeTab === tab ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : ''}>
+                {tab === 'overview' ? 'Overview' : tab === 'cycles' ? 'Cycles' : tab === 'audit' ? 'Audit' : 'Revisions'}
+              </Button>
+            ))}
           </div>
         </div>
 
-        {loading ? <div className="flex justify-center p-20"><Loader2 className="w-10 h-10 animate-spin text-emerald-600" /></div> : (
-          <>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <Card className="shadow-sm border-slate-200 bg-white border-b-4 border-b-emerald-500">
-                <CardContent className="p-6 flex items-center gap-4">
-                  <div className="p-4 bg-emerald-50 text-emerald-600 rounded-full"><Landmark className="w-6 h-6"/></div>
-                  <div>
-                    <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Gross Monthly Earnings</p>
-                    <h2 className="text-2xl font-black text-slate-800">{formatINR(payslips[0]?.earnings.gross)}</h2>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card className="shadow-sm border-slate-200 bg-white border-b-4 border-b-indigo-500">
-                <CardContent className="p-6 flex items-center gap-4">
-                  <div className="p-4 bg-indigo-50 text-indigo-600 rounded-full"><TrendingUp className="w-6 h-6"/></div>
-                  <div>
-                    <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Latest Variable Payout</p>
-                    <h2 className="text-2xl font-black text-slate-800">{formatINR(payslips[0]?.earnings.variablePay)}</h2>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card className="shadow-sm border-slate-200 bg-white border-b-4 border-b-blue-500">
-                <CardContent className="p-6 flex items-center gap-4">
-                  <div className="p-4 bg-blue-50 text-blue-600 rounded-full"><Briefcase className="w-6 h-6"/></div>
-                  <div>
-                    <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">FWC Corporate Band</p>
-                    <h2 className="text-lg font-black text-slate-800 uppercase line-clamp-1">{profile.role.replace("_", " ")}</h2>
-                  </div>
-                </CardContent>
-              </Card>
+        {loading ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {[1,2,3,4].map(i => <Card key={i}><CardContent className="p-6"><div className="h-16 bg-slate-100 rounded animate-pulse" /></CardContent></Card>)}
+          </div>
+        ) : activeTab === 'overview' ? (
+          <div className="space-y-6">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <Card className="border-l-4 border-l-slate-800"><CardContent className="p-4">
+                <p className="text-[10px] font-bold text-slate-500 uppercase">Active Employees</p>
+                <p className="text-2xl font-black text-slate-800">{employeeCount}</p>
+              </CardContent></Card>
+              <Card className="border-l-4 border-l-emerald-500"><CardContent className="p-4">
+                <p className="text-[10px] font-bold text-slate-500 uppercase">Total Cycles</p>
+                <p className="text-2xl font-black text-emerald-600">{cycles.length}</p>
+              </CardContent></Card>
+              <Card className="border-l-4 border-l-indigo-500"><CardContent className="p-4">
+                <p className="text-[10px] font-bold text-slate-500 uppercase">All-Time Gross</p>
+                <p className="text-2xl font-black text-indigo-600">{formatINR(totalGross)}</p>
+              </CardContent></Card>
+              <Card className="border-l-4 border-l-red-500"><CardContent className="p-4">
+                <p className="text-[10px] font-bold text-slate-500 uppercase">All-Time TDS</p>
+                <p className="text-2xl font-black text-red-600">{formatINR(totalTds)}</p>
+              </CardContent></Card>
             </div>
 
-            <Card className="shadow-sm border-slate-200 bg-white">
-              <CardHeader className="border-b bg-slate-50/50">
-                <CardTitle className="text-lg text-slate-800">Compensation Ledger</CardTitle>
-              </CardHeader>
-              <CardContent className="p-0">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <Card><CardContent className="p-4">
+                <p className="text-[10px] font-bold text-slate-500 uppercase">All-Time Net</p>
+                <p className="text-lg font-black text-emerald-600">{formatINR(totalNet)}</p>
+              </CardContent></Card>
+              <Card><CardContent className="p-4">
+                <p className="text-[10px] font-bold text-slate-500 uppercase">All-Time PF</p>
+                <p className="text-lg font-black text-slate-700">{formatINR(totalPf)}</p>
+              </CardContent></Card>
+              <Card><CardContent className="p-4">
+                <p className="text-[10px] font-bold text-slate-500 uppercase">Total Employees Paid</p>
+                <p className="text-lg font-black text-slate-700">{totalEmployeesPaid}</p>
+              </CardContent></Card>
+              <Card><CardContent className="p-4">
+                <p className="text-[10px] font-bold text-slate-500 uppercase">Released Cycles</p>
+                <p className="text-lg font-black text-green-600">{cycles.filter(c => c.status === 'released').length}</p>
+              </CardContent></Card>
+            </div>
+
+            {chartData.length > 0 && (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <Card><CardHeader className="bg-slate-50 border-b pb-3"><CardTitle className="text-sm font-bold text-slate-700">Monthly Net Pay Trend</CardTitle></CardHeader>
+                  <CardContent className="p-4 h-[250px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={chartData}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9"/>
+                        <XAxis dataKey="label" tick={{fontSize: 10}} axisLine={false}/>
+                        <YAxis tickFormatter={(v:number)=>`₹${(v/100000).toFixed(1)}L`} tick={{fontSize: 10}} axisLine={false}/>
+                        <RechartsTooltip formatter={(v:number)=>formatINR(v)}/>
+                        <Bar dataKey="net" fill="#10b981" radius={[4,4,0,0]} name="Net Pay"/>
+                        <Bar dataKey="gross" fill="#3b82f6" radius={[4,4,0,0]} name="Gross"/>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </CardContent>
+                </Card>
+
+                <Card><CardHeader className="bg-slate-50 border-b pb-3"><CardTitle className="text-sm font-bold text-slate-700">Department Net Pay Distribution</CardTitle></CardHeader>
+                  <CardContent className="p-4 h-[250px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={deptData} layout="vertical">
+                        <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9"/>
+                        <XAxis type="number" tickFormatter={(v:number)=>`₹${(v/100000).toFixed(1)}L`} tick={{fontSize: 10}} axisLine={false}/>
+                        <YAxis dataKey="name" type="category" tick={{fontSize: 10}} axisLine={false} width={100}/>
+                        <RechartsTooltip formatter={(v:number)=>formatINR(v)}/>
+                        <Bar dataKey="value" fill="#8b5cf6" radius={[0,4,4,0]} name="Net Pay"/>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </CardContent>
+                </Card>
+              </div>
+            )}
+          </div>
+        ) : activeTab === 'cycles' ? (
+          <Card className="shadow-sm">
+            <CardHeader className="bg-slate-50 border-b pb-4">
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                <CardTitle className="text-lg text-slate-800">Payroll Cycles</CardTitle>
+                <Input placeholder="Search period..." className="w-full md:w-56 h-9 text-sm" value={search} onChange={e => setSearch(e.target.value)} />
+              </div>
+            </CardHeader>
+            <CardContent className="p-0">
+              {filteredCycles.length === 0 ? (
+                <div className="p-8 text-center text-slate-400 text-sm">No payroll cycles found.</div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="font-bold">Period</TableHead>
+                      <TableHead className="font-bold">Status</TableHead>
+                      <TableHead className="font-bold text-right">Employees</TableHead>
+                      <TableHead className="font-bold text-right">Gross</TableHead>
+                      <TableHead className="font-bold text-right">Net</TableHead>
+                      <TableHead className="font-bold text-right">PF</TableHead>
+                      <TableHead className="font-bold text-right">TDS</TableHead>
+                      <TableHead className="font-bold text-right">Generated</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredCycles.map(c => (
+                      <TableRow key={c.id} className="hover:bg-slate-50">
+                        <TableCell className="font-semibold">{MONTHS[c.month-1]} {c.year}</TableCell>
+                        <TableCell><Badge className={STATUS_BADGE[c.status] || ''}>{c.status.replace('_', ' ')}</Badge></TableCell>
+                        <TableCell className="text-right">{c.total_employees}</TableCell>
+                        <TableCell className="text-right font-medium">{formatINR(Number(c.total_gross))}</TableCell>
+                        <TableCell className="text-right font-bold text-emerald-600">{formatINR(Number(c.total_net))}</TableCell>
+                        <TableCell className="text-right text-slate-600">{formatINR(Number(c.total_pf))}</TableCell>
+                        <TableCell className="text-right text-red-600">{formatINR(Number(c.total_tds))}</TableCell>
+                        <TableCell className="text-right text-xs text-slate-500">
+                          {c.generated_at ? new Date(c.generated_at).toLocaleDateString() : '—'}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        ) : activeTab === 'audit' ? (
+          <Card className="shadow-sm">
+            <CardHeader className="bg-slate-50 border-b pb-4">
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                <CardTitle className="text-lg text-slate-800 flex items-center gap-2">
+                  <ShieldCheck className="w-5 h-5 text-indigo-600" /> Payroll Audit Trail
+                </CardTitle>
+                <Input placeholder="Search action or evidence code..." className="w-full md:w-64 h-9 text-sm" value={auditSearch} onChange={e => setAuditSearch(e.target.value)} />
+              </div>
+            </CardHeader>
+            <CardContent className="p-0">
+              {filteredAudit.length === 0 ? (
+                <div className="p-8 text-center text-slate-400 text-sm">No audit records found.</div>
+              ) : (
                 <div className="overflow-x-auto">
                   <Table>
-                    <TableHeader className="bg-slate-50">
+                    <TableHeader>
                       <TableRow>
-                        <TableHead className="font-bold text-slate-700">Billing Period</TableHead>
-                        <TableHead className="font-bold text-slate-700 text-center">Gross Earnings</TableHead>
-                        <TableHead className="font-bold text-slate-700 text-center">Variable Payout</TableHead>
-                        <TableHead className="font-bold text-red-600 text-center">Tax & Deductions</TableHead>
-                        <TableHead className="font-bold text-emerald-700 text-center">Net Disbursed</TableHead>
-                        <TableHead className="font-bold text-right">Actions</TableHead>
+                        <TableHead className="font-bold text-[10px]">Evidence</TableHead>
+                        <TableHead className="font-bold text-[10px]">Action</TableHead>
+                        <TableHead className="font-bold text-[10px]">Entity</TableHead>
+                        <TableHead className="font-bold text-[10px] text-right">Timestamp</TableHead>
+                        <TableHead className="font-bold text-[10px]">Reason</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {payslips.map(slip => (
-                        <TableRow key={slip.id} className="hover:bg-slate-50/80 transition-colors">
-                          <TableCell>
-                            <div className="font-bold text-slate-900">{slip.month}</div>
-                            <div className="text-xs text-slate-500 font-mono mt-0.5">ID: {slip.id}</div>
-                          </TableCell>
-                          <TableCell className="text-center font-medium text-slate-600">{formatINR(slip.earnings.gross)}</TableCell>
-                          <TableCell className="text-center font-bold text-indigo-600">+{formatINR(slip.earnings.variablePay)}</TableCell>
-                          <TableCell className="text-center font-bold text-red-500">-{formatINR(slip.deductions.total)}</TableCell>
-                          <TableCell className="text-center font-black text-emerald-600">{formatINR(slip.net)}</TableCell>
-                          <TableCell className="text-right">
-                            <div className="flex justify-end gap-2">
-                              <Button onClick={() => setSelectedSlip(slip)} variant="outline" size="sm" className="h-8 text-xs text-blue-600 border-blue-200 hover:bg-blue-50">
-                                <FileText className="w-3.5 h-3.5 mr-1" /> View Slip
-                              </Button>
-                            </div>
-                          </TableCell>
+                      {filteredAudit.map(r => (
+                        <TableRow key={r.id} className="hover:bg-slate-50 text-xs">
+                          <TableCell><Badge variant="outline" className="text-[10px] font-mono">{r.evidence_code}</Badge></TableCell>
+                          <TableCell className="font-semibold">{r.action}</TableCell>
+                          <TableCell className="text-slate-500 text-[10px]">{r.entity}{r.entity_id ? ` • ${r.entity_id.substring(0, 8)}...` : ''}</TableCell>
+                          <TableCell className="text-right text-slate-500 text-[10px]">{new Date(r.performed_at).toLocaleString()}</TableCell>
+                          <TableCell className="text-slate-500 max-w-[200px] truncate text-[10px]">{r.reason || '—'}</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
                   </Table>
                 </div>
-              </CardContent>
-            </Card>
-          </>
+              )}
+            </CardContent>
+          </Card>
+        ) : (
+          <Card className="shadow-sm">
+            <CardHeader className="bg-slate-50 border-b">
+              <CardTitle className="text-lg text-slate-800 flex items-center gap-2">
+                <TrendingUp className="w-5 h-5 text-indigo-600" /> Salary Revisions
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-0">
+              {revisions.length === 0 ? (
+                <div className="p-8 text-center text-slate-400 text-sm">No salary revisions recorded.</div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="font-bold">Employee</TableHead>
+                      <TableHead className="font-bold text-right">Previous CTC</TableHead>
+                      <TableHead className="font-bold text-right">New CTC</TableHead>
+                      <TableHead className="font-bold text-right">Change</TableHead>
+                      <TableHead className="font-bold text-right">Effective</TableHead>
+                      <TableHead className="font-bold">Reason</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {revisions.map(r => {
+                      const pct = r.old_ctc ? Math.round(((r.new_ctc - r.old_ctc) / r.old_ctc) * 100) : null;
+                      return (
+                        <TableRow key={r.id} className="hover:bg-slate-50">
+                          <TableCell className="font-semibold">{r.employee_name || r.employee_id.substring(0, 8)}</TableCell>
+                          <TableCell className="text-right">{r.old_ctc ? formatINR(r.old_ctc) : '—'}</TableCell>
+                          <TableCell className="text-right font-bold text-emerald-600">{formatINR(r.new_ctc)}</TableCell>
+                          <TableCell className="text-right">
+                            {pct !== null ? (
+                              <span className={`text-xs font-bold ${pct >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                                {pct >= 0 ? '+' : ''}{pct}%
+                              </span>
+                            ) : '—'}
+                          </TableCell>
+                          <TableCell className="text-right text-xs">{new Date(r.effective_from).toLocaleDateString()}</TableCell>
+                          <TableCell className="text-xs text-slate-500 max-w-[200px] truncate">{r.reason || '—'}</TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
         )}
-
-        {/* FWC PROFESSIONAL PAYSLIP MODAL */}
-        {selectedSlip && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <Card className="w-full max-w-3xl shadow-2xl border-none animate-in zoom-in-95 duration-200 overflow-hidden bg-white">
-              
-              {/* Slip Header */}
-              <div className="border-b-4 border-emerald-600 p-8 flex justify-between items-start bg-slate-50">
-                <div className="flex items-center gap-4">
-                  <img src="/fwc-logo.png" alt="FWC" className="h-14 object-contain" onError={(e) => (e.currentTarget.style.display = 'none')} />
-                  <div>
-                    <h2 className="text-2xl font-black text-slate-900 tracking-tight">FWC India</h2>
-                    <p className="text-sm text-slate-500 font-medium">Bangalore Headquarters, Karnataka</p>
-                    <p className="text-xs text-slate-400 mt-1">Payslip for the month of <span className="font-bold text-slate-700">{selectedSlip.month}</span></p>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <button onClick={() => setSelectedSlip(null)} className="text-slate-400 hover:bg-slate-200 p-1 rounded-full transition-colors mb-2"><X className="w-5 h-5"/></button>
-                  <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">Document ID</p>
-                  <p className="text-sm font-mono font-bold text-slate-800">{selectedSlip.id}</p>
-                </div>
-              </div>
-
-              {/* Slip Body */}
-              <CardContent className="p-8">
-                {/* Employee Details */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8 bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
-                  <div><p className="text-[10px] font-bold text-slate-400 uppercase">Employee Name</p><p className="text-sm font-bold text-slate-800">{profile.name}</p></div>
-                  <div><p className="text-[10px] font-bold text-slate-400 uppercase">Employee ID</p><p className="text-sm font-mono font-bold text-slate-800">{profile.id.split('-')[0].toUpperCase()}</p></div>
-                  <div><p className="text-[10px] font-bold text-slate-400 uppercase">Department</p><p className="text-sm font-bold text-slate-800">{profile.department || 'Cross-Functional'}</p></div>
-                  <div><p className="text-[10px] font-bold text-slate-400 uppercase">Pay Days</p><p className="text-sm font-bold text-slate-800">{selectedSlip.daysWorked}</p></div>
-                </div>
-
-                {/* Financial Breakdown */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                  {/* Earnings Column */}
-                  <div>
-                    <h3 className="font-black text-emerald-800 border-b-2 border-emerald-100 pb-2 mb-3 uppercase tracking-wider text-sm">Earnings</h3>
-                    <div className="space-y-2.5 text-sm">
-                      <div className="flex justify-between text-slate-600"><span className="font-medium">Basic Pay</span><span className="font-bold text-slate-900">{formatINR(selectedSlip.earnings.basic)}</span></div>
-                      <div className="flex justify-between text-slate-600"><span className="font-medium">House Rent Allowance (HRA)</span><span className="font-bold text-slate-900">{formatINR(selectedSlip.earnings.hra)}</span></div>
-                      <div className="flex justify-between text-slate-600"><span className="font-medium">Leave Travel Allowance (LTA)</span><span className="font-bold text-slate-900">{formatINR(selectedSlip.earnings.lta)}</span></div>
-                      <div className="flex justify-between text-slate-600"><span className="font-medium">Special Allowance</span><span className="font-bold text-slate-900">{formatINR(selectedSlip.earnings.specialAllowance)}</span></div>
-                      <div className="flex justify-between text-slate-600"><span className="font-medium">Variable Pay / Performance</span><span className="font-bold text-indigo-600">{formatINR(selectedSlip.earnings.variablePay)}</span></div>
-                    </div>
-                    <div className="mt-4 pt-3 border-t-2 border-slate-100 flex justify-between font-black text-slate-900 bg-slate-50 p-2 rounded">
-                      <span>Total Earnings</span><span>{formatINR(selectedSlip.earnings.gross)}</span>
-                    </div>
-                  </div>
-
-                  {/* Deductions Column */}
-                  <div>
-                    <h3 className="font-black text-red-800 border-b-2 border-red-100 pb-2 mb-3 uppercase tracking-wider text-sm">Deductions</h3>
-                    <div className="space-y-2.5 text-sm">
-                      <div className="flex justify-between text-slate-600"><span className="font-medium">Provident Fund (PF)</span><span className="font-bold text-slate-900">{formatINR(selectedSlip.deductions.pf)}</span></div>
-                      <div className="flex justify-between text-slate-600"><span className="font-medium">Professional Tax (PT)</span><span className="font-bold text-slate-900">{formatINR(selectedSlip.deductions.pt)}</span></div>
-                      <div className="flex justify-between text-slate-600"><span className="font-medium">TDS (Income Tax)</span><span className="font-bold text-slate-900">{formatINR(selectedSlip.deductions.tds)}</span></div>
-                    </div>
-                    <div className="mt-4 pt-3 border-t-2 border-slate-100 flex justify-between font-black text-red-600 bg-red-50 p-2 rounded">
-                      <span>Total Deductions</span><span>{formatINR(selectedSlip.deductions.total)}</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Net Pay Footer */}
-                <div className="mt-8 bg-emerald-600 text-white rounded-xl p-6 flex flex-col md:flex-row justify-between items-center shadow-lg">
-                  <div>
-                    <p className="text-emerald-100 text-sm font-bold uppercase tracking-wider">Net Pay Credited</p>
-                    <p className="text-xs text-emerald-200 mt-0.5">Amount transferred to registered bank account.</p>
-                  </div>
-                  <h2 className="text-4xl font-black mt-2 md:mt-0">{formatINR(selectedSlip.net)}</h2>
-                </div>
-
-                <div className="mt-6 flex justify-end gap-3">
-                  <Button onClick={() => setSelectedSlip(null)} variant="outline" className="text-slate-600 border-slate-300">Close Viewer</Button>
-                  <Button onClick={() => handleDownloadCSV(selectedSlip)} className="bg-slate-900 hover:bg-slate-800 text-white"><Download className="w-4 h-4 mr-2"/> Download Corporate CSV</Button>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        )}
-
       </div>
     </DashboardLayout>
   );

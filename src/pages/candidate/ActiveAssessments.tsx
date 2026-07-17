@@ -55,7 +55,11 @@ export default function ActiveAssessments() {
         .eq("used", false)
         .order("created_at", { ascending: false });
 
-      if (tokenError) throw tokenError;
+      if (tokenError) {
+        console.warn("Assessment tokens query failed (may be RLS):", tokenError);
+        setAssessments([]);
+        return;
+      }
 
       const activeTokens = (tokens || []).filter(t =>
         !t.expires_at || new Date(t.expires_at) > new Date()

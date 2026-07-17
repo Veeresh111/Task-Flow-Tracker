@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabase";
+import { formatINR } from "@/lib/utils";
 import { 
   Loader2, BarChart3, TrendingUp, TrendingDown, Users, Target, Activity, PieChart as PieChartIcon, 
   Briefcase, Calendar, DollarSign, FileText, UserPlus, Sparkles, Cpu
@@ -186,7 +187,7 @@ export default function AdminAnalytics() {
       const compiledAnalytics = profiles.filter(p => p.employment_status !== 'terminated').map(emp => {
         const empTasks = tasks.filter(t => t.assigned_to === emp.id);
         const assignedCount = empTasks.length;
-        const completedCount = empTasks.filter(t => t.status?.toLowerCase().includes('complet')).length;
+        const completedCount = empTasks.filter(t => t.status?.toLowerCase() === 'completed').length;
         const empLogs = logs.filter(l => l.user_id === emp.id);
         const totalHrs = empLogs.reduce((acc, log) => acc + calculateHours((log.clock_in || log.created_at), log.clock_out), 0);
 
@@ -297,7 +298,7 @@ export default function AdminAnalytics() {
         monthlyPayrollCost: grossPayrollAccumulatedSum,
         attendanceRate: q1Avg > 0 ? Math.round(q1Avg) : 0,
         retentionRate: retentionPercentageValue,
-        resumesScreened: (sourcingCount + screeningCount) * 3,
+        resumesScreened: sourcingCount + screeningCount,
         newHiresMtd: hiredCount
       });
 
@@ -347,7 +348,7 @@ export default function AdminAnalytics() {
       }
 
       if (!aiSummaryText) {
-        aiSummaryText = `Executive Report generated from live company database matrices. Active total workforce is evaluated at ${totalWorkforceCount} entries, tracking a verified attrition rate index of ${calculatedAttritionRate}%. Average workforce task competency score resolves stable at ${Math.round(averagePerformanceRating)}% with a calculated gross monthly payroll budget cost load of ₹${totalPayrollCost.toLocaleString()}. No production anomalies are present.`;
+        aiSummaryText = `Executive Report generated from live company database matrices. Active total workforce is evaluated at ${totalWorkforceCount} entries, tracking a verified attrition rate index of ${calculatedAttritionRate}%. Average workforce task competency score resolves stable at ${Math.round(averagePerformanceRating)}% with a calculated gross monthly payroll budget cost load of ${formatINR(totalPayrollCost)}. No production anomalies are present.`;
       }
 
       const { data: savedReport, error } = await supabase
@@ -492,8 +493,8 @@ export default function AdminAnalytics() {
 
               <Card className="shadow-sm border-slate-200">
                 <CardContent className="p-6">
-                  <div className="flex justify-between items-start mb-2"><p className="text-sm font-semibold text-slate-600">Gross Monthly Payroll</p><DollarSign className="w-5 h-5 text-emerald-500"/></div>
-                  <h2 className="text-3xl font-black text-emerald-600 mb-1">₹ {executiveSummaryTotals.monthlyPayrollCost.toLocaleString('en-IN')}</h2>
+                  <div className="flex justify-between items-start mb-2">              <p className="text-sm font-semibold text-slate-600">Total Annual CTC</p><DollarSign className="w-5 h-5 text-emerald-500"/></div>
+                  <h2 className="text-3xl font-black text-emerald-600 mb-1">{formatINR(executiveSummaryTotals.monthlyPayrollCost)}</h2>
                   <p className="text-xs font-medium text-emerald-600 flex items-center"><TrendingUp className="w-3 h-3 mr-1"/> Reconciled Sum</p>
                 </CardContent>
               </Card>

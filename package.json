@@ -11,8 +11,10 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:ci": "npm test && npx playwright test",
     "deploy:db": "supabase db push",
-    "deploy:functions": "supabase functions deploy ats-screen grade-assessment proctor-ai ai-proxy expire-tokens respond-offer",
+    "deploy:functions": "supabase functions deploy ats-screen grade-assessment proctor-ai ai-proxy expire-tokens respond-offer auto-generate-payroll generate-payslip-pdf send-email",
     "deploy:secrets": "supabase secrets set --env-file .env.production",
     "typecheck": "tsc --noEmit"
   },

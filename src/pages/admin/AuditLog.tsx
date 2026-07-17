@@ -2,12 +2,13 @@ import { useState, useEffect } from "react";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { supabase } from "@/lib/supabase";
-import { Loader2, Search, Shield } from "lucide-react";
+import { Loader2, Search, Shield, Database } from "lucide-react";
 
 export default function AdminAuditLog() {
   useEffect(() => { document.title = "Audit Log - TaskFlow"; }, []);
   const [logs, setLogs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [tableMissing, setTableMissing] = useState(false);
   const [search, setSearch] = useState("");
   const [filterEntity, setFilterEntity] = useState("All");
   const [page, setPage] = useState(0);
@@ -47,8 +48,12 @@ export default function AdminAuditLog() {
       const { data, error } = await query;
       if (error) throw error;
       setLogs(data || []);
-    } catch (err) {
-      console.error("Failed to load audit log:", err);
+    } catch (err: any) {
+      if (err?.code === 'PGRST205' || err?.message?.includes('Could not find the table')) {
+        setTableMissing(true);
+      } else {
+        console.error("Failed to load audit log:", err);
+      }
       setLogs([]);
     } finally {
       setLoading(false);
@@ -135,10 +140,10 @@ export default function AdminAuditLog() {
               </div>
             ) : filteredLogs.length === 0 ? (
               <div className="text-center p-12">
-                <Shield className="w-12 h-12 mx-auto text-slate-300 mb-3" />
-                <p className="text-slate-500 font-medium">No audit records found</p>
+                {tableMissing ? <Database className="w-12 h-12 mx-auto text-slate-300 mb-3" /> : <Shield className="w-12 h-12 mx-auto text-slate-300 mb-3" />}
+                <p className="text-slate-500 font-medium">{tableMissing ? "Audit log table not available" : "No audit records found"}</p>
                 <p className="text-sm text-slate-400 mt-1">
-                  {search ? "Try a different search term." : "Audit records will appear as changes are made."}
+                  {tableMissing ? "Apply pending database migrations to create the audit_log table." : (search ? "Try a different search term." : "Audit records will appear as changes are made.")}
                 </p>
               </div>
             ) : (

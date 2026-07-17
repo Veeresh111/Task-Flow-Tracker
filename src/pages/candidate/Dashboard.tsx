@@ -30,73 +30,77 @@ export default function CandidateDashboard() {
 
   const fetchCandidateData = async () => {
     setLoading(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user) {
-      setUserId(user.id);
-      
-      // Determine Role
-      const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).single();
-      const currentRole = profile?.role?.toLowerCase() || 'candidate';
-      setUserRole(currentRole);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        setUserId(user.id);
+        
+        // Determine Role
+        const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).single();
+        const currentRole = profile?.role?.toLowerCase() || 'candidate';
+        setUserRole(currentRole);
 
-      // Fetch Docs based on Role (Candidate sees own, HR sees all)
-      if (currentRole === 'hr' || currentRole === 'admin') {
-        const { data: allDocs } = await supabase
-          .from('background_verifications')
-          .select('*, profiles(name)')
-          .order('uploaded_at', { ascending: false });
+        // Fetch Docs based on Role (Candidate sees own, HR sees all)
+        if (currentRole === 'hr' || currentRole === 'admin') {
+          const { data: allDocs } = await supabase
+            .from('background_verifications')
+            .select('*, profiles(name)')
+            .order('uploaded_at', { ascending: false });
 
-        if (allDocs) setAllCandidatesDocs(allDocs);
-      } else {
-        const { data: myDocs } = await supabase.from('background_verifications').select('*').eq('candidate_id', user.id);
-        if (myDocs) setBgcDocs(myDocs);
-      }
-      
-      // Fetch assessments assigned to this candidate via tokens
-      const { data: apps } = await supabase
-        .from('job_applications')
-        .select('id')
-        .eq('candidate_id', user.id);
-
-      if (apps && apps.length > 0) {
-        const appIds = apps.map(a => a.id);
-        const { data: myTokens } = await supabase
-          .from('assessment_tokens')
-          .select('assessment_id')
-          .in('application_id', appIds)
-          .not('assessment_id', 'is', null);
-
-        if (myTokens && myTokens.length > 0) {
-          const assessmentIds = [...new Set(myTokens.map(t => t.assessment_id))];
-          const { data: myAssessments } = await supabase
-            .from('assessments')
-            .select('*')
-            .in('id', assessmentIds);
-          if (myAssessments) setAssessments(myAssessments);
-        }
-      }
-
-      // Fetch offer letters for this candidate
-      const { data: myOffers } = await supabase
-        .from('offer_letters')
-        .select('*')
-        .eq('candidate_id', user.id)
-        .order('created_at', { ascending: false });
-      if (myOffers && myOffers.length > 0) {
-        const formIds = [...new Set(myOffers.map(o => o.job_form_id).filter(Boolean))];
-        if (formIds.length > 0) {
-          const { data: forms } = await supabase
-            .from('job_forms')
-            .select('id, job_title')
-            .in('id', formIds);
-          const formsMap = new Map((forms || []).map(f => [f.id, f]));
-          setOffers(myOffers.map(o => ({ ...o, job_forms: formsMap.get(o.job_form_id) || { job_title: '' } })));
+          if (allDocs) setAllCandidatesDocs(allDocs);
         } else {
-          setOffers(myOffers);
+          const { data: myDocs } = await supabase.from('background_verifications').select('*').eq('candidate_id', user.id);
+          if (myDocs) setBgcDocs(myDocs);
         }
-      } else {
-        setOffers(myOffers || []);
+        
+        // Fetch assessments assigned to this candidate via tokens
+        const { data: apps } = await supabase
+          .from('job_applications')
+          .select('id')
+          .eq('candidate_id', user.id);
+
+        if (apps && apps.length > 0) {
+          const appIds = apps.map(a => a.id);
+          const { data: myTokens } = await supabase
+            .from('assessment_tokens')
+            .select('assessment_id')
+            .in('application_id', appIds)
+            .not('assessment_id', 'is', null);
+
+          if (myTokens && myTokens.length > 0) {
+            const assessmentIds = [...new Set(myTokens.map(t => t.assessment_id))];
+            const { data: myAssessments } = await supabase
+              .from('assessments')
+              .select('*')
+              .in('id', assessmentIds);
+            if (myAssessments) setAssessments(myAssessments);
+          }
+        }
+
+        // Fetch offer letters for this candidate
+        const { data: myOffers } = await supabase
+          .from('offer_letters')
+          .select('*')
+          .eq('candidate_id', user.id)
+          .order('created_at', { ascending: false });
+        if (myOffers && myOffers.length > 0) {
+          const formIds = [...new Set(myOffers.map(o => o.job_form_id).filter(Boolean))];
+          if (formIds.length > 0) {
+            const { data: forms } = await supabase
+              .from('job_forms')
+              .select('id, job_title')
+              .in('id', formIds);
+            const formsMap = new Map((forms || []).map(f => [f.id, f]));
+            setOffers(myOffers.map(o => ({ ...o, job_forms: formsMap.get(o.job_form_id) || { job_title: '' } })));
+          } else {
+            setOffers(myOffers);
+          }
+        } else {
+          setOffers(myOffers || []);
+        }
       }
+    } catch (e) {
+      console.warn("Candidate dashboard data fetch failed:", e);
     }
     setLoading(false);
   };

@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase";
 import { callCorporateAI } from "@/lib/ai";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, DollarSign, Users, Clock, Sparkles, CheckSquare, BarChart3, CheckCircle2, AlertOctagon, Download } from "lucide-react";
+import { Loader2, Users, Clock, Sparkles, CheckSquare, BarChart3, CheckCircle2, AlertOctagon, Download } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell, Legend } from "recharts";
 
 export default function TeamLeadAIInsights() {
@@ -80,16 +80,11 @@ export default function TeamLeadAIInsights() {
         };
       });
 
-      const teamPayroll = teamMembers.length * 65000; 
-      const teamRevenue = teamPayroll * 1.8; 
-      const teamProfit = teamRevenue - teamPayroll;
-
       const posAttrs: string[] = [];
       const negAttrs: string[] = [];
 
       if (Number(tlProgress) >= 80) posAttrs.push("Exceptional Personal Execution");
       if (Number(teamProgress) >= 75) posAttrs.push("High Team Velocity & Output");
-      if (teamProfit > 0) posAttrs.push("Strong Profit Center Manager");
       if (teamPending <= teamCompleted && teamTasks.length > 0) posAttrs.push("Healthy Pipeline Management");
       if (totalTeamHours > (teamMembers.length * 40)) posAttrs.push("High Team Dedication/Engagement");
       if (daysInCompany > 365) posAttrs.push("Veteran Corporate Loyalty");
@@ -99,7 +94,6 @@ export default function TeamLeadAIInsights() {
       if (Number(teamProgress) < 50 && teamTasks.length > 0) negAttrs.push("Severe Team Productivity Lag");
       if (teamPending > teamCompleted) negAttrs.push("Critical Task Backlog Risk");
       if (teamInProgress > teamCompleted * 2) negAttrs.push("Team Context-Switching Overload");
-      if (teamProfit <= 0) negAttrs.push("Negative ROI / Cost Center Warning");
       if (totalTeamHours < (teamMembers.length * 10) && teamTasks.length > 5) negAttrs.push("Low System Compliance (Ghosting)");
 
       setMetrics({
@@ -107,7 +101,6 @@ export default function TeamLeadAIInsights() {
         team: { 
           headcount: teamMetrics?.team_size ?? teamMembers.length, 
           progress: teamProgress, 
-          profit: teamProfit,
           taskDistribution: [
             { name: 'Completed', value: teamCompleted },
             { name: 'Pending', value: teamPending },
@@ -129,7 +122,6 @@ export default function TeamLeadAIInsights() {
     try {
       const prompt = `Act as an elite AI Leadership Coach. Review this Team Lead's metrics: 
 TL Progress: ${metrics.tl.progress}% | Team Progress: ${metrics.team.progress}%.
-Team Profit: INR ${metrics.team.profit}.
 Positive Traits: ${metrics.attributes.positive.join(', ')}.
 Risk Factors: ${metrics.attributes.negative.join(', ')}.
 
@@ -154,8 +146,7 @@ Write a highly professional, 2-paragraph analysis evaluating their leadership ef
     csvContent += `Days In Company,${metrics.tl.daysInCompany}\n`;
     csvContent += `Personal Progress,${metrics.tl.progress}%\n`;
     csvContent += `Team Headcount,${metrics.team.headcount}\n`;
-    csvContent += `Team Progress,${metrics.team.progress}%\n`;
-    csvContent += `Est. Team Profit,INR ${metrics.team.profit}\n\n`;
+    csvContent += `Team Progress,${metrics.team.progress}%\n\n`;
     
     csvContent += `POSITIVE LEADERSHIP ATTRIBUTES\n`;
     metrics.attributes.positive.forEach((attr: string) => csvContent += `"${attr}"\n`);
@@ -184,12 +175,12 @@ Write a highly professional, 2-paragraph analysis evaluating their leadership ef
             <h1 className="text-3xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
               <Sparkles className="w-8 h-8 text-amber-600" /> Leadership AI Insights
             </h1>
-            <p className="text-slate-500 mt-1">Deep analytics on your team's output, positive/negative attributes, and profit.</p>
+            <p className="text-slate-500 mt-1">Deep analytics on your team's output, productivity, and performance attributes.</p>
           </div>
           <div className="flex gap-2">
             <Button onClick={generateAISummary} disabled={generatingAI} className="bg-amber-600 hover:bg-amber-700 text-white font-bold shadow-sm">
               {generatingAI ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />} 
-              Generate Leadership Summary
+              Generate Leadership Summary (AI Prediction)
             </Button>
             <Button onClick={exportReport} variant="outline" className="text-slate-700 font-bold border-slate-300 shadow-sm">
               <Download className="w-4 h-4 mr-2"/> Download Report
@@ -206,7 +197,7 @@ Write a highly professional, 2-paragraph analysis evaluating their leadership ef
           </Card>
         )}
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
           <Card className="shadow-sm border-slate-200">
             <CardContent className="p-5">
               <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 flex items-center gap-1"><Clock className="w-3 h-3"/> Total Days in Company</p>
@@ -228,12 +219,6 @@ Write a highly professional, 2-paragraph analysis evaluating their leadership ef
             </CardContent>
           </Card>
 
-          <Card className="shadow-sm border-slate-200">
-            <CardContent className="p-5">
-              <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 flex items-center gap-1"><DollarSign className="w-3 h-3"/> Est. Team Profit Gen.</p>
-              <h2 className="text-2xl font-black text-emerald-600">₹{(metrics.team.profit / 1000).toFixed(1)}K</h2>
-            </CardContent>
-          </Card>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

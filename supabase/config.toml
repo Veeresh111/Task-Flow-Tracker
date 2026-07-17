@@ -447,3 +447,25 @@ enabled = true
 verify_jwt = true
 import_map = "./functions/ats-screen/deno.json"
 entrypoint = "./functions/respond-offer/index.ts"
+
+[functions.auto-generate-payroll]
+enabled = true
+verify_jwt = false
+import_map = "./functions/ats-screen/deno.json"
+entrypoint = "./functions/auto-generate-payroll/index.ts"
+
+[cron.auto-generate-payroll]
+schedule = "0 0 1 * *"
+function = "auto-generate-payroll"
+
+[functions.generate-payslip-pdf]
+enabled = true
+verify_jwt = true
+import_map = "./functions/ats-screen/deno.json"
+entrypoint = "./functions/generate-payslip-pdf/index.ts"
+
+[functions.send-email]
+enabled = true
+verify_jwt = true
+import_map = "./functions/ats-screen/deno.json"
+entrypoint = "./functions/send-email/index.ts"

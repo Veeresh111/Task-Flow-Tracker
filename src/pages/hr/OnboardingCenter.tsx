@@ -206,7 +206,7 @@ export default function OnboardingCenter() {
       return toast({ title: "Validation Warning", description: "Please select an active Team Lead manager.", variant: "destructive" });
     }
     if (!assignedPayroll || isNaN(Number(assignedPayroll)) || Number(assignedPayroll) <= 0) {
-      return toast({ title: "Validation Warning", description: "Please enter a valid monthly basic CTC package allocation.", variant: "destructive" });
+      return toast({ title: "Validation Warning", description: "Please enter a valid Annual CTC amount.", variant: "destructive" });
     }
 
     setProcessingOnboard(true);
@@ -251,6 +251,17 @@ export default function OnboardingCenter() {
         .eq("id", selectedCandidate.id);
 
       if (profileError) throw profileError;
+
+      // Audit trail: log to salary_revision_history
+      const { data: { user: currentUser } } = await supabase.auth.getUser();
+      await supabase.from('salary_revision_history').insert({
+        employee_id: selectedCandidate.id,
+        old_salary: 0,
+        new_salary: Number(assignedPayroll),
+        revision_percentage: 100,
+        revised_by: currentUser?.id,
+        revision_reason: 'Initial salary assignment via onboarding'
+      });
 
       // Step 2: Create onboarding record with correct candidate_id FK
       const employeeCode = `EMP-${selectedCandidate.id.substring(0,6).toUpperCase()}${Date.now().toString(36).toUpperCase()}`;
@@ -299,9 +310,26 @@ export default function OnboardingCenter() {
         });
       }
 
+      // Step 7: Audit trail for candidate-to-employee transition
+      await supabase.from('payroll_audit').insert({
+        evidence_code: `ONB-${Date.now().toString(36).toUpperCase()}`,
+        entity: 'profiles',
+        entity_id: selectedCandidate.id,
+        action: 'ONBOARDED',
+        old_value: { role: 'candidate', employment_status: 'active' },
+        new_value: { role: 'employee', department: selectedDepartment, team_lead_id: selectedTeamLead, payroll_ctc: Number(assignedPayroll) },
+        performed_by: currentUser?.id,
+        reason: `Candidate ${selectedCandidate.name} onboarded as employee. Code: ${employeeCode}`
+      });
+
+      // Step 8: Update candidate_notifications to mark onboarding as read for all old notifications
+      if (candidateTableId) {
+        await supabase.from('candidate_notifications').update({ read: true }).eq('candidate_id', candidateTableId);
+      }
+
       toast({ 
         title: "Onboarding Complete", 
-        description: `${selectedCandidate.name} onboarded successfully. Employee Code: ${employeeCode}` 
+        description: `${selectedCandidate.name} onboarded successfully. Employee Code: ${employeeCode}. All notifications cleared. Audit trail recorded.` 
       });
 
       setSelectedCandidate(null);
@@ -558,11 +586,11 @@ export default function OnboardingCenter() {
                 {/* 3. Assign Remuneration Gross Volume Package Scale */}
                 <div className="space-y-1.5">
                   <label className="text-xs font-bold text-slate-600 flex items-center gap-1">
-                    <DollarSign className="w-3.5 h-3.5 text-slate-400"/> Monthly Gross Salary Allocation (INR)
+                    <DollarSign className="w-3.5 h-3.5 text-slate-400"/> Annual CTC Package (INR)
                   </label>
                   <Input 
                     type="number"
-                    placeholder="E.g. 75000"
+                    placeholder="E.g. 12,00,000"
                     value={assignedPayroll}
                     onChange={(e) => setAssignedPayroll(e.target.value)}
                     className="h-10 text-sm bg-white"

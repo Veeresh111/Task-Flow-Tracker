@@ -49,20 +49,34 @@ export default function ProctoringDashboard() {
       const candidateIds = [...new Set(attemptsData.map(a => a.candidate_id).filter(Boolean))];
       const assessmentIds = [...new Set(attemptsData.map(a => a.assessment_id).filter(Boolean))];
 
-      const [tokensRes, assessmentsRes, candidatesRes] = await Promise.all([
-        supabase.from("assessment_tokens").select("id, status, updated_at, candidate_id, assessment_id"),
-        assessmentIds.length > 0 ? supabase.from("assessments").select("id, title").in("id", assessmentIds) : Promise.resolve({ data: [] }),
-        candidateIds.length > 0 ? supabase.from("candidates").select("id, full_name, email").in("id", candidateIds) : Promise.resolve({ data: [] })
-      ]);
+      let tokensData: any[] = [];
+      try {
+        const tokensRes = await supabase.from("assessment_tokens").select("id, status, updated_at, candidate_id, assessment_id");
+        if (!tokensRes.error) tokensData = tokensRes.data || [];
+      } catch (e) { console.warn("assessment_tokens query blocked by RLS:", e); }
+      let assessmentsData: any[] = [];
+      try {
+        if (assessmentIds.length > 0) {
+          const assessmentsRes = await supabase.from("assessments").select("id, title").in("id", assessmentIds);
+          if (!assessmentsRes.error) assessmentsData = assessmentsRes.data || [];
+        }
+      } catch (e) { console.warn("assessments query failed:", e); }
+      let candidatesData: any[] = [];
+      try {
+        if (candidateIds.length > 0) {
+          const candidatesRes = await supabase.from("candidates").select("id, full_name, email").in("id", candidateIds);
+          if (!candidatesRes.error) candidatesData = candidatesRes.data || [];
+        }
+      } catch (e) { console.warn("candidates query failed:", e); }
 
       const tokensByCandidate = new Map<string, any>();
-      (tokensRes.data || []).forEach(t => {
+      tokensData.forEach(t => {
         const key = `${t.candidate_id || ""}_${t.assessment_id || ""}`;
         if (!tokensByCandidate.has(key)) tokensByCandidate.set(key, t);
       });
 
-      const assessmentsMap = new Map((assessmentsRes.data || []).map(a => [a.id, a.title]));
-      const candidatesMap = new Map((candidatesRes.data || []).map(c => [c.id, c]));
+      const assessmentsMap = new Map(assessmentsData.map(a => [a.id, a.title]));
+      const candidatesMap = new Map(candidatesData.map(c => [c.id, c]));
 
       const mapped: ProctorSession[] = attemptsData.map(a => {
         const matchKey = `${a.candidate_id || ""}_${a.assessment_id || ""}`;

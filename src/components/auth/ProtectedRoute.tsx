@@ -27,9 +27,16 @@ export function ProtectedRoute({ children, allowedRoles }: ProtectedRouteProps) 
 
       const { data: profile } = await supabase
         .from('profiles')
-        .select('role')
+        .select('role, status')
         .eq('id', user.id)
         .single();
+
+      // Block users whose access has been revoked
+      if (profile?.status === 'rejected') {
+        await supabase.auth.signOut();
+        setLoading(false);
+        return;
+      }
 
       let profileRole = profile?.role || null;
 

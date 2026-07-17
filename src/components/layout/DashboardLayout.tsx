@@ -4,9 +4,10 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabase";
 import { authService } from "@/lib/auth";
+import { useTheme } from "@/lib/theme";
 import { 
   Menu, X, LogOut, Home, Users, Briefcase, MessageSquare, 
-  AlertCircle, CheckSquare, Clock, BarChart3, Bell, Settings, UserCircle, CheckCircle, Calendar, ClipboardList, Wallet, Sparkles, Timer, FileText, UserPlus, Loader2, Mail, Inbox, FileCheck, Award, Video, Shield, ShieldCheck
+  AlertCircle, CheckSquare, Clock, BarChart3, Bell, Settings, UserCircle, CheckCircle, Calendar, ClipboardList, Wallet, Sparkles, Timer, FileText, UserPlus, Loader2, Mail, Inbox, FileCheck, Award, Video, Shield, ShieldCheck, Sun, Moon
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -32,6 +33,7 @@ const navItems: any = {
   ],
   hr: [
     { title: "HR Dashboard", href: "/hr", icon: Home },
+    { title: "User Verification", href: "/hr/user-verification", icon: ShieldCheck },
     { title: "AI Insights", href: "/hr/ai-insights", icon: Sparkles }, 
     { title: "AI ATS & Recruiting", href: "/hr/recruitment", icon: UserPlus },
     { title: "Proctoring Dashboard", href: "/hr/proctoring", icon: ShieldCheck },
@@ -111,6 +113,7 @@ function DashboardLayoutCore({ children, role }: { children: React.ReactNode; ro
   const navigate = useNavigate();
   const location = useLocation();
   const { toast } = useToast();
+  const { theme, setTheme } = useTheme();
 
   const currentRole = userProfile?.role?.toLowerCase() || role || "employee";
   const items = navItems[currentRole] || navItems.employee;
@@ -312,7 +315,7 @@ const channel = supabase.channel('global-changes')
       const taskCount = tasks?.length || 0;
       const taskList = tasks?.map(t => t.title).join(", ") || "Standard operational and structural duties";
 
-      const prompt = `Act as an elite FWC India HR Evaluation Engine. Employee: ${empName}. Hours Worked: ${hours.toFixed(2)}. Tasks Done: ${taskCount} (${taskList}). Write a 3-sentence performance review. Assign a "Competence Score" out of 100. CRITICAL INSTRUCTION: If Hours Worked is greater than 11.5 hours, you MUST severely penalize the Competence Score (drop it below 40) for 'suspicious time-theft' or 'extremely poor time management', and explicitly scold them for it in the review. No markdown.`;
+      const prompt = `Act as an elite FWC India HR Evaluation Engine. Employee: ${empName}. Hours Worked: ${hours.toFixed(2)}. Tasks Done: ${taskCount} (${taskList}). Write a 3-sentence performance review. Assign a "Competence Score" out of 100 based on task completion relative to hours worked. No markdown.`;
 
       const { data: sessionData } = await supabase.auth.getSession();
       const accessToken = sessionData?.session?.access_token;
@@ -428,12 +431,15 @@ const channel = supabase.channel('global-changes')
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex">
+    <div className="min-h-screen bg-gray-50 dark:bg-slate-900 flex">
       {sidebarOpen && <div className="fixed inset-0 z-40 bg-black/50 md:hidden" onClick={() => setSidebarOpen(false)} />}
       
       <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-[#0f172a] border-r border-slate-800 transform transition-transform md:translate-x-0 flex flex-col shadow-xl ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}`}>
         <div className="h-16 flex items-center justify-between px-6 border-b border-slate-800 bg-[#020817]">
-          <span className="text-xl font-bold text-white tracking-wider">WorkFlow</span>
+          <Link to="/" className="flex items-center gap-3 group">
+            <img src="/fwc-logo.png" alt="FWC" className="h-8 w-auto brightness-0 invert transition-all duration-300 group-hover:scale-110 group-hover:drop-shadow-[0_0_8px_rgba(99,102,241,0.5)]" />
+            <span className="text-xl font-bold text-white tracking-wider">WorkFlow</span>
+          </Link>
           <button className="md:hidden text-slate-300" onClick={() => setSidebarOpen(false)}><X className="w-5 h-5" /></button>
         </div>
         
@@ -463,13 +469,16 @@ const channel = supabase.channel('global-changes')
       </aside>
 
       <main className="flex-1 md:pl-64 flex flex-col min-h-screen relative">
-        <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-4 md:px-8 sticky top-0 z-30 shadow-sm">
+        <header className="h-16 bg-white dark:bg-slate-800 border-b border-gray-200 dark:border-slate-700 flex items-center justify-between px-4 md:px-8 sticky top-0 z-30 shadow-sm">
           <div className="flex items-center">
             <button onClick={() => setSidebarOpen(true)} className="md:hidden mr-4 text-gray-500 hover:text-gray-900"><Menu className="w-6 h-6" /></button>
-            <h2 className="text-lg font-semibold text-gray-800 hidden md:block">Welcome back, {userProfile?.name || 'User'}</h2>
+            <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-200 hidden md:block">Welcome back, {userProfile?.name || 'User'}</h2>
           </div>
           
           <div className="flex items-center gap-4">
+            <button onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} className="p-2 rounded-lg text-gray-500 hover:text-gray-900 hover:bg-gray-100 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-slate-700 transition-all" title={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}>
+              {theme === 'light' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5 text-amber-400" />}
+            </button>
             <span className="text-sm text-gray-500 font-medium hidden sm:block">{userProfile?.role?.replace('_', ' ').toUpperCase() || 'HR'}</span>
             
             {currentRole !== 'candidate' && (
@@ -488,7 +497,7 @@ const channel = supabase.channel('global-changes')
             )}
           </div>
         </header>
-        <div className="flex-1 p-4 md:p-6 lg:p-8 bg-slate-50/50">{children}</div>
+        <div className="flex-1 p-4 md:p-6 lg:p-8 bg-slate-50/50 dark:bg-slate-900/50">{children}</div>
       </main>
 
       {showDailyReport && (

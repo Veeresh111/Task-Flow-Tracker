@@ -9,8 +9,6 @@ if (!supabaseUrl || !supabaseAnonKey) {
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-export const getAdminClient = (serviceRoleKey: string) => {
-  return createClient(supabaseUrl, serviceRoleKey, {
-    auth: { persistSession: false, autoRefreshToken: false }
-  });
-};
+// NOTE: Service-role-level operations must use Edge Functions,
+// which have SUPABASE_SERVICE_ROLE_KEY injected at runtime.
+// Do NOT add an admin client here — it would expose the key to the client bundle.

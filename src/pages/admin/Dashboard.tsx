@@ -27,16 +27,17 @@ export default function AdminDashboard() {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) setUserId(user.id);
 
-      // UNIFIED METRICS: single RPC for consistent headcounts across all dashboards
       const { data: unified } = await supabase.rpc('get_enterprise_metrics');
       const metrics = unified || {};
 
-      // Fetch all core profiles dynamically (needed for charts & payroll estimation)
-      const { data, error } = await supabase.from('profiles').select('role, department, payroll_ctc, employment_status');
+      let profilesResult = await supabase.from('profiles').select('role, department, payroll_ctc, employment_status');
+      if (profilesResult.error && (profilesResult.error.code === 'PGRST202' || profilesResult.error.code === '42703' || profilesResult.error.message?.includes('payroll_ctc'))) {
+        profilesResult = await supabase.from('profiles').select('role, department');
+      }
+      const { data, error } = profilesResult;
       if (error) throw error;
       
       if (data) {
-        // 1. KPI Cards from UNIFIED METRICS (not client-side computed)
         const byRole = (metrics.by_role || []) as Array<{role: string; count: number}>;
         const findCount = (role: string) => {
           const match = byRole.find((r: any) => r.role === role);
@@ -49,7 +50,6 @@ export default function AdminDashboard() {
           admins: findCount('admin')
         });
 
-        // 2. Department Aggregation — uses actual payroll_ctc when available, falls back to role-based estimates
         const activeProfiles = data.filter((u: any) => u.employment_status !== 'terminated');
         const deptMap = new Map();
         let globalPayroll = 0;
@@ -63,15 +63,7 @@ export default function AdminDashboard() {
           const deptStats = deptMap.get(dept);
           deptStats.count += 1;
           
-          // Use actual payroll_ctc from profiles if available, otherwise estimate from role
-          let salary = Number(u.payroll_ctc) || 0;
-          if (salary === 0) {
-            const r = (u.role || '').toLowerCase();
-            salary = 65000;
-            if (r.includes('admin')) salary = 125000;
-            if (r.includes('lead') || r === 'tl') salary = 95000;
-          }
-          
+          const salary = Number(u.payroll_ctc) || 0;
           deptStats.payroll += salary;
           globalPayroll += salary;
         });
@@ -79,24 +71,24 @@ export default function AdminDashboard() {
         const chartData = Array.from(deptMap, ([name, value]) => ({
           name,
           employees: value.count,
-          payroll: Math.round(value.payroll / 1000), 
-          growth: Math.round(10 + (value.count * 3.5) + (value.payroll / 100000))
+          payroll: Math.round(value.payroll / 1000),
+          growth: value.count
         })).sort((a, b) => b.employees - a.employees);
 
         setDepartmentData(chartData);
 
-        // Payroll summary (data-driven, no fabricated multipliers)
-        const totalMonthlyPayroll = globalPayroll;
-        const estimatedAnnualPayroll = globalPayroll * 12;
+        const totalMonthlyPayroll = Math.round(globalPayroll / 12);
+        const estimatedAnnualPayroll = globalPayroll;
 
+        const knownSalaryCount = activeProfiles.filter((u: any) => Number(u.payroll_ctc) > 0).length;
         setPayrollSummary({
           totalMonthlyPayroll,
           estimatedAnnualPayroll,
-          averageSalary: activeProfiles.length > 0 ? Math.round(globalPayroll / activeProfiles.length) : 0,
+          averageSalary: knownSalaryCount > 0 ? Math.round(globalPayroll / knownSalaryCount) : 0,
           balanceSheet: [
-            { category: "Monthly Payroll Liability", present: totalMonthlyPayroll, previous: totalMonthlyPayroll * 0.9 },
-            { category: "Annual Payroll Projection", present: estimatedAnnualPayroll, previous: estimatedAnnualPayroll * 0.9 },
-            { category: "Avg Salary Per Employee", present: (activeProfiles.length > 0 ? Math.round(globalPayroll / activeProfiles.length) : 0), previous: 0 }
+            { category: "Current Monthly Payroll", present: totalMonthlyPayroll, previous: 0 },
+            { category: "Current Annual Payroll Liability", present: estimatedAnnualPayroll, previous: 0 },
+            { category: "Avg Salary Per Employee", present: (knownSalaryCount > 0 ? Math.round(globalPayroll / knownSalaryCount) : 0), previous: 0 }
           ]
         });
       }
@@ -191,7 +183,7 @@ export default function AdminDashboard() {
               <Card className="shadow-sm border-slate-200">
                 <CardHeader className="border-b bg-slate-50/50">
                   <CardTitle className="text-lg text-slate-800 flex items-center gap-2">
-                    <TrendingUp className="w-5 h-5 text-indigo-500" /> Sector Growth Index <span className="text-[10px] font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">ESTIMATED</span>
+                    <TrendingUp className="w-5 h-5 text-indigo-500" /> Headcount by Department
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="p-6 h-[320px]">
@@ -207,7 +199,7 @@ export default function AdminDashboard() {
                       <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fontSize: 11, fill: '#64748b'}} />
                       <YAxis axisLine={false} tickLine={false} tick={{fontSize: 11, fill: '#64748b'}} />
                       <RechartsTooltip contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
-                      <Area type="monotone" dataKey="growth" name="Growth Index" stroke="#6366f1" strokeWidth={3} fillOpacity={1} fill="url(#colorGrowth)" />
+                      <Area type="monotone" dataKey="growth" name="Headcount" stroke="#6366f1" strokeWidth={3} fillOpacity={1} fill="url(#colorGrowth)" />
                     </AreaChart>
                   </ResponsiveContainer>
                 </CardContent>
@@ -216,7 +208,7 @@ export default function AdminDashboard() {
               <Card className="shadow-sm border-slate-200">
                 <CardHeader className="border-b bg-slate-50/50">
                   <CardTitle className="text-lg text-slate-800 flex items-center gap-2">
-                    <DollarSign className="w-5 h-5 text-emerald-500" /> Payroll Estimations (k)
+                    <DollarSign className="w-5 h-5 text-emerald-500" /> Payroll by Department (₹k)
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="p-6 h-[320px]">
@@ -237,11 +229,11 @@ export default function AdminDashboard() {
             {payrollSummary && (
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
                 
-                {/* Balance Sheet Bar Chart */}
+                {/* Payroll Summary Card */}
                 <Card className="shadow-sm border-slate-200">
                   <CardHeader className="border-b bg-slate-50/50">
                     <CardTitle className="text-lg text-slate-800 flex items-center gap-2">
-                      <FileSpreadsheet className="w-5 h-5 text-blue-600" /> Projected Balance Sheet <span className="text-[10px] font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">ESTIMATED</span>
+                      <FileSpreadsheet className="w-5 h-5 text-blue-600" /> Payroll from Database
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="p-6 h-[340px]">
@@ -251,9 +243,7 @@ export default function AdminDashboard() {
                         <XAxis dataKey="category" axisLine={false} tickLine={false} tick={{fontSize: 12, fill: '#475569', fontWeight: 'bold'}} />
                         <YAxis axisLine={false} tickLine={false} tick={{fontSize: 11, fill: '#64748b'}} tickFormatter={formatYAxis} />
                         <RechartsTooltip cursor={{fill: '#f8fafc'}} formatter={(value: number) => `₹${value.toLocaleString()}`} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
-                        <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} />
-                        <Bar dataKey="previous" name="Previous Year" fill="#94a3b8" radius={[4, 4, 0, 0]} barSize={35} />
-                        <Bar dataKey="present" name="Present Year" fill="#3b82f6" radius={[4, 4, 0, 0]} barSize={35} />
+                        <Bar dataKey="present" name="Current Value" fill="#3b82f6" radius={[4, 4, 0, 0]} barSize={50} />
                       </BarChart>
                     </ResponsiveContainer>
                   </CardContent>
@@ -269,11 +259,11 @@ export default function AdminDashboard() {
                   <CardContent className="p-6">
                     <div className="space-y-4">
                       <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Monthly Payroll Liability</p>
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Current Monthly Payroll</p>
                         <p className="text-2xl font-black text-slate-800 mt-1">₹{payrollSummary.totalMonthlyPayroll.toLocaleString()}</p>
                       </div>
                       <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Estimated Annual Payroll</p>
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Current Annual Payroll Liability</p>
                         <p className="text-2xl font-black text-slate-800 mt-1">₹{payrollSummary.estimatedAnnualPayroll.toLocaleString()}</p>
                       </div>
                       <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">

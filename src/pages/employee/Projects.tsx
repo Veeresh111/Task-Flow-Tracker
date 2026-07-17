@@ -14,8 +14,12 @@ export default function EmployeeProjects() {
     setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
     if (user) {
-      // Fetch projects assigned to their Team Lead (or you can fetch all if company is open)
-      const { data } = await supabase.from('projects').select('*').order('created_at', { ascending: false });
+      const { data: profile } = await supabase.from('profiles').select('team_lead_id').eq('id', user.id).single();
+      const query = supabase.from('projects').select('*');
+      if (profile?.team_lead_id) {
+        query.eq('team_lead_id', profile.team_lead_id);
+      }
+      const { data } = await query.order('created_at', { ascending: false });
       if (data) setProjects(data);
     }
     setLoading(false);

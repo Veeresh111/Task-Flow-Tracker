@@ -23,7 +23,7 @@ test.describe("Enterprise Security & Identity Features", () => {
       );
       expect(hasNonCandidate).toBe(false);
     } else {
-      const candidateInfo = page.locator("text=Candidate / Applicant");
+      const candidateInfo = page.locator("text=Candidate Registration");
       await expect(candidateInfo).toBeVisible();
     }
   });
@@ -32,11 +32,11 @@ test.describe("Enterprise Security & Identity Features", () => {
     const email = `e2e-reg-${Date.now()}@test.com`;
     await page.goto("/register", { waitUntil: "networkidle", timeout: 15000 });
     await page.waitForTimeout(2000);
-    await page.fill('input[id="name"]', "Test User");
-    await page.fill('input[id="email"]', email);
-    await page.fill('input[id="phone"]', "+1 555-0000");
-    await page.fill('input[id="password"]', "TestPass123!");
-    await page.fill("input#confirmPassword", "TestPass123!");
+    await page.fill('input[placeholder="John Doe"]', "Test User");
+    await page.fill('input[placeholder="name@company.com"]', email);
+    await page.fill('input[placeholder="+1 (555) 000-0000"]', "+1 555-0000");
+    await page.fill('input[placeholder="Create a strong password"]', "TestPass123!");
+    await page.fill('input[placeholder="Confirm your password"]', "TestPass123!");
     await page.click('button[type="submit"]');
     await page.waitForTimeout(3000);
 

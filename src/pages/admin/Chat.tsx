@@ -380,6 +380,12 @@ export default function UniversalSmartChat() {
 
   const deleteMessage = async (messageId: string) => {
     try {
+      const msg = messages.find(m => m.id === messageId);
+      if (!msg) return;
+      if (msg.sender_id !== userId) {
+        toast({ title: "Access Denied", description: "You can only delete your own messages.", variant: "destructive" });
+        return;
+      }
       const { error } = await supabase.from('messages').delete().eq('id', messageId);
       if (error) throw error;
       setMessages(prev => prev.filter(msg => msg.id !== messageId));

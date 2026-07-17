@@ -5,8 +5,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { supabase } from "@/lib/supabase";
-import { Loader2, Inbox, Eye, Calendar, Sparkles, BrainCircuit, ExternalLink, Search, Filter, CheckCircle2, FileText, RefreshCw, XCircle, DollarSign, PieChart, Award } from "lucide-react";
+import { Loader2, Inbox, Eye, Calendar, Sparkles, BrainCircuit, ExternalLink, Search, Filter, CheckCircle2, FileText, RefreshCw, XCircle, DollarSign, PieChart, Award, UserPlus, MessageSquare, BadgeCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { JobApplication, Assessment, JobForm } from "@/types";
 
@@ -24,6 +25,8 @@ export default function ApplicationHub() {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterJob, setFilterJob] = useState("All");
   const [filterStatus, setFilterStatus] = useState("All");
+  const [filterScoreRange, setFilterScoreRange] = useState("All");
+  const [filterRecruiter, setFilterRecruiter] = useState("All");
   const [page, setPage] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
   const PAGE_SIZE = 50;
@@ -33,11 +36,25 @@ export default function ApplicationHub() {
   const [availableAssessments, setAvailableAssessments] = useState<Assessment[]>([]);
   const [selectedAssessmentId, setSelectedAssessmentId] = useState<string>("");
 
+  // HR Recruiter Assignment
+  const [hrUsers, setHrUsers] = useState<any[]>([]);
+  const [assigningRecruiter, setAssigningRecruiter] = useState<string | null>(null);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+
   const { toast } = useToast();
 
   useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => {
+      if (data?.user) setCurrentUserId(data.user.id);
+    });
+    fetchHRUsers();
     fetchApplications();
   }, [page]);
+
+  const fetchHRUsers = async () => {
+    const { data } = await supabase.from("profiles").select("id, name, email").in("role", ["hr", "admin"]);
+    setHrUsers(data || []);
+  };
 
   useEffect(() => {
     fetchLivePayrollMetrics();
@@ -74,9 +91,21 @@ export default function ApplicationHub() {
         const globalSum = data.reduce((acc, row) => acc + Number(row.net_payroll_pay || 0), 0);
         setTotalPayrollExpenditure(globalSum);
         setAverageEmployeeComp(parseFloat((globalSum / data.length).toFixed(2)));
+        return;
       }
     } catch (e) {
       console.warn("Payroll metrics fallback:", e);
+    }
+    try {
+      const { data: profiles } = await supabase.from('profiles').select('payroll_ctc').not('role', 'eq', 'candidate');
+      if (profiles && profiles.length > 0) {
+        const knownSalaries = profiles.filter(p => Number(p.payroll_ctc) > 0);
+        const totalCtc = knownSalaries.reduce((acc, p) => acc + Number(p.payroll_ctc), 0);
+        setTotalPayrollExpenditure(totalCtc);
+        setAverageEmployeeComp(knownSalaries.length > 0 ? parseFloat((totalCtc / knownSalaries.length).toFixed(2)) : 0);
+      }
+    } catch (e2) {
+      console.warn("Payroll calc fallback:", e2);
     }
   };
 
@@ -327,11 +356,18 @@ export default function ApplicationHub() {
   const uniqueStatuses = ["All", "Applied", "Screening", "Shortlisted", "ATS Shortlisted", "Recruiter Screening", "Assessment Assigned", "Assessment Passed", "Assessment Completed", "Interview Scheduled", "Interview Cleared", "Offer Generated", "Offer Accepted", "Offer Declined", "Onboarding", "Rejected"];
 
   const filteredApplications = applications.filter(app => {
-    const searchMatch = (app.candidate_name?.toLowerCase() || "").includes(searchQuery.toLowerCase()) ||
-                        (app.candidate_email?.toLowerCase() || "").includes(searchQuery.toLowerCase());
+    const searchMatch = !searchQuery ||
+      (app.candidate_name?.toLowerCase() || "").includes(searchQuery.toLowerCase()) ||
+      (app.candidate_email?.toLowerCase() || "").includes(searchQuery.toLowerCase());
     const jobMatch = filterJob === "All" || app.job_forms?.job_title === filterJob;
     const statusMatch = filterStatus === "All" || app.status === filterStatus;
-    return searchMatch && jobMatch && statusMatch;
+    const scoreMatch = filterScoreRange === "All" ||
+      (filterScoreRange === "75-100" && (app.match_score || 0) >= 75) ||
+      (filterScoreRange === "50-74" && (app.match_score || 0) >= 50 && (app.match_score || 0) < 75) ||
+      (filterScoreRange === "0-49" && (app.match_score || 0) < 50) ||
+      (filterScoreRange === "unscored" && app.match_score == null);
+    const recruiterMatch = filterRecruiter === "All" || app.assigned_recruiter === filterRecruiter;
+    return searchMatch && jobMatch && statusMatch && scoreMatch && recruiterMatch;
   });
 
   return (
@@ -375,27 +411,51 @@ export default function ApplicationHub() {
 
         <div className="grid lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-4">
-            {/* Search & Filters */}
-            <div className="bg-white p-4 rounded-xl shadow-sm border flex flex-col sm:flex-row gap-4">
+            {/* Smart Search & Filters */}
+            <div className="bg-white p-4 rounded-xl shadow-sm border flex flex-col gap-3">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
-                <Input placeholder="Search applicant names or email strings..." className="pl-10 h-10 text-sm" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
+                <Input placeholder="Smart Search: name, email, position..." className="pl-10 h-10 text-sm" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
               </div>
-              <div className="flex gap-2 sm:w-[400px]">
+              <div className="flex flex-wrap gap-2">
                 <Select value={filterJob} onValueChange={setFilterJob}>
-                  <SelectTrigger className="w-full text-xs h-10 font-medium">
-                    <SelectValue placeholder="Position Filter" />
+                  <SelectTrigger className="w-40 text-xs h-9 font-medium">
+                    <SelectValue placeholder="Position" />
                   </SelectTrigger>
                   <SelectContent>
                     {uniqueJobs.map(job => <SelectItem key={job} value={job}>{job}</SelectItem>)}
                   </SelectContent>
                 </Select>
                 <Select value={filterStatus} onValueChange={setFilterStatus}>
-                  <SelectTrigger className="w-full text-xs h-10 font-medium">
-                    <SelectValue placeholder="Status Filter" />
+                  <SelectTrigger className="w-36 text-xs h-9 font-medium">
+                    <SelectValue placeholder="Status" />
                   </SelectTrigger>
                   <SelectContent>
                     {uniqueStatuses.map(st => <SelectItem key={st} value={st}>{st}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <Select value={filterScoreRange} onValueChange={setFilterScoreRange}>
+                  <SelectTrigger className="w-32 text-xs h-9 font-medium">
+                    <SelectValue placeholder="ATS Score" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="All">All Scores</SelectItem>
+                    <SelectItem value="75-100">75-100% (Shortlisted)</SelectItem>
+                    <SelectItem value="50-74">50-74% (Marginal)</SelectItem>
+                    <SelectItem value="0-49">0-49% (Low)</SelectItem>
+                    <SelectItem value="unscored">Not Scanned</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Select value={filterRecruiter} onValueChange={setFilterRecruiter}>
+                  <SelectTrigger className="w-36 text-xs h-9 font-medium">
+                    <SelectValue placeholder="Assigned To" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="All">All Recruiters</SelectItem>
+                    <SelectItem value="unassigned">Unassigned</SelectItem>
+                    {hrUsers.map(hr => (
+                      <SelectItem key={hr.id} value={hr.id}>{hr.name}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -524,6 +584,40 @@ export default function ApplicationHub() {
                       </div>
                     </div>
                   )}
+
+                  {/* HR Recruiter Assignment Section */}
+                  <div className="border-t pt-4">
+                    <h4 className="text-xs font-black uppercase tracking-widest text-slate-400 mb-3">ASSIGN HR HANDLER</h4>
+                    <Select
+                      value={selectedApp.assigned_recruiter || ""}
+                      onValueChange={async (recruiterId) => {
+                        setAssigningRecruiter(selectedApp.id);
+                        try {
+                          await supabase.from("job_applications").update({ assigned_recruiter: recruiterId }).eq("id", selectedApp.id);
+                          toast({ title: "HR Assigned", description: "Recruiter assigned to this application." });
+                          fetchApplications();
+                        } catch (err: any) {
+                          toast({ title: "Assignment Failed", description: err.message, variant: "destructive" });
+                        } finally {
+                          setAssigningRecruiter(null);
+                        }
+                      }}
+                    >
+                      <SelectTrigger className="mb-3" disabled={assigningRecruiter === selectedApp.id}>
+                        <SelectValue placeholder={selectedApp.assigned_recruiter ? "Change Handler" : "Assign HR Handler"} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {hrUsers.map(hr => (
+                          <SelectItem key={hr.id} value={hr.id}>{hr.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {selectedApp.assigned_recruiter && (
+                      <p className="text-[10px] text-emerald-600 font-bold mb-3 flex items-center gap-1">
+                        <BadgeCheck className="w-3 h-3" /> Assigned to {hrUsers.find(h => h.id === selectedApp.assigned_recruiter)?.name || "Unknown"}
+                      </p>
+                    )}
+                  </div>
 
                   {/* Assessment Assignment Section */}
                   <div className="border-t pt-5">

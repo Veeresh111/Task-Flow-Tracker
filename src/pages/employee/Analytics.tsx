@@ -48,7 +48,7 @@ export default function EmployeeAnalytics() {
     };
 
     const assignedCount = tasks.length;
-    const completedCount = tasks.filter(t => t.status?.toLowerCase().includes('complet')).length;
+    const completedCount = tasks.filter(t => t.status?.toLowerCase() === 'completed').length;
     const pendingCount = assignedCount - completedCount;
     const totalHrs = logs.reduce((acc, log) => acc + calculateHours((log.clock_in || log.created_at), log.clock_out), 0);
     const completionRate = assignedCount > 0 ? (completedCount / assignedCount) * 100 : 0;

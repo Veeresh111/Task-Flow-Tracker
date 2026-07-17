@@ -151,6 +151,9 @@ export default function UniversalSmartChat() {
   };
 
   const deleteMessage = async (messageId: string) => {
+    const msg = messages.find(m => m.id === messageId);
+    if (!msg) return;
+    if (msg.sender_id !== userId) return;
     await supabase.from('messages').delete().eq('id', messageId);
   };
 

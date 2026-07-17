@@ -3,14 +3,15 @@ import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/lib/supabase";
 import { callCorporateAI } from "@/lib/ai";
-import { Loader2, Users, Wallet, AlertTriangle, UserCheck, Sparkles, TrendingDown, HeartPulse, DollarSign, Target } from "lucide-react";
+import { Loader2, Users, Wallet, AlertTriangle, UserCheck, Sparkles, TrendingDown, HeartPulse, DollarSign, Target, Shield } from "lucide-react";
 import { CareerPredictor } from "@/components/dashboard/CareerPredictor";
 
 export default function HRDashboard() {
   useEffect(() => { document.title = "HR Dashboard - TaskFlow"; }, []);
-  const [stats, setStats] = useState({ totalEmployees: 0, openComplaints: 0, pendingLeaves: 0, candidatesInPipeline: 0, interviewsThisWeek: 0, pendingOffers: 0, newHiresThisMonth: 0 });
+  const [stats, setStats] = useState({ totalEmployees: 0, openComplaints: 0, pendingLeaves: 0, candidatesInPipeline: 0, interviewsThisWeek: 0, pendingOffers: 0, newHiresThisMonth: 0, pendingApprovals: 0 });
   const [employees, setEmployees] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
@@ -56,6 +57,13 @@ export default function HRDashboard() {
     const pipelineCount = (allApps || []).filter(a => pipelineStatuses.includes(a.status)).length;
     const offerCount = (allApps || []).filter(a => a.status === 'Offer Generated' || a.status === 'Offer Accepted').length;
 
+    // Fetch pending user verifications (new registrations without applications)
+    const { count: pendingVerifications } = await supabase
+      .from('profiles')
+      .select('*', { count: 'exact', head: true })
+      .eq('status', 'pending_activation');
+    setStats(prev => ({ ...prev, pendingApprovals: pendingVerifications || 0 }));
+
     const now = new Date();
     const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const { data: weekSessions } = await supabase
@@ -71,12 +79,18 @@ export default function HRDashboard() {
       .gte('created_at', monthStart);
     const hiresCount = monthHires?.length || 0;
 
+    const { count: pendingCount } = await supabase
+      .from('profiles')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'pending_activation') as any;
+
     setStats(prev => ({
       ...prev,
       candidatesInPipeline: pipelineCount,
       interviewsThisWeek: interviewCount,
       pendingOffers: offerCount,
-      newHiresThisMonth: hiresCount
+      newHiresThisMonth: hiresCount,
+      pendingApprovals: pendingCount || 0
     }));
     setLoading(false);
   };
@@ -135,48 +149,72 @@ export default function HRDashboard() {
   return (
     <DashboardLayout role="hr">
       <div className="max-w-7xl mx-auto space-y-6 animate-fade-in pb-12">
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-          <h1 className="text-3xl font-bold text-slate-900">HR Command Center</h1>
-          <p className="text-slate-500 mt-1">Core HRMS Management & AI Predictive Analytics</p>
+        <div className="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700">
+          <h1 className="text-3xl font-bold text-slate-900 dark:text-white">HR Command Center</h1>
+          <p className="text-slate-500 dark:text-slate-400 mt-1">Core HRMS Management & AI Predictive Analytics</p>
         </div>
 
         {/* CORE HRMS KPIs */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <Card className="shadow-sm border-b-4 border-b-blue-500"><CardContent className="p-5">
-            <p className="text-xs font-bold text-slate-500 uppercase flex items-center gap-1"><Users className="w-3 h-3"/> Headcount</p>
-            <h2 className="text-2xl font-black text-slate-800">{stats.totalEmployees}</h2>
+          <Card className="shadow-sm border-b-4 border-b-blue-500 dark:bg-slate-800"><CardContent className="p-5">
+            <p className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase flex items-center gap-1"><Users className="w-3 h-3"/> Headcount</p>
+            <h2 className="text-2xl font-black text-slate-800 dark:text-white">{stats.totalEmployees}</h2>
           </CardContent></Card>
-          <Card className="shadow-sm border-b-4 border-b-emerald-500"><CardContent className="p-5">
-            <p className="text-xs font-bold text-slate-500 uppercase flex items-center gap-1"><Wallet className="w-3 h-3"/> Est. Payroll</p>
-            <h2 className="text-2xl font-black text-emerald-600">₹{(() => { const sum = employees.filter((e: any) => e.employment_status !== 'terminated').reduce((acc: number, e: any) => acc + (Number(e.payroll_ctc) || 65000), 0); return (sum / 100000).toFixed(1); })()}L</h2>
+          <Card className="shadow-sm border-b-4 border-b-emerald-500 dark:bg-slate-800"><CardContent className="p-5">
+            <p className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase flex items-center gap-1"><Wallet className="w-3 h-3"/> Est. Payroll</p>
+            <h2 className="text-2xl font-black text-emerald-600">₹{(() => { let sum = 0; let missing = 0; employees.filter((e: any) => e.employment_status !== 'terminated').forEach((e: any) => { const sal = Number(e.payroll_ctc); if (sal > 0) { sum += sal; } else { missing++; } }); const display = (sum / 100000).toFixed(1) + 'L'; return display + (missing > 0 ? ` (${missing} unassigned)` : ''); })()}</h2>
           </CardContent></Card>
-          <Card className="shadow-sm border-b-4 border-b-amber-500"><CardContent className="p-5">
-            <p className="text-xs font-bold text-slate-500 uppercase flex items-center gap-1"><AlertTriangle className="w-3 h-3"/> Ethics Cases</p>
+          <Card className="shadow-sm border-b-4 border-b-amber-500 dark:bg-slate-800"><CardContent className="p-5">
+            <p className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase flex items-center gap-1"><AlertTriangle className="w-3 h-3"/> Ethics Cases</p>
             <h2 className="text-2xl font-black text-amber-600">{stats.openComplaints}</h2>
           </CardContent></Card>
-          <Card className="shadow-sm border-b-4 border-b-indigo-500"><CardContent className="p-5">
-            <p className="text-xs font-bold text-slate-500 uppercase flex items-center gap-1"><UserCheck className="w-3 h-3"/> Leaves Queue</p>
+          <Card className="shadow-sm border-b-4 border-b-indigo-500 dark:bg-slate-800"><CardContent className="p-5">
+            <p className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase flex items-center gap-1"><UserCheck className="w-3 h-3"/> Leaves Queue</p>
             <h2 className="text-2xl font-black text-indigo-600">{stats.pendingLeaves}</h2>
           </CardContent></Card>
         </div>
 
+        {/* USER VERIFICATION & PENDING APPROVALS */}
+        {stats.pendingApprovals > 0 && (
+          <a href="/hr/user-verification" className="block group">
+            <Card className="shadow-sm border-l-4 border-l-indigo-500 bg-gradient-to-r from-indigo-50 to-white hover:from-indigo-100 hover:to-indigo-50 dark:from-indigo-950/30 dark:to-slate-900 dark:hover:from-indigo-900/40 dark:hover:to-slate-800 transition-all cursor-pointer">
+              <CardContent className="p-4 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-indigo-100 dark:bg-indigo-900/50 rounded-full group-hover:bg-indigo-200 dark:group-hover:bg-indigo-800/50 transition-colors">
+                    <Shield className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+                  </div>
+                  <div>
+                    <p className="font-bold text-indigo-900 dark:text-indigo-200 text-sm">Pending User Verifications</p>
+                    <p className="text-xs text-indigo-600/70 dark:text-indigo-400/70 mt-0.5">
+                      {stats.pendingApprovals} user{stats.pendingApprovals !== 1 ? "s" : ""} need classification — click to verify
+                    </p>
+                  </div>
+                </div>
+                <Badge className="bg-indigo-600 text-white text-xs font-bold px-3 py-1.5 group-hover:bg-indigo-700 transition-colors">
+                  {stats.pendingApprovals} Pending
+                </Badge>
+              </CardContent>
+            </Card>
+          </a>
+        )}
+
         {/* RECRUITMENT PIPELINE METRICS */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <Card className="shadow-sm border-b-4 border-b-cyan-500"><CardContent className="p-5">
-            <p className="text-xs font-bold text-slate-500 uppercase flex items-center gap-1"><Users className="w-3 h-3"/> Pipeline Active</p>
-            <h2 className="text-2xl font-black text-cyan-700">{stats.candidatesInPipeline}</h2>
+          <Card className="shadow-sm border-b-4 border-b-cyan-500 dark:bg-slate-800"><CardContent className="p-5">
+            <p className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase flex items-center gap-1"><Users className="w-3 h-3"/> Pipeline Active</p>
+            <h2 className="text-2xl font-black text-cyan-700 dark:text-cyan-400">{stats.candidatesInPipeline}</h2>
           </CardContent></Card>
-          <Card className="shadow-sm border-b-4 border-b-violet-500"><CardContent className="p-5">
-            <p className="text-xs font-bold text-slate-500 uppercase flex items-center gap-1"><UserCheck className="w-3 h-3"/> Interviews (Week)</p>
-            <h2 className="text-2xl font-black text-violet-700">{stats.interviewsThisWeek}</h2>
+          <Card className="shadow-sm border-b-4 border-b-violet-500 dark:bg-slate-800"><CardContent className="p-5">
+            <p className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase flex items-center gap-1"><UserCheck className="w-3 h-3"/> Interviews (Week)</p>
+            <h2 className="text-2xl font-black text-violet-700 dark:text-violet-400">{stats.interviewsThisWeek}</h2>
           </CardContent></Card>
-          <Card className="shadow-sm border-b-4 border-b-orange-500"><CardContent className="p-5">
-            <p className="text-xs font-bold text-slate-500 uppercase flex items-center gap-1"><Target className="w-3 h-3"/> Pending Offers</p>
-            <h2 className="text-2xl font-black text-orange-700">{stats.pendingOffers}</h2>
+          <Card className="shadow-sm border-b-4 border-b-orange-500 dark:bg-slate-800"><CardContent className="p-5">
+            <p className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase flex items-center gap-1"><Target className="w-3 h-3"/> Pending Offers</p>
+            <h2 className="text-2xl font-black text-orange-700 dark:text-orange-400">{stats.pendingOffers}</h2>
           </CardContent></Card>
-          <Card className="shadow-sm border-b-4 border-b-emerald-500"><CardContent className="p-5">
-            <p className="text-xs font-bold text-slate-500 uppercase flex items-center gap-1"><Sparkles className="w-3 h-3"/> New Hires (Month)</p>
-            <h2 className="text-2xl font-black text-emerald-700">{stats.newHiresThisMonth}</h2>
+          <Card className="shadow-sm border-b-4 border-b-emerald-500 dark:bg-slate-800"><CardContent className="p-5">
+            <p className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase flex items-center gap-1"><Sparkles className="w-3 h-3"/> New Hires (Month)</p>
+            <h2 className="text-2xl font-black text-emerald-700 dark:text-emerald-400">{stats.newHiresThisMonth}</h2>
           </CardContent></Card>
         </div>
 
@@ -192,9 +230,9 @@ export default function HRDashboard() {
                 {employees.map(e => <option key={e.id} value={e.id}>{e.name} ({e.department})</option>)}
               </select>
               <Button onClick={analyzeFlightRisk} disabled={!selectedEmp || aiLoading === 'flight'} className="w-full bg-red-600 hover:bg-red-700 text-white font-bold">
-                {aiLoading === 'flight' ? <Loader2 className="w-4 h-4 animate-spin"/> : <Sparkles className="w-4 h-4 mr-2"/>} Predict Attrition Risk
+                {aiLoading === 'flight' ? <Loader2 className="w-4 h-4 animate-spin"/> : <Sparkles className="w-4 h-4 mr-2"/>} Predict Attrition Risk (AI Prediction)
               </Button>
-              {flightRiskScore && <div className="p-3 bg-white border border-red-200 rounded text-sm text-slate-700 whitespace-pre-wrap">{flightRiskScore}</div>}
+              {flightRiskScore && <div className="p-3 bg-white border border-red-200 rounded text-sm text-slate-700 whitespace-pre-wrap"><span className="text-[10px] font-bold text-red-500 uppercase tracking-wider block mb-1">AI Prediction</span>{flightRiskScore}</div>}
             </CardContent>
           </Card>
 
@@ -206,9 +244,9 @@ export default function HRDashboard() {
             <CardContent className="p-5 space-y-4 flex flex-col justify-between">
               <p className="text-sm text-slate-500">Scans all employee ethics complaints to calculate company morale.</p>
               <Button onClick={analyzeSentiment} disabled={aiLoading === 'sentiment'} className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold">
-                {aiLoading === 'sentiment' ? <Loader2 className="w-4 h-4 animate-spin"/> : <Sparkles className="w-4 h-4 mr-2"/>} Scan Company Morale
+                {aiLoading === 'sentiment' ? <Loader2 className="w-4 h-4 animate-spin"/> : <Sparkles className="w-4 h-4 mr-2"/>} Scan Company Morale (AI Prediction)
               </Button>
-              {orgSentiment && <div className="p-3 bg-white border border-purple-200 rounded text-sm text-slate-700 whitespace-pre-wrap">{orgSentiment}</div>}
+              {orgSentiment && <div className="p-3 bg-white border border-purple-200 rounded text-sm text-slate-700 whitespace-pre-wrap"><span className="text-[10px] font-bold text-purple-500 uppercase tracking-wider block mb-1">AI Prediction</span>{orgSentiment}</div>}
             </CardContent>
           </Card>
 
@@ -220,9 +258,9 @@ export default function HRDashboard() {
             <CardContent className="p-5 space-y-4">
               <Input placeholder="E.g., Senior React Developer" value={compRole} onChange={e=>setCompRole(e.target.value)} />
               <Button onClick={benchmarkComp} disabled={!compRole || aiLoading === 'comp'} className="w-full bg-emerald-600 text-white font-bold">
-                {aiLoading === 'comp' ? <Loader2 className="w-4 h-4 animate-spin"/> : <Sparkles className="w-4 h-4 mr-2"/>} Get Salary Bands
+                {aiLoading === 'comp' ? <Loader2 className="w-4 h-4 animate-spin"/> : <Sparkles className="w-4 h-4 mr-2"/>} Get Salary Bands (AI Estimate)
               </Button>
-              {compResult && <div className="p-3 bg-emerald-50 border border-emerald-200 rounded text-sm text-slate-700 whitespace-pre-wrap">{compResult}</div>}
+              {compResult && <div className="p-3 bg-emerald-50 border border-emerald-200 rounded text-sm text-slate-700 whitespace-pre-wrap"><span className="text-[10px] font-bold text-emerald-500 uppercase tracking-wider block mb-1">AI Estimate (No Company Data)</span>{compResult}</div>}
             </CardContent>
           </Card>
 
@@ -234,9 +272,9 @@ export default function HRDashboard() {
             <CardContent className="p-5 space-y-4">
               <Input placeholder="E.g., Marketing Manager" value={onboardRole} onChange={e=>setOnboardRole(e.target.value)} />
               <Button onClick={generateOnboarding} disabled={!onboardRole || aiLoading === 'onboard'} className="w-full bg-blue-600 text-white font-bold">
-                {aiLoading === 'onboard' ? <Loader2 className="w-4 h-4 animate-spin"/> : <Sparkles className="w-4 h-4 mr-2"/>} Generate 30-Day Plan
+                {aiLoading === 'onboard' ? <Loader2 className="w-4 h-4 animate-spin"/> : <Sparkles className="w-4 h-4 mr-2"/>} Generate 30-Day Plan (AI-generated)
               </Button>
-              {onboardResult && <div className="p-3 bg-blue-50 border border-blue-200 rounded text-sm text-slate-700 whitespace-pre-wrap">{onboardResult}</div>}
+              {onboardResult && <div className="p-3 bg-blue-50 border border-blue-200 rounded text-sm text-slate-700 whitespace-pre-wrap"><span className="text-[10px] font-bold text-blue-500 uppercase tracking-wider block mb-1">AI-generated Plan</span>{onboardResult}</div>}
             </CardContent>
           </Card>
         </div>

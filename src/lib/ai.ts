@@ -36,7 +36,12 @@ export const callCorporateAI = async (opts: AIOptions): Promise<string> => {
         throw new Error(data.error?.message || "AI proxy rejected the request.");
       }
 
-      return data.content;
+      const raw = data.content;
+      const cleaned = raw
+        .replace(/<think>[\s\S]*?<\/think>/gi, "")
+        .replace(/<thinking>[\s\S]*?<\/thinking>/gi, "")
+        .trim();
+      return cleaned;
     } catch (error: any) {
       attempt++;
       const msg = error.message || error.toString();

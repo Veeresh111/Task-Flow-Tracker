@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
+import { formatINR } from "@/lib/utils";
 import { Search, UserCheck, Star, Calendar, Shield, Cpu, Loader2, Mail, Briefcase, DollarSign, ListTodo, Award, TrendingUp, AlertTriangle } from "lucide-react";
 import { callCorporateAI } from "@/lib/ai";
 import { useToast } from "@/hooks/use-toast";
@@ -97,13 +98,13 @@ export default function MasterDirectory() {
       
       // Calculate data benchmarks based on active database arrays
       const taskCompletionRatio = totalTasksCount > 0 ? Math.round((completedTasksCount / totalTasksCount) * 100) : 0;
-      const staticAttendanceScore = 92; // Default baseline benchmark derived from system architecture
+      const attendanceScore = analyticsData?.attendance_score ?? taskCompletionRatio;
 
       const prompt = `Act as an elite corporate predictive HR algorithm. Analyze these performance values:
 Name: ${profile.name}
 Department: ${profile.department}
 Task Completion Rate: ${taskCompletionRatio}%
-Attendance Baseline: ${staticAttendanceScore}%
+${analyticsData?.attendance_score != null ? `Attendance Baseline: ${attendanceScore}%` : ''}
 
 Calculate corporate metrics out of 100 and compile an object format matching these exact JSON keys:
 {
@@ -142,7 +143,7 @@ Do not wrap the output in markdown block headers or backticks.`;
         .insert([
           {
             employee_id: profile.id,
-            attendance_score: staticAttendanceScore,
+            attendance_score: attendanceScore,
             productivity_score: Number(parsedAIOutput.productivity_score) || 80,
             task_completion_score: taskCompletionRatio,
             ai_performance_score: Number(parsedAIOutput.ai_performance_score) || taskCompletionRatio,
@@ -339,7 +340,7 @@ Do not wrap the output in markdown block headers or backticks.`;
                   </div>
                   <div className="p-3 bg-slate-50 border rounded-lg space-y-0.5">
                     <p className="text-slate-400 font-bold text-[10px] uppercase flex items-center gap-1"><DollarSign className="w-3.5 h-3.5"/> Monthly CTC Salary</p>
-                    <p className="font-bold text-slate-800">₹ {Number(selectedProfile.payroll_ctc || 0).toLocaleString('en-IN')}</p>
+                    <p className="font-bold text-slate-800">{selectedProfile.payroll_ctc && Number(selectedProfile.payroll_ctc) > 0 ? formatINR(Number(selectedProfile.payroll_ctc)) : <span className="text-slate-400 italic">Not Set</span>}</p>
                   </div>
                 </div>
               </div>

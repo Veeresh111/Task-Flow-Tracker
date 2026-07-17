@@ -87,12 +87,16 @@ export default function EmployeeWorkLogs() {
       if (error) throw error;
 
       if (profile?.team_lead_id) {
-        await supabase.from('notifications').insert([{
-          user_id: profile.team_lead_id,
-          title: "New EOD Update",
-          message: `${profile.name} has submitted their Daily Stand-up Report.`,
-          is_read: false
-        }]);
+        try {
+          await supabase.from('notifications').insert([{
+            user_id: profile.team_lead_id,
+            title: "New EOD Update",
+            message: `${profile.name} has submitted their Daily Stand-up Report.`,
+            is_read: false
+          }]);
+        } catch (notifErr) {
+          console.warn("Notification insert blocked by RLS:", notifErr);
+        }
       }
 
       toast({ title: "Update Submitted!", description: "Your professional stand-up report has been saved permanently to your records and routed to your Team Lead." });

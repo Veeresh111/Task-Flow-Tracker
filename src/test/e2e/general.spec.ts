@@ -2,10 +2,12 @@ import { test, expect } from "@playwright/test";
 import { navigateAndCapture, setupCapture, checkBlankPage } from "./helpers";
 
 test.describe("General Application Diagnostics", () => {
-  test("Root redirects to /login", async ({ page }) => {
+  test("Root loads Landing page (welcome screen)", async ({ page }) => {
     const result = await navigateAndCapture(page, "/");
-    expect(page.url()).toContain("/login");
+    expect(new URL(page.url()).pathname).toBe("/");
     expect(result.blankPage).toBe(false);
+    const content = await page.locator("body").innerText();
+    expect(content).toMatch(/Future[\s\S]*Worthy[\s\S]*Consulting/);
   });
 
   test("Unknown route redirects to /login", async ({ page }) => {

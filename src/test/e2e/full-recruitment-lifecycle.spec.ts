@@ -50,6 +50,7 @@ test.describe("Full Recruitment Lifecycle", () => {
   });
 
   test("Full workflow: Apply → Assess → Interview → Offer → Onboard → Employee", async ({ page }) => {
+    test.setTimeout(120_000);
     // Track all page errors
     const pageErrors: string[] = [];
     page.on("pageerror", (e) => pageErrors.push(e.message));

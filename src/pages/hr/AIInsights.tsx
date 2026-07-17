@@ -52,21 +52,21 @@ export default function HRAIInsights() {
             <CardContent className="p-6 flex flex-col items-center text-center space-y-3">
               <div className="p-3 bg-red-100 text-red-600 rounded-full"><TrendingUp className="w-6 h-6"/></div>
               <h3 className="font-bold text-slate-800">Predictive Attrition</h3>
-              <p className="text-xs text-slate-500">Analyze flight risks and generate retention strategies.</p>
+              <p className="text-xs text-slate-500">AI Prediction — Analyze flight risks and generate retention strategies.</p>
             </CardContent>
           </Card>
           <Card className="hover:shadow-md transition-all cursor-pointer border-slate-200" onClick={() => generateInsight('hiring')}>
             <CardContent className="p-6 flex flex-col items-center text-center space-y-3">
               <div className="p-3 bg-blue-100 text-blue-600 rounded-full"><Target className="w-6 h-6"/></div>
               <h3 className="font-bold text-slate-800">Acquisition Velocity</h3>
-              <p className="text-xs text-slate-500">Optimize pipeline to reduce Time-To-Hire metrics.</p>
+              <p className="text-xs text-slate-500">AI Recommendation — Optimize pipeline to reduce Time-To-Hire metrics.</p>
             </CardContent>
           </Card>
           <Card className="hover:shadow-md transition-all cursor-pointer border-slate-200" onClick={() => generateInsight('diversity')}>
             <CardContent className="p-6 flex flex-col items-center text-center space-y-3">
               <div className="p-3 bg-purple-100 text-purple-600 rounded-full"><Users className="w-6 h-6"/></div>
               <h3 className="font-bold text-slate-800">DEI Matrix</h3>
-              <p className="text-xs text-slate-500">Evaluate and improve leadership diversity metrics.</p>
+              <p className="text-xs text-slate-500">AI Prediction — Evaluate and improve leadership diversity metrics.</p>
             </CardContent>
           </Card>
         </div>

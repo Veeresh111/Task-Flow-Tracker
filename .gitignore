@@ -29,3 +29,21 @@ dist
 
 # Environment Variables
 .env
+
+# Test artifacts
+playwright-report/
+test-results/
+*.timestamp-*.mjs
+
+# Debug / temp files
+nav-logo-debug.png
+flowtracker/db_inspect.cjs
+flowtracker/probe_recruitment.cjs
+recruitment_triggers_verification.mjs
+recruitment_triggers_evidence.json
+recruitment_workflow_execution.mjs
+recruitment_workflow_evidence.json
+
+# Audit/analysis reports (tracked separately)
+MASTER_ANALYSIS_REPORT.md
+MASTER_SYSTEM_VALIDATION_REPORT.md
