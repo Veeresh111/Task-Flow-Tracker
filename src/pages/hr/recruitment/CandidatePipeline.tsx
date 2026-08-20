@@ -4,9 +4,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { supabase } from "@/lib/supabase";
 import { isValidStatusTransition } from "@/lib/status-validators";
-import { Users } from "lucide-react";
 import { JobApplication } from "@/types";
 import { useToast } from "@/hooks/use-toast";
+import { notificationService } from "@/lib/notifications";
 
 export default function CandidatePipeline() {
   const { toast } = useToast();
@@ -121,7 +121,19 @@ export default function CandidatePipeline() {
           .from('candidates')
           .update({ stage: newStatus })
           .eq('id', app.candidate_id);
+
+        await notificationService.sendToCandidate(app.candidate_id, {
+          title: `Application Status Updated: ${newStatus}`,
+          message: `Your application for ${app.job_forms?.job_title || 'the position'} has moved to stage "${newStatus}".`,
+          type: "recruitment",
+          link: "/candidate/dashboard"
+        });
       }
+
+      toast({
+        title: "Stage Updated",
+        description: `Candidate status transitioned to "${newStatus}".`
+      });
 
       fetchCandidates();
     } catch (err) {

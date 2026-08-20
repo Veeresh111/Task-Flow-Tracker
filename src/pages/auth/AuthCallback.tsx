@@ -52,10 +52,19 @@ export default function AuthCallback() {
             }
           });
           subscriptionRef.current = subscription;
+
+          // Timeout: prevent indefinite waiting if OAuth exchange fails silently
+          setTimeout(() => {
+            if (!cancelled) {
+              subscription.unsubscribe();
+              setError("Authentication timed out. The OAuth provider did not complete the sign-in process. Please try again or use email sign-in.");
+            }
+          }, 30000);
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         if (!cancelled) {
-          setError(err.message || "Authentication failed. Please try again.");
+          const message = err instanceof Error ? err.message : "Authentication failed. Please try again.";
+          setError(message);
         }
       }
     };
@@ -83,13 +92,8 @@ export default function AuthCallback() {
         </div>
         <div className="relative bg-slate-900/80 backdrop-blur-xl rounded-2xl border border-white/[0.08] p-8 max-w-md w-full mx-4 text-center shadow-2xl">
           <div className="flex flex-col items-center gap-3 mb-6">
-            <div className="relative group">
-              <div className="absolute inset-0 bg-indigo-500/20 rounded-full blur-2xl" />
-              <div className="relative w-16 h-16 shadow-lg">
-                <img src="/fwc-logo.png" alt="FWC" className="w-full h-full brightness-0 invert" />
-              </div>
-              <h1 className="text-xl font-bold text-white">FWC</h1>
-            </div>
+            <img src="/fwc-logo.png" alt="FWC Logo" className="h-12 w-auto drop-shadow-[0_2px_8px_rgba(99,102,241,0.35)]" />
+            <h1 className="text-xl font-extrabold text-white tracking-wider">FWC</h1>
           </div>
           <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
             <span className="text-red-400 text-2xl font-bold">!</span>
@@ -123,13 +127,8 @@ export default function AuthCallback() {
       </div>
       <div className="relative text-center">
         <div className="flex flex-col items-center gap-3 mb-8">
-          <div className="relative group">
-            <div className="absolute inset-0 bg-indigo-500/20 rounded-full blur-2xl" />
-            <div className="relative w-20 h-20 shadow-lg">
-              <img src="/fwc-logo.png" alt="FWC" className="w-full h-full brightness-0 invert" />
-            </div>
-          </div>
-          <h1 className="text-2xl font-bold text-white">FWC</h1>
+          <img src="/fwc-logo.png" alt="FWC Logo" className="h-12 w-auto drop-shadow-[0_2px_8px_rgba(99,102,241,0.35)]" />
+          <h1 className="text-2xl font-extrabold text-white tracking-wider">FWC</h1>
         </div>
         <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
         <p className="text-slate-300 font-medium">{phaseMessages[phase]}</p>

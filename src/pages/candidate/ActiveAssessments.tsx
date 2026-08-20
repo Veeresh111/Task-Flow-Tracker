@@ -7,7 +7,7 @@ import { Loader2, Award, Clock, PlayCircle, RefreshCw, AlertTriangle } from "luc
 import { useToast } from "@/hooks/use-toast";
 
 export default function ActiveAssessments() {
-  useEffect(() => { document.title = "My Assessments - TaskFlow"; }, []);
+  useEffect(() => { document.title = "My Assessments - FWC"; }, []);
   const { toast } = useToast();
   const navigate = useNavigate();
   const [assessments, setAssessments] = useState<any[]>([]);

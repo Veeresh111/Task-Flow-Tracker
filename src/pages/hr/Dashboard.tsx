@@ -10,7 +10,7 @@ import { Loader2, Users, Wallet, AlertTriangle, UserCheck, Sparkles, TrendingDow
 import { CareerPredictor } from "@/components/dashboard/CareerPredictor";
 
 export default function HRDashboard() {
-  useEffect(() => { document.title = "HR Dashboard - TaskFlow"; }, []);
+  useEffect(() => { document.title = "HR Dashboard - FWC"; }, []);
   const [stats, setStats] = useState({ totalEmployees: 0, openComplaints: 0, pendingLeaves: 0, candidatesInPipeline: 0, interviewsThisWeek: 0, pendingOffers: 0, newHiresThisMonth: 0, pendingApprovals: 0 });
   const [employees, setEmployees] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);

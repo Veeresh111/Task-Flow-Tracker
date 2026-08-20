@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react-swc";
 import path from "path";
 
 // https://vitejs.dev/config/
-export default defineConfig(async ({ mode }) => ({
+export default defineConfig(({}) => ({
   server: {
     host: "::",
     port: 8080,
@@ -13,11 +13,22 @@ export default defineConfig(async ({ mode }) => ({
   },
   plugins: [
     react(),
-    mode === "development" && (await import("lovable-tagger")).componentTagger(),
-  ].filter(Boolean),
+  ],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+    },
+  },
+  build: {
+    chunkSizeWarningLimit: 1000,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
+          'vendor-ui': ['lucide-react', 'recharts'],
+          'vendor-supabase': ['@supabase/supabase-js'],
+        },
+      },
     },
   },
 }));

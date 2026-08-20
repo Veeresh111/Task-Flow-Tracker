@@ -54,8 +54,8 @@ export default function CorporateNav({ transparent }: Props) {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16 lg:h-20">
           <Link to="/" className="flex items-center gap-3 shrink-0 group">
-            <img src="/fwc-logo.png" alt="FWC" className={`h-10 w-auto brightness-0 transition-all duration-300 group-hover:scale-110 group-hover:drop-shadow-[0_0_8px_rgba(99,102,241,0.5)] ${isSolid ? "dark:brightness-0 dark:invert" : "invert"}`} />
-            <span className={`text-xl font-bold transition-colors duration-300 ${isSolid ? "text-slate-900 dark:text-white" : "text-white"}`}>FWC</span>
+            <img src="/fwc-logo.png" alt="FWC Logo" className={`h-10 w-auto transition-all duration-300 group-hover:scale-110 group-hover:drop-shadow-[0_0_8px_rgba(99,102,241,0.5)] ${isSolid ? "dark:drop-shadow-[0_0_6px_rgba(99,102,241,0.3)]" : "drop-shadow-[0_0_6px_rgba(255,255,255,0.3)]"}`} />
+            <span className={`text-xl font-extrabold tracking-wider transition-colors duration-300 ${isSolid ? "text-slate-900 dark:text-white" : "text-white"}`}>FWC</span>
           </Link>
 
           {/* Desktop Nav */}

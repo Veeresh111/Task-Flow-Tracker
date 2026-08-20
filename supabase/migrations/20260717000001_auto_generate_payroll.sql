@@ -15,24 +15,6 @@
 --      UNIQUE constraint + advisory lock).
 -- ============================================================
 
--- System user UUID for automated operations
--- This UUID represents the "system/automation" identity in audit logs
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM profiles WHERE id = '00000000-0000-0000-0000-000000000000') THEN
-    INSERT INTO profiles (id, full_name, email, role, status, department)
-    VALUES (
-      '00000000-0000-0000-0000-000000000000',
-      'System Automation',
-      'system@flowtracker.internal',
-      'admin',
-      'active',
-      'System'
-    );
-  END IF;
-END;
-$$;
-
 CREATE OR REPLACE FUNCTION public.auto_generate_monthly_payroll(
   p_month INT,
   p_year INT
@@ -42,7 +24,7 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-  v_system_id CONSTANT UUID := '00000000-0000-0000-0000-000000000000';
+  v_system_id UUID;
   v_cycle_id UUID;
   v_structure_id UUID;
   v_basic_pct NUMERIC;
@@ -75,6 +57,12 @@ DECLARE
   v_errors TEXT[] := '{}';
   v_idx INT := 0;
 BEGIN
+  -- Resolve valid system / admin actor for audit trail
+  SELECT id INTO v_system_id FROM profiles WHERE LOWER(role) IN ('admin', 'hr') LIMIT 1;
+  IF v_system_id IS NULL THEN
+    SELECT id INTO v_system_id FROM profiles LIMIT 1;
+  END IF;
+
   -- === Validate inputs ===
   IF p_month < 1 OR p_month > 12 THEN
     RETURN jsonb_build_object('success', false, 'error', 'Invalid month');
@@ -119,7 +107,7 @@ BEGIN
 
   -- === Process all active employees with salary ===
   FOR v_employee IN
-    SELECT id, payroll_ctc, full_name, email, department
+    SELECT id, payroll_ctc, name, email, department
     FROM profiles
     WHERE status = 'active'
       AND payroll_ctc IS NOT NULL
@@ -170,7 +158,7 @@ BEGIN
         pf_amount, pt_amount, tds_amount
       ) VALUES (
         v_employee.id, v_cycle_id,
-        v_employee.full_name, v_employee.email, v_employee.department,
+        v_employee.name, v_employee.email, v_employee.department,
         v_employee.payroll_ctc, v_monthly_ctc,
         v_earnings_json, v_deductions_json, v_gross, v_net,
         v_pf, v_pt, v_tds_monthly

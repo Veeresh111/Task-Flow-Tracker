@@ -155,21 +155,20 @@ export default function Login() {
           {/* Logo */}
           <div className="flex flex-col items-center gap-4 mb-8">
             <div className="relative group">
-              <div className="absolute inset-0 bg-indigo-500/20 rounded-full blur-3xl group-hover:bg-indigo-500/30 transition-all duration-500" />
-              <div className="absolute inset-0 bg-indigo-400/10 rounded-full blur-xl animate-pulse group-hover:animate-none" />
-              <div className="relative w-24 h-24 rounded-2xl shadow-lg shadow-indigo-500/25 transition-all duration-300 group-hover:shadow-indigo-500/40 group-hover:scale-110 group-hover:rotate-2">
+              <div className="absolute -inset-1 bg-gradient-to-r from-indigo-500 via-cyan-500 to-purple-500 rounded-2xl blur-lg opacity-40 group-hover:opacity-80 transition duration-500"></div>
+              <div className="relative px-4 py-3 bg-slate-900/90 rounded-2xl border border-indigo-500/30">
                 <img
                   src="/fwc-logo.png"
-                  alt="FWC"
-                  className="w-full h-full brightness-0 invert"
+                  alt="FWC Logo"
+                  className="h-16 w-auto drop-shadow-[0_2px_8px_rgba(99,102,241,0.35)]"
                 />
               </div>
             </div>
             <div className="text-center">
-              <h1 className="text-2xl font-bold tracking-tight text-white">
+              <h1 className="text-2xl font-extrabold tracking-wider text-white">
                 FWC
               </h1>
-              <p className="text-sm text-slate-400 mt-0.5">
+              <p className="text-sm text-slate-400 mt-0.5 font-medium">
                 Enterprise Access
               </p>
             </div>

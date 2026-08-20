@@ -6,7 +6,7 @@ import { Loader2, User, CheckCircle2, AlertTriangle } from "lucide-react";
 import IdentityEnrollment from "@/components/identity/IdentityEnrollment";
 
 export default function CandidateIdentity() {
-  useEffect(() => { document.title = "Identity Verification - TaskFlow"; }, []);
+  useEffect(() => { document.title = "Identity Verification - FWC"; }, []);
   const [loading, setLoading] = useState(true);
   const [profile, setProfile] = useState<any>(null);
   const [candidate, setCandidate] = useState<any>(null);

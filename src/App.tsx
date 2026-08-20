@@ -1,7 +1,17 @@
-import { BrowserRouter as Router, Routes, Route, Navigate, Outlet } from "react-router-dom";
+import { BrowserRouter as Router, Routes, Route, Outlet, useLocation } from "react-router-dom";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider } from "@/lib/theme";
 import { FloatingChatbot } from "./components/FloatingChatbot";
 import { Toaster } from "@/components/ui/toaster";
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 1000 * 15,
+      refetchOnWindowFocus: false,
+    },
+  },
+});
 import Landing from "./pages/Landing";
 import About from "./pages/About";
 import Services from "./pages/Services";
@@ -19,6 +29,7 @@ import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
 import JobApplication from "./pages/public/JobApplication";
 import AssessmentAccess from "./pages/public/AssessmentAccess";
 import EmployeeActivation from "./pages/public/EmployeeActivation";
+import NotificationDiagnostic from "./components/NotificationDiagnostic";
 import NotFound from "./pages/NotFound";
 
 // Admin Modules
@@ -85,6 +96,7 @@ import ProctoringDashboard from "@/pages/hr/recruitment/ProctoringDashboard";
 import EmployeeInvite from "./pages/hr/EmployeeInvite";
 import HrPendingApprovals from "./pages/hr/PendingApprovals";
 import UserVerification from "./pages/hr/UserVerification";
+import HRCandidates from "./pages/hr/Candidates";
 
 // Candidate Dashboard Modules
 import CandidateDashboard from "@/pages/candidate/Dashboard";
@@ -95,12 +107,20 @@ import CandidateInterviews from "@/pages/candidate/Interviews";
 import CandidateNotifications from "@/pages/candidate/Notifications";
 import CandidateIdentity from "@/pages/candidate/Identity";
 
-export default function App() {
+/**
+ * AppRoutes — inner component that must live INSIDE <Router> so it can
+ * safely call useLocation() and react to client-side navigation changes.
+ * This fixes the anti-pattern of reading window.location.pathname directly.
+ */
+function AppRoutes() {
+  const location = useLocation();
+  // Hide floating chatbot on all /assessment routes (proctored exam environment)
+  const isAssessmentRoute = /^\/assessment/.test(location.pathname);
+
   return (
-    <ThemeProvider>
-    <Router>
+    <>
       <Routes>
-        {/* CORPORATE PAGES */}
+        {/* ─── CORPORATE PUBLIC PAGES ─── */}
         <Route path="/" element={<Landing />} />
         <Route path="/about" element={<About />} />
         <Route path="/services" element={<Services />} />
@@ -108,18 +128,27 @@ export default function App() {
         <Route path="/contact" element={<Contact />} />
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
-        
-        {/* PUBLIC CARRIER TRAFFIC PORTS */}
+
+        {/* ─── ANONYMOUS PUBLIC ROUTES ─── */}
         <Route path="/reset-password" element={<ResetPassword />} />
         <Route path="/apply/:formId" element={<JobApplication />} />
         <Route path="/assessment" element={<AssessmentAccess />} />
         <Route path="/assessment/:token" element={<AssessmentAccess />} />
+        <Route path="/diagnostic" element={<NotificationDiagnostic />} />
         <Route path="/employee-activation" element={<EmployeeActivation />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
         <Route path="/auth/pending" element={<OAuthPending />} />
 
-        {/* ADMIN ENTERPRISE CONTEXT */}
-        <Route element={<ProtectedRoute allowedRoles={['admin']}><DashboardLayout role="admin"><Outlet /></DashboardLayout></ProtectedRoute>}>
+        {/* ─── ADMIN CONTEXT ─── */}
+        <Route
+          element={
+            <ProtectedRoute allowedRoles={["admin"]}>
+              <DashboardLayout role="admin">
+                <Outlet />
+              </DashboardLayout>
+            </ProtectedRoute>
+          }
+        >
           <Route path="/admin" element={<AdminDashboard />} />
           <Route path="/admin/presence" element={<AdminPresence />} />
           <Route path="/admin/employees" element={<AdminEmployees />} />
@@ -138,8 +167,16 @@ export default function App() {
           <Route path="/admin/employee-invite" element={<EmployeeInvite />} />
         </Route>
 
-        {/* TEAM LEAD CONTEXT */}
-        <Route element={<ProtectedRoute allowedRoles={['team_lead', 'tl']}><DashboardLayout role="team_lead"><Outlet /></DashboardLayout></ProtectedRoute>}>
+        {/* ─── TEAM LEAD CONTEXT ─── */}
+        <Route
+          element={
+            <ProtectedRoute allowedRoles={["team_lead", "tl"]}>
+              <DashboardLayout role="team_lead">
+                <Outlet />
+              </DashboardLayout>
+            </ProtectedRoute>
+          }
+        >
           <Route path="/team-lead" element={<TeamLeadDashboard />} />
           <Route path="/team-lead/presence" element={<TeamLeadPresence />} />
           <Route path="/team-lead/worklogs" element={<TeamLeadWorkLogs />} />
@@ -157,8 +194,16 @@ export default function App() {
           <Route path="/team-lead/leaves" element={<TeamLeadLeaves />} />
         </Route>
 
-        {/* EMPLOYEE CONTEXT */}
-        <Route element={<ProtectedRoute allowedRoles={['employee']}><DashboardLayout role="employee"><Outlet /></DashboardLayout></ProtectedRoute>}>
+        {/* ─── EMPLOYEE CONTEXT ─── */}
+        <Route
+          element={
+            <ProtectedRoute allowedRoles={["employee"]}>
+              <DashboardLayout role="employee">
+                <Outlet />
+              </DashboardLayout>
+            </ProtectedRoute>
+          }
+        >
           <Route path="/employee" element={<EmployeeDashboard />} />
           <Route path="/employee/presence" element={<EmployeePresence />} />
           <Route path="/employee/worklogs" element={<EmployeeWorkLogs />} />
@@ -174,8 +219,16 @@ export default function App() {
           <Route path="/employee/leaves" element={<EmployeeLeaves />} />
         </Route>
 
-        {/* VERIFIED CANDIDATE CONTEXT */}
-        <Route element={<ProtectedRoute allowedRoles={['candidate']}><DashboardLayout role="candidate"><Outlet /></DashboardLayout></ProtectedRoute>}>
+        {/* ─── VERIFIED CANDIDATE CONTEXT ─── */}
+        <Route
+          element={
+            <ProtectedRoute allowedRoles={["candidate"]}>
+              <DashboardLayout role="candidate">
+                <Outlet />
+              </DashboardLayout>
+            </ProtectedRoute>
+          }
+        >
           <Route path="/candidate" element={<CandidateDashboard />} />
           <Route path="/candidate/careers" element={<CandidateCareers />} />
           <Route path="/candidate/assessments" element={<ActiveAssessments />} />
@@ -185,8 +238,16 @@ export default function App() {
           <Route path="/candidate/identity" element={<CandidateIdentity />} />
         </Route>
 
-        {/* HUMAN RESOURCES CONTEXT */}
-        <Route element={<ProtectedRoute allowedRoles={['hr']}><DashboardLayout role="hr"><Outlet /></DashboardLayout></ProtectedRoute>}>
+        {/* ─── HUMAN RESOURCES CONTEXT ─── */}
+        <Route
+          element={
+            <ProtectedRoute allowedRoles={["hr"]}>
+              <DashboardLayout role="hr">
+                <Outlet />
+              </DashboardLayout>
+            </ProtectedRoute>
+          }
+        >
           <Route path="/hr" element={<HRDashboard />} />
           <Route path="/hr/ai-insights" element={<HRAIInsights />} />
           <Route path="/hr/smart-inbox" element={<SmartInbox />} />
@@ -208,16 +269,28 @@ export default function App() {
           <Route path="/hr/employee-invite" element={<EmployeeInvite />} />
           <Route path="/hr/pending-approvals" element={<HrPendingApprovals />} />
           <Route path="/hr/user-verification" element={<UserVerification />} />
+          <Route path="/hr/candidates" element={<HRCandidates />} />
         </Route>
-        
-        {/* WILDCARD FALLBACK */}
+
+        {/* ─── WILDCARD FALLBACK ─── */}
         <Route path="*" element={<NotFound />} />
       </Routes>
+
       <Toaster />
-      {!/^\/(assessment)/.test(window.location.pathname) && (
-        <FloatingChatbot />
-      )}
-    </Router>
-    </ThemeProvider>
+      {/* Only render chatbot outside proctored assessment environment */}
+      {!isAssessmentRoute && <FloatingChatbot />}
+    </>
+  );
+}
+
+export default function App() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <ThemeProvider>
+        <Router>
+          <AppRoutes />
+        </Router>
+      </ThemeProvider>
+    </QueryClientProvider>
   );
 }

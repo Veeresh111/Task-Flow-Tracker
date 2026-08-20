@@ -71,13 +71,8 @@ export default function OAuthPending() {
       </div>
       <div className="relative bg-slate-900/80 backdrop-blur-xl rounded-2xl border border-white/[0.08] p-8 max-w-lg w-full text-center shadow-2xl">
         <div className="flex flex-col items-center gap-3 mb-6">
-          <div className="relative group">
-            <div className="absolute inset-0 bg-indigo-500/20 rounded-full blur-2xl" />
-            <div className="relative w-20 h-20 shadow-lg">
-              <img src="/fwc-logo.png" alt="FWC" className="w-full h-full brightness-0 invert" />
-            </div>
-          </div>
-          <h1 className="text-xl font-bold text-white">FWC</h1>
+          <img src="/fwc-logo.png" alt="FWC Logo" className="h-12 w-auto drop-shadow-[0_2px_8px_rgba(99,102,241,0.35)]" />
+          <h1 className="text-xl font-extrabold text-white tracking-wider">FWC</h1>
         </div>
         <div className="w-16 h-16 rounded-full bg-amber-100 dark:bg-amber-900/50 flex items-center justify-center mx-auto mb-4">
           <Clock className="w-8 h-8 text-amber-600 dark:text-amber-400" />

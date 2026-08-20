@@ -58,8 +58,8 @@ async function recordLogin(params: {
       success: params.success,
       failure_reason: params.failureReason || null,
       ip_address: null,
-    });
-  } catch { /* login_history table may not exist yet */ }
+    }).catch(() => {});
+  } catch { /* login_history table may not exist or restricted by RLS */ }
 }
 
 async function recordSession(userId: string, provider: string) {
@@ -236,18 +236,34 @@ export const authService = {
   },
 
   signInWithGoogle: async () => {
-    const { data, error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
-        queryParams: {
-          access_type: 'offline',
-          prompt: 'consent',
+    try {
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: `${window.location.origin}/auth/callback`,
+          queryParams: {
+            access_type: 'offline',
+            prompt: 'consent',
+          },
         },
-      },
-    });
-    if (error) throw error;
-    return data;
+      });
+      if (error) {
+        if (error.message?.includes('provider is not enabled') || error.message?.includes('Unsupported provider')) {
+          throw new Error('PROVIDER_NOT_ENABLED: Google authentication is not configured. Please contact your administrator to enable Google OAuth in the Supabase Dashboard.');
+        }
+        throw error;
+      }
+      return data;
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.includes('PROVIDER_NOT_ENABLED')) {
+        throw new Error(message.replace('PROVIDER_NOT_ENABLED: ', ''));
+      }
+      if (message.includes('fetch') || message.includes('network') || message.includes('Failed to fetch')) {
+        throw new Error('Network error. Please check your internet connection and try again.');
+      }
+      throw err;
+    }
   },
 
   signInWithMicrosoft: async () => {
@@ -376,14 +392,18 @@ export const authService = {
   },
 
   getLoginHistory: async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return [];
-    const { data } = await supabase
-      .from('login_history')
-      .select('*')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false })
-      .limit(50);
-    return data || [];
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return [];
+      const { data } = await supabase
+        .from('login_history')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(50);
+      return data || [];
+    } catch {
+      return [];
+    }
   },
 };

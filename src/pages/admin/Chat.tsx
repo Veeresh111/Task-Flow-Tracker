@@ -6,9 +6,11 @@ import { supabase } from "@/lib/supabase";
 import { Send, Loader2, Trash2, Hash, UserCircle, Video, ShieldAlert, Search, Filter, Megaphone } from "lucide-react";
 import { useLocation, useSearchParams } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
+import { notificationService } from "@/lib/notifications";
+import { chatService } from "@/lib/chat-service";
 
 export default function UniversalSmartChat() {
-  useEffect(() => { document.title = "Office Chat - TaskFlow"; }, []);
+  useEffect(() => { document.title = "Office Chat - FWC"; }, []);
   const { toast } = useToast();
   const location = useLocation(); 
   const [searchParams] = useSearchParams();
@@ -197,7 +199,8 @@ export default function UniversalSmartChat() {
         return bTime - aTime;
       });
 
-      setUnreadMap(transientUnreadsMap);
+      const unreadChatCounts = await chatService.getUnreadChatCounts(user.id);
+      setUnreadMap(unreadChatCounts);
       setUsers(mappedProfilesWithActivity);
 
       const routedUserId = location.state?.selectedUserId || searchParams.get('userId');
@@ -209,6 +212,9 @@ export default function UniversalSmartChat() {
 
       activeChatRef.current = targetChatId;
       setActiveChat(targetChatId);
+      if (user.id && targetChatId !== "GLOBAL") {
+        chatService.markConversationAsRead(user.id, targetChatId);
+      }
       await loadMessages(targetChatId, user.id);
     } catch (err: any) {
       console.error(err);
@@ -234,12 +240,17 @@ export default function UniversalSmartChat() {
       } else {
         query = query.or(`and(sender_id.eq.${currentUserId},receiver_id.eq.${chatId}),and(sender_id.eq.${chatId},receiver_id.eq.${currentUserId})`);
         
-        await supabase.from('messages').update({ is_read: true }).eq('receiver_id', currentUserId).eq('sender_id', chatId);
+        // Optimistically clear unread badge in local state
         setUnreadMap(prev => {
           const next = new Map(prev);
           next.set(chatId, 0);
           return next;
         });
+
+        // Persist read state via chatService
+        if (currentUserId) {
+          chatService.markConversationAsRead(currentUserId, chatId);
+        }
       }
 
       const { data, error } = await query;
@@ -256,6 +267,15 @@ export default function UniversalSmartChat() {
   const switchChat = (id: string) => {
     activeChatRef.current = id;
     setActiveChat(id);
+    // Optimistic UI: Instantly clear badge on selection
+    setUnreadMap(prev => {
+      const next = new Map(prev);
+      next.set(id, 0);
+      return next;
+    });
+    if (userId) {
+      chatService.markConversationAsRead(userId, id);
+    }
     loadMessages(id);
   };
 
@@ -330,6 +350,24 @@ export default function UniversalSmartChat() {
         if (payloads.length === 0) return;
         const { error } = await supabase.from('messages').insert(payloads).select();
         if (error) throw error;
+
+        // Dispatch real-time system notifications to all broadcast recipients
+        payloads.forEach(p => {
+          const targetUser = users.find(u => u.id === p.receiver_id);
+          const rRole = (targetUser?.role || "employee").toLowerCase();
+          const rPath = rRole === 'admin' ? '/admin/chat' :
+                        rRole === 'hr' ? '/hr/chat' :
+                        rRole === 'team_lead' || rRole === 'tl' ? '/team-lead/chat' :
+                        '/employee/chat';
+          notificationService.sendNotification({
+            userId: p.receiver_id,
+            title: `📢 Office Broadcast from ${currentUserProfile?.name || 'Management'}`,
+            message: text.length > 80 ? text.substring(0, 77) + '...' : text,
+            type: 'chat',
+            link: rPath
+          });
+        });
+
         toast({ title: "Broadcast Sent", description: `Message delivered to ${filteredUsers.length} workspace members.` });
         return;
       }
@@ -368,6 +406,23 @@ export default function UniversalSmartChat() {
 
             updated.splice(idx, 1);
             return [updatedUser, ...updated];
+          });
+
+          // Dispatch real-time system notification to chat recipient
+          const recipientUser = users.find(u => u.id === activeChat);
+          const rRole = (recipientUser?.role || "employee").toLowerCase();
+          const rPath = rRole === 'admin' ? '/admin/chat' :
+                        rRole === 'hr' ? '/hr/chat' :
+                        rRole === 'team_lead' || rRole === 'tl' ? '/team-lead/chat' :
+                        rRole === 'candidate' ? '/candidate/messages' :
+                        '/employee/chat';
+
+          notificationService.sendNotification({
+            userId: activeChat,
+            title: `New message from ${currentUserProfile?.name || 'Workspace Member'}`,
+            message: text.length > 80 ? text.substring(0, 77) + '...' : text,
+            type: 'chat',
+            link: `${rPath}?userId=${verifiedAuthUserId}`
           });
         }
 

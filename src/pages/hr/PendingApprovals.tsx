@@ -53,7 +53,7 @@ export default function HrPendingApprovals() {
   const [roleAssignments, setRoleAssignments] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    document.title = "Pending Approvals - TaskFlow";
+    document.title = "Pending Approvals - FWC";
     fetchPendingUsers();
   }, []);
 

@@ -74,7 +74,7 @@ export function ProtectedRoute({ children, allowedRoles }: ProtectedRouteProps) 
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
 
-  if (allowedRoles && role && !allowedRoles.includes(role)) {
+  if (allowedRoles && (!role || !allowedRoles.includes(role))) {
     const roleMap: Record<string, string> = {
       admin: '/admin',
       hr: '/hr',
@@ -83,7 +83,7 @@ export function ProtectedRoute({ children, allowedRoles }: ProtectedRouteProps) 
       employee: '/employee',
       candidate: '/candidate',
     };
-    const redirect = roleMap[role] || '/login';
+    const redirect = role ? (roleMap[role] || '/login') : '/login';
     return <Navigate to={redirect} replace />;
   }
 

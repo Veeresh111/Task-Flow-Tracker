@@ -7,9 +7,16 @@
 -- direct invocation from anon or authenticated users.
 -- ============================================================
 
--- auto_expire_assessment_tokens() is called only by the
--- expire-tokens edge function. No frontend code calls it.
-REVOKE EXECUTE ON FUNCTION public.auto_expire_assessment_tokens() FROM PUBLIC;
-REVOKE EXECUTE ON FUNCTION public.auto_expire_assessment_tokens() FROM anon;
-REVOKE EXECUTE ON FUNCTION public.auto_expire_assessment_tokens() FROM authenticated;
-GRANT EXECUTE ON FUNCTION public.auto_expire_assessment_tokens() TO service_role;
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_proc p 
+    JOIN pg_namespace n ON p.pronamespace = n.oid 
+    WHERE n.nspname = 'public' AND p.proname = 'auto_expire_assessment_tokens'
+  ) THEN
+    EXECUTE 'REVOKE EXECUTE ON FUNCTION public.auto_expire_assessment_tokens() FROM PUBLIC';
+    EXECUTE 'REVOKE EXECUTE ON FUNCTION public.auto_expire_assessment_tokens() FROM anon';
+    EXECUTE 'REVOKE EXECUTE ON FUNCTION public.auto_expire_assessment_tokens() FROM authenticated';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION public.auto_expire_assessment_tokens() TO service_role';
+  END IF;
+END $$;

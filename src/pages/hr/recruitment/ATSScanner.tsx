@@ -10,6 +10,8 @@ import { UploadCloud, ClipboardPaste, FormInput, Users, Globe, Copy, Check, Brie
 import { BarChart, Bar, Cell, XAxis, YAxis, ResponsiveContainer } from "recharts";
 import { supabase } from "@/lib/supabase";
 import { callCorporateAI } from "@/lib/ai";
+import { VectorMath } from "@/lib/dsa/VectorMath";
+import { createMaxHeap } from "@/lib/dsa/PriorityQueue";
 
 interface Candidate {
   id: string;
@@ -259,15 +261,28 @@ export default function ATSScanner() {
       try {
         const prompt = `Compare candidate resume text against JD matrix. JD: ${jdText}. Candidate Resume Data: ${updated[i].text}. Output STRICTLY a valid JSON object matching shape: {"score": 85, "name": "Extracted Name", "recommendation": "Hire", "missing": "Skills", "skills": [{"name": "React", "value": 90}]}`;
         
-        const generatedText = await callHF(prompt);
-        if (!generatedText) throw new Error("API returned an empty or malformed token context response.");
-        
-        const cleanText = generatedText.replace(/```[a-z]*\n?/gi, '').replace(/```/g, '').trim();
-        console.debug("AI parsed segment length:", cleanText?.length);
-        const parsed = JSON.parse(cleanText);
+        let parsed: any = null;
+        try {
+          const generatedText = await callHF(prompt);
+          if (generatedText) {
+            const cleanText = generatedText.replace(/```[a-z]*\n?/gi, '').replace(/```/g, '').trim();
+            parsed = JSON.parse(cleanText);
+          }
+        } catch (llmErr) {
+          console.warn("LLM extraction failed, using VectorMath DSA engine:", llmErr);
+        }
 
-        if (typeof parsed.score !== "number" || typeof parsed.name !== "string") {
-          throw new Error("Invalid AI schema structure returned by model parsing layer.");
+        // Fallback to deterministic VectorMath if LLM returned invalid shape
+        if (!parsed || typeof parsed.score !== "number" || typeof parsed.name !== "string") {
+          const dsaResult = VectorMath.computeCandidateMatchScore(updated[i].text, jdText);
+          const firstLine = updated[i].text.split('\n')[0]?.trim() || "Applicant";
+          parsed = {
+            score: dsaResult.overallScore,
+            name: firstLine.length < 40 ? firstLine : "Applicant",
+            recommendation: dsaResult.overallScore >= 75 ? "Hire" : dsaResult.overallScore >= 60 ? "Consider" : "Review",
+            missing: dsaResult.missingSkills.join(", ") || "None",
+            skills: dsaResult.matchedSkills.slice(0, 4).map(s => ({ name: s, value: 85 }))
+          };
         }
 
         updated[i].candidateName = parsed.name;
@@ -344,10 +359,17 @@ export default function ATSScanner() {
         updated[i].status = 'Error';
         setCandidates([...updated]);
       }
-      if (i < updated.length - 1) await sleep(4000);
+      if (i < updated.length - 1) await sleep(2000);
     }
+
+    // Sort finished candidates by match score using Max-Heap Priority Queue
+    const maxHeap = createMaxHeap<Candidate>(c => c.score || 0);
+    updated.forEach(c => maxHeap.push(c));
+    const rankedCandidates = maxHeap.drain();
+    setCandidates(rankedCandidates);
+
     setAiLoading(false);
-    toast({ title: "Parsing Lifecycle Finished", description: "All rows committed cleanly to cross-relational tracking indices." });
+    toast({ title: "Parsing Lifecycle Finished", description: "Candidates ranked via Priority Queue Max-Heap and committed to database." });
   };
 
   return (

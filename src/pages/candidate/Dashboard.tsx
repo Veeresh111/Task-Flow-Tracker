@@ -7,9 +7,10 @@ import { supabase } from "@/lib/supabase";
 import { Loader2, ShieldCheck, FileText, CheckCircle2, UploadCloud, BrainCircuit, Play, GraduationCap, XCircle, Eye, Briefcase, Check, AlertTriangle } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { OfferLetter } from "@/types";
+import { notificationService } from "@/lib/notifications";
 
 export default function CandidateDashboard() {
-  useEffect(() => { document.title = "Candidate Dashboard - TaskFlow"; }, []);
+  useEffect(() => { document.title = "Candidate Dashboard - FWC"; }, []);
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState("bgc");
   const [loading, setLoading] = useState(true);
@@ -185,6 +186,15 @@ export default function CandidateDashboard() {
           ? "Congratulations! Your acceptance has been recorded. HR will contact you for onboarding."
           : "Your decision has been recorded. You can revisit offers in your vault.",
       });
+
+      // Notify HR and Admin about candidate offer decision
+      await notificationService.sendToRole(['hr', 'admin'], {
+        title: action === 'accepted' ? "Offer Accepted by Candidate! 🎉" : "Offer Declined by Candidate",
+        message: `Candidate has ${action} their employment offer. Ready for employee onboarding.`,
+        type: "recruitment",
+        link: "/hr/recruitment"
+      });
+
       fetchCandidateData();
     } catch (err: any) {
       toast({ title: "Response Failed", description: err.message, variant: "destructive" });

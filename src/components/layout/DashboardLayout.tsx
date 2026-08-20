@@ -10,6 +10,14 @@ import {
   AlertCircle, CheckSquare, Clock, BarChart3, Bell, Settings, UserCircle, CheckCircle, Calendar, ClipboardList, Wallet, Sparkles, Timer, FileText, UserPlus, Loader2, Mail, Inbox, FileCheck, Award, Video, Shield, ShieldCheck, Sun, Moon
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useActivityMonitoring } from "@/hooks/useActivityMonitoring";
+
+import { NotificationPopover } from "@/components/notifications/NotificationPopover";
+import { notificationService } from "@/lib/notifications";
+import { useNotifications } from "@/hooks/useNotifications";
+import { callCorporateAI } from "@/lib/ai";
+import { HFTokenModal } from "@/components/common/HFTokenModal";
+import { getHuggingFaceToken, DEFAULT_FREE_HF_TOKEN } from "@/lib/ai-models";
 
 const LayoutContext = createContext(false);
 
@@ -109,14 +117,21 @@ function DashboardLayoutCore({ children, role }: { children: React.ReactNode; ro
   const [showDailyReport, setShowDailyReport] = useState(false);
   const [generatingReport, setGeneratingReport] = useState(false);
   const [dailyReportData, setDailyReportData] = useState<any>(null);
+  const [hfModalOpen, setHfModalOpen] = useState(false);
 
   const navigate = useNavigate();
   const location = useLocation();
-  const { toast } = useToast();
   const { theme, setTheme } = useTheme();
+
+  const { performanceScore, focusRatio } = useActivityMonitoring({
+    userId: userProfile?.id || null,
+    activeLogId,
+    isClockedIn,
+  });
 
   const currentRole = userProfile?.role?.toLowerCase() || role || "employee";
   const items = navItems[currentRole] || navItems.employee;
+  const { unreadCount: liveNotifUnreadCount } = useNotifications(userProfile?.id || null, currentRole);
 
   const getStoredTime = (userId: string, key: string) => {
     return localStorage.getItem(`last_viewed_${userId}_${key}`) || new Date(0).toISOString();
@@ -133,8 +148,12 @@ function DashboardLayoutCore({ children, role }: { children: React.ReactNode; ro
     if (location.pathname.includes('/approvals')) { StoredTime(userProfile.id, 'approvals'); setBadges(prev => ({ ...prev, approvals: 0 })); }
     if (location.pathname.includes('/complaints')) { StoredTime(userProfile.id, 'complaints'); setBadges(prev => ({ ...prev, complaints: 0 })); }
     if (location.pathname.includes('/tasks')) { StoredTime(userProfile.id, 'tasks'); setBadges(prev => ({ ...prev, tasks: 0 })); }
-    if (location.pathname.includes('/notifications')) { StoredTime(userProfile.id, 'notifications'); setBadges(prev => ({ ...prev, notifications: 0 })); }
-  }, [location.pathname, userProfile?.id]);
+    if (location.pathname.includes('/notifications')) { 
+      StoredTime(userProfile.id, 'notifications'); 
+      notificationService.markAllAsRead(userProfile.id, userProfile.role || 'employee');
+      setBadges(prev => ({ ...prev, notifications: 0 })); 
+    }
+  }, [location.pathname, userProfile?.id, userProfile?.role]);
 
   useEffect(() => {
     const initApp = async () => {
@@ -311,31 +330,20 @@ const channel = supabase.channel('global-changes')
       const realToday = new Date();
       realToday.setHours(0,0,0,0);
       
-      const { data: tasks } = await supabase.from('tasks').select('title').eq('assigned_to', user?.id).eq('status', 'Completed').gte('updated_at', realToday.toISOString());
-      const taskCount = tasks?.length || 0;
-      const taskList = tasks?.map(t => t.title).join(", ") || "Standard operational and structural duties";
+      let tasksData: any[] = [];
+      try {
+        const { data: t } = await supabase.from('tasks').select('title').eq('status', 'Completed').gte('updated_at', realToday.toISOString());
+        if (t) tasksData = t;
+      } catch (err) {
+        console.warn("Task summary query fallback:", err);
+      }
+
+      const taskCount = tasksData.length;
+      const taskList = tasksData.map((t: any) => t.title).join(", ") || "Standard operational and structural duties";
 
       const prompt = `Act as an elite FWC India HR Evaluation Engine. Employee: ${empName}. Hours Worked: ${hours.toFixed(2)}. Tasks Done: ${taskCount} (${taskList}). Write a 3-sentence performance review. Assign a "Competence Score" out of 100 based on task completion relative to hours worked. No markdown.`;
 
-      const { data: sessionData } = await supabase.auth.getSession();
-      const accessToken = sessionData?.session?.access_token;
-      if (!accessToken) throw new Error("Not authenticated");
-      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ai-proxy`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${accessToken}`
-        },
-        body: JSON.stringify({ prompt })
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data?.error?.message || "Failed to route segment packet.");
-      }
-
-      let aiResponse = data.content || "";
+      let aiResponse = await callCorporateAI({ prompt });
 
       aiResponse = aiResponse
         .replace(/<think>[\s\S]*?<\/think>/gi, "")
@@ -365,19 +373,9 @@ const channel = supabase.channel('global-changes')
     const timeApp = getStoredTime(userId, 'approvals');
     const timeComp = getStoredTime(userId, 'complaints');
     const timeTasks = getStoredTime(userId, 'tasks');
-    const timeNotif = getStoredTime(userId, 'notifications');
 
-    let bNotif = 0, bApp = 0, bComp = 0, bTasks = 0;
-
-    if (userRole.toUpperCase() === 'CANDIDATE') {
-      const { data: profile } = await supabase.from('profiles').select('candidate_id').eq('id', userId).maybeSingle();
-      const candidateId = profile?.candidate_id || userId;
-      const { count: cNotif } = await supabase.from('candidate_notifications').select('*', { count: 'exact', head: true }).eq('candidate_id', candidateId).eq('read', false);
-      bNotif = cNotif || 0;
-    } else {
-      const { count: cNotif } = await supabase.from('notifications').select('*', { count: 'exact', head: true }).eq('user_id', userId).gt('created_at', timeNotif);
-      bNotif = cNotif || 0;
-    }
+    let bNotif = await notificationService.fetchUnreadCount(userId, userRole);
+    let bApp = 0, bComp = 0, bTasks = 0;
 
     const { count: cTasks } = await supabase.from('tasks').select('*', { count: 'exact', head: true }).eq('assigned_to', userId).gt('created_at', timeTasks);
     bTasks = cTasks || 0;
@@ -409,7 +407,7 @@ const channel = supabase.channel('global-changes')
     if (window.location.pathname.includes('/approvals')) { bApp = 0; StoredTime(userId, 'approvals'); }
     if (window.location.pathname.includes('/complaints')) { bComp = 0; StoredTime(userId, 'complaints'); }
     if (window.location.pathname.includes('/tasks')) { bTasks = 0; StoredTime(userId, 'tasks'); }
-    if (window.location.pathname.includes('/notifications')) { bNotif = 0; StoredTime(userId, 'notifications'); }
+    if (window.location.pathname.includes('/notifications')) { bNotif = 0; }
 
     const newBadges = { complaints: bComp, approvals: bApp, notifications: bNotif, tasks: bTasks };
     setBadges(newBadges);
@@ -437,8 +435,8 @@ const channel = supabase.channel('global-changes')
       <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-[#0f172a] border-r border-slate-800 transform transition-transform md:translate-x-0 flex flex-col shadow-xl ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}`}>
         <div className="h-16 flex items-center justify-between px-6 border-b border-slate-800 bg-[#020817]">
           <Link to="/" className="flex items-center gap-3 group">
-            <img src="/fwc-logo.png" alt="FWC" className="h-8 w-auto brightness-0 invert transition-all duration-300 group-hover:scale-110 group-hover:drop-shadow-[0_0_8px_rgba(99,102,241,0.5)]" />
-            <span className="text-xl font-bold text-white tracking-wider">WorkFlow</span>
+            <img src="/fwc-logo.png" alt="FWC Logo" className="h-8 w-auto transition-all duration-300 group-hover:scale-110 group-hover:drop-shadow-[0_0_8px_rgba(99,102,241,0.5)]" />
+            <span className="text-xl font-extrabold text-white tracking-wider">FWC</span>
           </Link>
           <button className="md:hidden text-slate-300" onClick={() => setSidebarOpen(false)}><X className="w-5 h-5" /></button>
         </div>
@@ -450,7 +448,9 @@ const channel = supabase.channel('global-changes')
             const isActive = isBaseRoute ? location.pathname === item.href : location.pathname === item.href || location.pathname.startsWith(item.href + "/");
             
             const isCurrentBadgePath = item.badgeKey && location.pathname.includes(item.badgeKey);
-            const badgeCount = isCurrentBadgePath ? 0 : (item.badgeKey ? badges[item.badgeKey as keyof typeof badges] : 0);
+            const badgeCount = isCurrentBadgePath ? 0 : 
+              (item.badgeKey === 'notifications' ? liveNotifUnreadCount : 
+               (item.badgeKey ? badges[item.badgeKey as keyof typeof badges] : 0));
 
             return (
               <Link key={item.href} to={item.href} className={`flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isActive ? "bg-blue-600 text-white shadow-md" : "text-slate-400 hover:bg-slate-800 hover:text-white"}`}>
@@ -475,8 +475,18 @@ const channel = supabase.channel('global-changes')
             <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-200 hidden md:block">Welcome back, {userProfile?.name || 'User'}</h2>
           </div>
           
-          <div className="flex items-center gap-4">
-            <button onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} className="p-2 rounded-lg text-gray-500 hover:text-gray-900 hover:bg-gray-100 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-slate-700 transition-all" title={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setHfModalOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300 dark:hover:bg-indigo-900/50 border border-indigo-200 dark:border-indigo-800/50 shadow-xs transition-all"
+              title="Hugging Face Free AI Control Center"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+              <span className="hidden sm:inline">HF AI Engine</span>
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            </button>
+            <NotificationPopover userId={userProfile?.id || null} role={currentRole} />
+            <button onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} className="p-2 rounded-lg text-gray-500 hover:text-gray-900 hover:bg-gray-100 dark:hover:text-gray-100 dark:hover:bg-slate-700 transition-all" title={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}>
               {theme === 'light' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5 text-amber-400" />}
             </button>
             <span className="text-sm text-gray-500 font-medium hidden sm:block">{userProfile?.role?.replace('_', ' ').toUpperCase() || 'HR'}</span>
@@ -535,6 +545,8 @@ const channel = supabase.channel('global-changes')
           </Card>
         </div>
       )}
+
+      <HFTokenModal open={hfModalOpen} onOpenChange={setHfModalOpen} />
     </div>
   );
 }

@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from "react";
-import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -49,16 +48,15 @@ export default function HRCandidates() {
     const profileEmails = new Set((profileCandidates || []).map(p => p.email?.toLowerCase()));
     const mergedList = [...(profileCandidates || [])];
 
-    (atsCandidates || []).forEach(atsCand => {
-      if (!profileEmails.has(atsCand.email?.toLowerCase())) {
+    (atsCandidates || []).forEach(ats => {
+      if (ats.email && !profileEmails.has(ats.email.toLowerCase())) {
         mergedList.push({
-          id: atsCand.id,
-          name: atsCand.full_name,
-          email: atsCand.email,
-          phone: atsCand.phone,
-          created_at: atsCand.created_at,
-          role: 'candidate',
-          _source: 'ats'
+          id: ats.id,
+          name: ats.full_name || "Applicant",
+          email: ats.email,
+          phone: ats.phone || "—",
+          created_at: ats.created_at,
+          is_ats_only: true
         });
       }
     });
@@ -67,31 +65,74 @@ export default function HRCandidates() {
     setLoading(false);
   };
 
-  const postAnnouncement = async () => {
-    if (!title || !content) return;
-    const { error } = await supabase.from('company_announcements').insert([{ title, content, type }]);
-    if (error) {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
-    } else {
-      toast({ title: "Posted", description: `Corporate ${type} published to all Candidate portals.` });
-      setTitle(""); setContent("");
+  const handleBroadcast = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!title.trim() || !content.trim()) return;
+
+    try {
+      // Broadcast to registered candidates via candidate_notifications
+      const targetCandidates = candidates.filter(c => !c.is_ats_only);
+      if (targetCandidates.length > 0) {
+        const notificationsPayload = targetCandidates.map(c => ({
+          candidate_id: c.id,
+          title: `[${type}] ${title}`,
+          message: content,
+          read: false
+        }));
+        const { error } = await supabase.from('candidate_notifications').insert(notificationsPayload);
+        if (error) throw error;
+      }
+
+      toast({
+        title: "Broadcast Dispatched",
+        description: `Notification successfully sent to ${targetCandidates.length} registered candidate accounts.`
+      });
+      setTitle("");
+      setContent("");
+    } catch (err: any) {
+      toast({ title: "Broadcast Failed", description: err.message, variant: "destructive" });
     }
   };
 
-  // --- HR CHAT LOGIC ---
-  const openChat = async (candidate: any) => {
+  // Open realtime chat drawer with candidate
+  const openChatWithCandidate = async (cand: any) => {
+    setActiveChatCandidate(cand);
+    setChatMessages([]);
+
     if (chatChannelRef.current) {
       supabase.removeChannel(chatChannelRef.current);
-      chatChannelRef.current = null;
     }
-    setActiveChatCandidate(candidate);
-    const { data } = await supabase.from('candidate_hr_messages').select('*').eq('candidate_id', candidate.id).order('created_at', { ascending: true });
-    if (data) setChatMessages(data);
 
-    chatChannelRef.current = supabase.channel(`hr_chat_${candidate.id}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'candidate_hr_messages', filter: `candidate_id=eq.${candidate.id}` }, (payload) => {
-        setChatMessages(prev => [...prev, payload.new]);
-      }).subscribe();
+    if (!currentUserId) return;
+
+    // Load initial direct chat messages between HR and this candidate
+    const { data: history } = await supabase
+      .from('candidate_direct_chats')
+      .select('*')
+      .or(`and(sender_id.eq.${currentUserId},recipient_id.eq.${cand.id}),and(sender_id.eq.${cand.id},recipient_id.eq.${currentUserId})`)
+      .order('created_at', { ascending: true });
+
+    setChatMessages(history || []);
+
+    // Subscribe to realtime changes
+    const channel = supabase
+      .channel(`direct_chat_${cand.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'candidate_direct_chats' },
+        (payload) => {
+          const newMsg = payload.new;
+          if (
+            (newMsg.sender_id === currentUserId && newMsg.recipient_id === cand.id) ||
+            (newMsg.sender_id === cand.id && newMsg.recipient_id === currentUserId)
+          ) {
+            setChatMessages(prev => [...prev, newMsg]);
+          }
+        }
+      )
+      .subscribe();
+
+    chatChannelRef.current = channel;
   };
 
   const closeChat = () => {
@@ -103,25 +144,17 @@ export default function HRCandidates() {
     setChatMessages([]);
   };
 
-  useEffect(() => {
-    return () => {
-      if (chatChannelRef.current) {
-        supabase.removeChannel(chatChannelRef.current);
-        chatChannelRef.current = null;
-      }
-    };
-  }, []);
-
   const sendChatMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newChatMessage.trim() || !activeChatCandidate || !currentUserId) return;
-    setSendingChat(true);
 
-    const { error } = await supabase.from('candidate_hr_messages').insert([{
-      candidate_id: activeChatCandidate.id,
+    setSendingChat(true);
+    const { error } = await supabase.from('candidate_direct_chats').insert({
       sender_id: currentUserId,
-      message: newChatMessage.trim()
-    }]);
+      recipient_id: activeChatCandidate.id,
+      message: newChatMessage.trim(),
+      read: false
+    });
 
     if (error) {
       toast({ title: "Send Failed", description: error.message, variant: "destructive" });
@@ -132,120 +165,132 @@ export default function HRCandidates() {
   };
 
   return (
-    <DashboardLayout role="hr">
-      <div className="max-w-7xl mx-auto space-y-6 pb-12 relative">
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 flex justify-between items-center">
-          <div>
-            <h1 className="text-3xl font-bold text-slate-900">Candidates & Communications</h1>
-            <p className="text-slate-500 mt-1">Manage external talent, broadcast opportunities, and reply securely.</p>
-          </div>
+    <div className="max-w-7xl mx-auto space-y-6 pb-12 relative">
+      <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 flex justify-between items-center">
+        <div>
+          <h1 className="text-3xl font-bold text-slate-900">Candidates & Communications</h1>
+          <p className="text-slate-500 mt-1">Manage external talent, broadcast opportunities, and reply securely.</p>
         </div>
+      </div>
 
-        <div className="grid md:grid-cols-3 gap-6">
-          <Card className="md:col-span-1 shadow-sm border-slate-200 h-max">
-            <CardHeader className="bg-slate-50 border-b">
-              <CardTitle className="text-lg flex items-center gap-2"><Megaphone className="w-5 h-5 text-indigo-600"/> Broadcast to Candidates</CardTitle>
-            </CardHeader>
-            <CardContent className="p-5 space-y-4">
+      <div className="grid md:grid-cols-3 gap-6">
+        <Card className="md:col-span-1 shadow-sm border-slate-200 h-max">
+          <CardHeader className="bg-slate-50 border-b">
+            <CardTitle className="text-lg flex items-center gap-2"><Megaphone className="w-5 h-5 text-indigo-600"/> Broadcast to Candidates</CardTitle>
+          </CardHeader>
+          <CardContent className="p-5 space-y-4">
+            <form onSubmit={handleBroadcast} className="space-y-4">
               <div className="space-y-2">
                 <label className="text-xs font-bold text-slate-500 uppercase">Post Type</label>
-                <select className="w-full p-2 border rounded-md text-sm outline-none" value={type} onChange={e=>setType(e.target.value)}>
-                  <option value="Announcement">General Announcement</option>
-                  <option value="Job Opening">Job Opening</option>
+                <select className="w-full p-2 border border-slate-200 rounded-md text-sm outline-none bg-white" value={type} onChange={e => setType(e.target.value)}>
+                  <option value="Announcement">Announcement</option>
+                  <option value="Job Alert">Job Alert</option>
+                  <option value="Interview Update">Interview Update</option>
+                  <option value="System Notification">System Notification</option>
                 </select>
               </div>
               <div className="space-y-2">
                 <label className="text-xs font-bold text-slate-500 uppercase">Title</label>
-                <Input placeholder="E.g. Mass Hiring Drive 2026" value={title} onChange={e=>setTitle(e.target.value)} />
+                <Input required value={title} onChange={e=>setTitle(e.target.value)} placeholder="e.g. New Engineering Roles Open" />
               </div>
               <div className="space-y-2">
-                <label className="text-xs font-bold text-slate-500 uppercase">Message</label>
-                <Textarea className="h-32 resize-none" placeholder="Enter details or application link..." value={content} onChange={e=>setContent(e.target.value)} />
+                <label className="text-xs font-bold text-slate-500 uppercase">Message Content</label>
+                <Textarea required value={content} onChange={e=>setContent(e.target.value)} rows={4} placeholder="Type your broadcast message to candidates..." />
               </div>
-              <Button onClick={postAnnouncement} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold">Deploy to Portal</Button>
-            </CardContent>
-          </Card>
-
-          <Card className="md:col-span-2 shadow-sm border-slate-200">
-            <CardHeader className="bg-slate-50 border-b">
-              <CardTitle className="text-lg flex items-center gap-2"><Users className="w-5 h-5 text-indigo-600"/> Registered Candidates ({candidates.length})</CardTitle>
-            </CardHeader>
-            <CardContent className="p-0">
-              {loading ? <div className="p-12 flex justify-center"><Loader2 className="w-8 h-8 animate-spin text-indigo-600"/></div> : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="font-bold">Name</TableHead>
-                      <TableHead className="font-bold">Email</TableHead>
-                      <TableHead className="font-bold">Registered</TableHead>
-                      <TableHead className="text-right font-bold">Secure Contact</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {candidates.map(c => (
-                      <TableRow key={c.id}>
-                        <TableCell className="font-bold text-slate-800">{c.name}</TableCell>
-                        <TableCell className="text-slate-600">{c.email}</TableCell>
-                        <TableCell className="text-slate-500">{new Date(c.created_at).toLocaleDateString()}</TableCell>
-                        <TableCell className="text-right">
-                          <Button variant="outline" size="sm" onClick={() => openChat(c)} className="border-blue-200 text-blue-700 bg-blue-50 hover:bg-blue-100">
-                            <MessageSquare className="w-4 h-4 mr-2"/> Message
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                    {candidates.length === 0 && <TableRow><TableCell colSpan={4} className="text-center p-8">No registered candidates yet.</TableCell></TableRow>}
-                  </TableBody>
-                </Table>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* SECURE HR -> CANDIDATE CHAT MODAL */}
-        {activeChatCandidate && (
-          <div className="fixed bottom-6 right-6 w-[400px] h-[550px] bg-white rounded-2xl shadow-2xl z-50 flex flex-col border border-slate-300 overflow-hidden animate-in slide-in-from-bottom-10 fade-in duration-300">
-            <div className="bg-slate-900 p-4 flex justify-between items-center text-white">
-              <div className="flex items-center gap-3">
-                <div className="bg-indigo-500/30 p-2 rounded-lg"><Building2 className="w-5 h-5 text-indigo-300"/></div>
-                <div>
-                  <h3 className="font-bold text-sm">Chat: {activeChatCandidate.name}</h3>
-                  <p className="text-[10px] text-slate-400">Secure Pre-Hire Communication</p>
-                </div>
-              </div>
-              <button onClick={closeChat} className="text-slate-400 hover:text-white"><X className="w-5 h-5"/></button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50">
-              {chatMessages.length === 0 && <p className="text-center text-xs text-slate-400 p-8 border-2 border-dashed rounded-xl">No prior communication with {activeChatCandidate.name}. Send a message below.</p>}
-              {chatMessages.map((msg, idx) => {
-                const isHR = msg.sender_id === currentUserId;
-                return (
-                  <div key={idx} className={`flex flex-col ${isHR ? 'items-end' : 'items-start'}`}>
-                    <div className="flex items-end gap-2 mb-1">
-                      {!isHR && <div className="w-6 h-6 rounded-full bg-slate-200 flex items-center justify-center"><User className="w-3 h-3 text-slate-600"/></div>}
-                      <div className={`max-w-[85%] rounded-2xl p-3 text-sm shadow-sm whitespace-pre-wrap ${isHR ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-white border border-slate-200 text-slate-800 rounded-bl-none'}`}>
-                        {msg.message}
-                      </div>
-                      {isHR && <div className="w-6 h-6 rounded-full bg-indigo-100 flex items-center justify-center"><Building2 className="w-3 h-3 text-indigo-700"/></div>}
-                    </div>
-                    <span className="text-[9px] text-slate-400 px-8">{new Date(msg.created_at).toLocaleTimeString()}</span>
-                  </div>
-                );
-              })}
-              <div ref={messagesEndRef} />
-            </div>
-
-            <form onSubmit={sendChatMessage} className="p-3 bg-white border-t border-slate-200 flex gap-2">
-              <Input value={newChatMessage} onChange={(e) => setNewChatMessage(e.target.value)} placeholder={`Message ${activeChatCandidate.name}...`} className="flex-1 text-sm bg-slate-50" disabled={sendingChat} />
-              <Button type="submit" size="icon" disabled={!newChatMessage.trim() || sendingChat} className="bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm shrink-0">
-                {sendingChat ? <Loader2 className="w-4 h-4 animate-spin"/> : <Send className="w-4 h-4"/>}
+              <Button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold">
+                Broadcast Message
               </Button>
             </form>
-          </div>
-        )}
+          </CardContent>
+        </Card>
 
+        <Card className="md:col-span-2 shadow-sm border-slate-200">
+          <CardHeader className="bg-slate-50 border-b flex flex-row items-center justify-between">
+            <CardTitle className="text-lg flex items-center gap-2"><Users className="w-5 h-5 text-blue-600"/> Registered & Talent Pool Candidates</CardTitle>
+            <span className="text-xs font-semibold bg-slate-200 text-slate-700 px-2.5 py-1 rounded-full">{candidates.length} Total</span>
+          </CardHeader>
+          <CardContent className="p-0">
+            {loading ? (
+              <div className="flex justify-center p-12"><Loader2 className="w-8 h-8 animate-spin text-indigo-600"/></div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="font-bold">Candidate Name</TableHead>
+                    <TableHead className="font-bold">Contact Email</TableHead>
+                    <TableHead className="font-bold">Account Type</TableHead>
+                    <TableHead className="font-bold text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {candidates.map((cand) => (
+                    <TableRow key={cand.id}>
+                      <TableCell className="font-bold text-slate-800">{cand.name || cand.full_name}</TableCell>
+                      <TableCell className="font-mono text-xs text-slate-600">{cand.email}</TableCell>
+                      <TableCell>
+                        <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${cand.is_ats_only ? 'bg-amber-100 text-amber-800' : 'bg-green-100 text-green-800'}`}>
+                          {cand.is_ats_only ? 'Applicant' : 'Registered User'}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button size="sm" variant="outline" onClick={() => openChatWithCandidate(cand)} className="gap-1 text-xs border-slate-300">
+                          <MessageSquare className="w-3.5 h-3.5 text-indigo-600" /> Direct Chat
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  {candidates.length === 0 && (
+                    <TableRow><TableCell colSpan={4} className="text-center p-8 text-slate-500">No candidates registered yet.</TableCell></TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
       </div>
-    </DashboardLayout>
+
+      {/* REALTIME DIRECT CHAT SLIDE-OVER DRAWER */}
+      {activeChatCandidate && (
+        <div className="fixed inset-y-0 right-0 z-50 w-full max-w-md bg-white shadow-2xl border-l border-slate-200 flex flex-col animate-in slide-in-from-right duration-200">
+          <div className="bg-slate-900 text-white p-4 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <User className="w-5 h-5 text-indigo-400" />
+              <div>
+                <h3 className="font-bold text-sm">Chat: {activeChatCandidate.name || activeChatCandidate.full_name}</h3>
+                <p className="text-[10px] text-slate-400">Secure Pre-Hire Communication</p>
+              </div>
+            </div>
+            <button onClick={closeChat} className="text-slate-400 hover:text-white"><X className="w-5 h-5"/></button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50">
+            {chatMessages.length === 0 && <p className="text-center text-xs text-slate-400 p-8 border-2 border-dashed rounded-xl">No prior communication with {activeChatCandidate.name || activeChatCandidate.full_name}. Send a message below.</p>}
+            {chatMessages.map((msg, idx) => {
+              const isHR = msg.sender_id === currentUserId;
+              return (
+                <div key={idx} className={`flex flex-col ${isHR ? 'items-end' : 'items-start'}`}>
+                  <div className="flex items-end gap-2 mb-1">
+                    {!isHR && <div className="w-6 h-6 rounded-full bg-slate-200 flex items-center justify-center"><User className="w-3 h-3 text-slate-600"/></div>}
+                    <div className={`max-w-[85%] rounded-2xl p-3 text-sm shadow-sm whitespace-pre-wrap ${isHR ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-white border border-slate-200 text-slate-800 rounded-bl-none'}`}>
+                      {msg.message}
+                    </div>
+                    {isHR && <div className="w-6 h-6 rounded-full bg-indigo-100 flex items-center justify-center"><Building2 className="w-3 h-3 text-indigo-700"/></div>}
+                  </div>
+                  <span className="text-[9px] text-slate-400 px-8">{new Date(msg.created_at).toLocaleTimeString()}</span>
+                </div>
+              );
+            })}
+            <div ref={messagesEndRef} />
+          </div>
+
+          <form onSubmit={sendChatMessage} className="p-3 bg-white border-t border-slate-200 flex gap-2">
+            <Input value={newChatMessage} onChange={(e) => setNewChatMessage(e.target.value)} placeholder={`Message ${activeChatCandidate.name || activeChatCandidate.full_name}...`} className="flex-1 text-sm bg-slate-50" disabled={sendingChat} />
+            <Button type="submit" size="icon" disabled={!newChatMessage.trim() || sendingChat} className="bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm shrink-0">
+              {sendingChat ? <Loader2 className="w-4 h-4 animate-spin"/> : <Send className="w-4 h-4"/>}
+            </Button>
+          </form>
+        </div>
+      )}
+    </div>
   );
 }

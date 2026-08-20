@@ -57,6 +57,12 @@ export default function AssessmentCenter() {
   const [publishedAssessments, setPublishedAssessments] = useState<any[]>([]);
   const [jdText, setJdText] = useState("");
 
+  // Token Dispatch Modal States
+  const [dispatchAssessment, setDispatchAssessment] = useState<any | null>(null);
+  const [candidateApps, setCandidateApps] = useState<any[]>([]);
+  const [selectedAppId, setSelectedAppId] = useState<string>("");
+  const [dispatchingToken, setDispatchingToken] = useState(false);
+
   // ==================== CANDIDATE ACCESS STATES ====================
   const webcamVideoRef = useRef<HTMLVideoElement>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -258,6 +264,115 @@ Output STRICTLY a valid JSON array where each item has: {"question": "...", "opt
     }
   };
 
+  const openDispatchModal = async (assessment: any) => {
+    setDispatchAssessment(assessment);
+    setSelectedAppId("");
+    try {
+      const { data, error } = await supabase
+        .from("job_applications")
+        .select("id, candidate_id, candidate_name, candidate_email, status, form_id, job_forms:form_id (job_title)")
+        .not("status", "eq", "Rejected")
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+      setCandidateApps(data || []);
+    } catch (err: any) {
+      toast({ title: "Failed to fetch candidates", description: err.message, variant: "destructive" });
+    }
+  };
+
+  const executeTokenDispatch = async () => {
+    if (!dispatchAssessment || !selectedAppId) {
+      return toast({ title: "Select Candidate", description: "Please select an applicant to dispatch the token.", variant: "destructive" });
+    }
+
+    setDispatchingToken(true);
+    try {
+      const targetApp = candidateApps.find(a => a.id === selectedAppId);
+      if (!targetApp) throw new Error("Selected candidate application not found.");
+
+      const generatedToken = `ATK-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+      const { data: tokenRow, error: tokenErr } = await supabase
+        .from("assessment_tokens")
+        .insert([{
+          token: generatedToken,
+          assessment_id: dispatchAssessment.id,
+          application_id: targetApp.id,
+          candidate_id: targetApp.candidate_id,
+          status: "Active",
+          used: false,
+          expires_at: expiresAt
+        }])
+        .select()
+        .single();
+
+      if (tokenErr) throw tokenErr;
+
+      // Update application status
+      await supabase
+        .from("job_applications")
+        .update({ status: "Assessment Assigned" })
+        .eq("id", targetApp.id);
+
+      // Notify candidate
+      if (targetApp.candidate_id) {
+        await supabase.from("candidate_notifications").insert([{
+          candidate_id: targetApp.candidate_id,
+          title: "Assessment Assigned",
+          message: `You have been assigned an assessment: "${dispatchAssessment.title}". Access Token: ${generatedToken}.`,
+          read: false
+        }]);
+      }
+
+      // Dispatch Email via send-email function
+      if (targetApp.candidate_email) {
+        try {
+          const assessmentUrl = `${window.location.origin}/assessment/${generatedToken}`;
+          await supabase.functions.invoke("send-email", {
+            body: {
+              type: "assessment_dispatch",
+              to: targetApp.candidate_email,
+              subject: `Official Assessment Assigned — FWC (${dispatchAssessment.title})`,
+              html: `
+                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 32px; background: #ffffff;">
+                  <h2 style="color: #1e1b4b; margin-top: 0;">Assessment Invitation</h2>
+                  <p style="color: #475569; font-size: 14px; line-height: 1.6;">Hello ${targetApp.candidate_name || 'Candidate'},</p>
+                  <p style="color: #475569; font-size: 14px; line-height: 1.6;">You have been invited to complete the proctored assessment for <strong>${dispatchAssessment.title}</strong>.</p>
+                  
+                  <div style="background: #f8fafc; border: 1px solid #cbd5e1; padding: 20px; border-radius: 8px; margin: 24px 0;">
+                    <p style="margin: 4px 0; font-size: 13px; color: #334155;">• <strong>Assessment Title:</strong> ${dispatchAssessment.title}</p>
+                    <p style="margin: 4px 0; font-size: 13px; color: #334155;">• <strong>Duration:</strong> ${dispatchAssessment.duration_minutes || 60} Minutes</p>
+                    <p style="margin: 4px 0; font-size: 13px; color: #334155;">• <strong>Passing Cutoff:</strong> ${dispatchAssessment.passing_score || 70}%</p>
+                    <p style="margin: 4px 0; font-size: 13px; color: #334155;">• <strong>Secure Access Token:</strong> <span style="font-family: monospace; color: #4f46e5; font-weight: bold;">${generatedToken}</span></p>
+                  </div>
+
+                  <a href="${assessmentUrl}" style="display: inline-block; background: #4f46e5; color: #ffffff; padding: 12px 24px; font-weight: bold; border-radius: 8px; text-decoration: none; font-size: 14px;">Launch Secure Assessment Portal &rarr;</a>
+                  
+                  <p style="color: #94a3b8; font-size: 12px; margin-top: 24px;">Note: This access token is single-use and will expire in 7 days.</p>
+                </div>
+              `
+            }
+          });
+        } catch (emailErr) {
+          console.warn("Email dispatch error (non-blocking):", emailErr);
+        }
+      }
+
+      toast({
+        title: "Token Dispatched Successfully!",
+        description: `Secure Token ${generatedToken} generated and dispatched to ${targetApp.candidate_name || 'candidate'}.`
+      });
+
+      setDispatchAssessment(null);
+    } catch (err: any) {
+      toast({ title: "Dispatch Failed", description: err.message, variant: "destructive" });
+    } finally {
+      setDispatchingToken(false);
+    }
+  };
+
   // ==================== CANDIDATE GATE & GRADING LOGIC ====================
   const executeTokenHandshakeVerification = async (targetTokenString: string) => {
     try {
@@ -267,6 +382,7 @@ Output STRICTLY a valid JSON array where each item has: {"question": "...", "opt
         .from("assessment_tokens")
         .select("*")
         .eq("token", targetTokenString)
+        .eq("used", false)
         .in("status", ["Active", "InProgress"])
         .maybeSingle();
 
@@ -510,7 +626,7 @@ Output STRICTLY a valid JSON array where each item has: {"question": "...", "opt
                       <TableRow>
                         <TableHead className="text-xs font-black uppercase">Assessment Target Requisition</TableHead>
                         <TableHead className="text-xs font-black uppercase">Metrics Settings</TableHead>
-                        <TableHead className="text-xs font-black uppercase text-right">Status</TableHead>
+                        <TableHead className="text-xs font-black uppercase text-right">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -520,13 +636,66 @@ Output STRICTLY a valid JSON array where each item has: {"question": "...", "opt
                           <TableCell className="text-xs font-semibold text-slate-500 font-mono">
                             {ass.difficulty || "Intermediate"} • {ass.question_count || ass.questions?.length || 0} Qs • {ass.duration_minutes} Mins • Cutoff: {ass.passing_score}%
                           </TableCell>
-                          <TableCell className="text-right"><span className="px-2 py-0.5 bg-emerald-50 border border-emerald-200 text-emerald-700 text-[9px] font-black uppercase rounded tracking-wider">Active</span></TableCell>
+                          <TableCell className="text-right flex items-center justify-end gap-2">
+                            <span className="px-2 py-0.5 bg-emerald-50 border border-emerald-200 text-emerald-700 text-[9px] font-black uppercase rounded tracking-wider">Active</span>
+                            <Button size="sm" onClick={() => openDispatchModal(ass)} className="h-7 text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-bold gap-1">
+                              <Share2 className="w-3 h-3" /> Dispatch Token
+                            </Button>
+                          </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
                   </Table>
                 </CardContent>
               </Card>
+            )}
+
+            {/* TOKEN DISPATCH MODAL DIALOG */}
+            {dispatchAssessment && (
+              <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+                <Card className="w-full max-w-lg bg-white shadow-2xl rounded-2xl border-slate-200 animate-in zoom-in-95">
+                  <CardHeader className="bg-indigo-900 text-white p-5 rounded-t-2xl">
+                    <CardTitle className="text-sm font-black uppercase tracking-wider flex items-center gap-2">
+                      <Share2 className="w-4 h-4 text-indigo-300" /> Dispatch Token to Candidate
+                    </CardTitle>
+                    <p className="text-xs text-indigo-200 mt-1">
+                      Blueprint: <strong>{dispatchAssessment.title}</strong> ({dispatchAssessment.duration_minutes || 60} Mins)
+                    </p>
+                  </CardHeader>
+                  <CardContent className="p-6 space-y-5">
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block">Select Candidate Applicant</label>
+                      <Select value={selectedAppId} onValueChange={setSelectedAppId}>
+                        <SelectTrigger className="w-full h-11 bg-slate-50 border-slate-200 text-xs font-semibold">
+                          <SelectValue placeholder="Choose applicant to receive token..." />
+                        </SelectTrigger>
+                        <SelectContent className="max-h-60 overflow-y-auto">
+                          {candidateApps.map(app => (
+                            <SelectItem key={app.id} value={app.id} className="text-xs">
+                              {app.candidate_name || 'Unnamed Candidate'} ({app.candidate_email || 'No email'}) — {app.status}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs space-y-1.5 text-slate-600">
+                      <p className="font-bold text-slate-800 flex items-center gap-1"><ShieldCheck className="w-4 h-4 text-indigo-600" /> Automated Security Guarantee:</p>
+                      <p>• A unique single-use token (`ATK-...`) will be bound to the candidate.</p>
+                      <p>• An automated email with launch button will be dispatched instantly.</p>
+                      <p>• Candidate application status will advance to <strong>Assessment Assigned</strong>.</p>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-3 pt-2">
+                      <Button variant="outline" onClick={() => setDispatchAssessment(null)} disabled={dispatchingToken} className="h-10 text-xs font-bold">Cancel</Button>
+                      <Button onClick={executeTokenDispatch} disabled={dispatchingToken || !selectedAppId} className="h-10 text-xs font-black uppercase tracking-wider bg-indigo-600 hover:bg-indigo-700 text-white gap-2">
+                        {dispatchingToken ? <Loader2 className="w-4 h-4 animate-spin" /> : <Share2 className="w-4 h-4" />}
+                        Generate & Email Token
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
             )}
           </div>
         </div>
@@ -630,7 +799,7 @@ Output STRICTLY a valid JSON array where each item has: {"question": "...", "opt
                 <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 text-left shadow-inner">
                   <p className="text-[10px] font-black uppercase text-slate-400 mb-1.5 tracking-wider">Evaluation Narrative Summary Commentary</p>
                   <p className="text-xs leading-relaxed text-slate-700 italic font-semibold">
-                    "{examResult.aiFeedback || aiFeedback}"
+                    "{examResult?.aiFeedback || aiFeedback || 'Evaluation complete.'}"
                   </p>
                 </div>
 

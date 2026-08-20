@@ -10,7 +10,7 @@ import { supabase } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, ShieldAlert, CheckCircle, Clock, MessageSquare, ArrowUpRight, Search, Filter, Send, AlertTriangle } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { callCorporateAI } from "@/lib/ai";
 
 export default function TeamLeadComplaints() {
   const { toast } = useToast();
@@ -108,12 +108,8 @@ export default function TeamLeadComplaints() {
     try {
       let aiSeverity = "MODERATE";
       try {
-        const apiKey = import.meta.env.VITE_GEMINI_API_KEY ;
-        const genAI = new GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
         const prompt = `Analyze this corporate employee complaint: "${form.title} - ${form.description}". Return EXACTLY ONE WORD determining the severity: CRITICAL, HIGH, MODERATE, or LOW. No markdown, no punctuation.`;
-        const result = await model.generateContent(prompt);
-        const responseText = result.response.text().trim().toUpperCase();
+        const responseText = (await callCorporateAI({ prompt })).trim().toUpperCase();
         if (["CRITICAL", "HIGH", "MODERATE", "LOW"].includes(responseText)) {
           aiSeverity = responseText;
         }

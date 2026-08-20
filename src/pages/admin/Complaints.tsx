@@ -10,7 +10,8 @@ import { supabase } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, ShieldAlert, CheckCircle, Clock, Briefcase, Video, MessageSquare, AlertTriangle, Search, Filter, Send } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { callCorporateAI } from "@/lib/ai";
+import { notificationService } from "@/lib/notifications";
 
 export default function AdminComplaints() {
   const { toast } = useToast();
@@ -57,20 +58,29 @@ export default function AdminComplaints() {
   };
 
   const updateStatus = async (id: string, newStatus: string) => {
+    const comp = complaints.find(c => c.id === id);
     const { error } = await supabase.from('complaints').update({ status: newStatus }).eq('id', id);
     if (!error) {
+      if (comp?.user_id) {
+        await notificationService.sendToUser(comp.user_id, {
+          title: `Ticket Status: ${newStatus}`,
+          message: `Your ticket "${comp.title}" has been updated to "${newStatus}" by Administration.`,
+          type: "complaint",
+          link: "/employee/complaints"
+        });
+      }
       toast({ title: "Status Updated", description: `Ticket marked as ${newStatus}.` });
       setComplaints(complaints.map(c => c.id === id ? { ...c, status: newStatus } : c));
     }
   };
 
   const dispatchMediation = async (userId: string, userName: string, title: string) => {
-    await supabase.from('notifications').insert([{
-      user_id: userId,
+    await notificationService.sendToUser(userId, {
       title: "Mediation Request",
-      message: `HR Administration has opened a direct channel regarding your ticket: "${title}"`,
-      is_read: false
-    }]);
+      message: `HR Administration has opened a direct mediation channel regarding ticket: "${title}"`,
+      type: "chat",
+      link: "/employee/chat"
+    });
     
     localStorage.setItem('activeChatUserId', userId);
     localStorage.setItem('activeChatUserName', userName);
@@ -91,12 +101,8 @@ export default function AdminComplaints() {
     try {
       let aiSeverity = "MODERATE";
       try {
-        const apiKey = import.meta.env.VITE_GEMINI_API_KEY ;
-        const genAI = new GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
         const prompt = `Analyze this system admin alert: "${form.title} - ${form.description}". Return EXACTLY ONE WORD determining the severity: CRITICAL, HIGH, MODERATE, or LOW. No markdown, no punctuation.`;
-        const result = await model.generateContent(prompt);
-        const responseText = result.response.text().trim().toUpperCase();
+        const responseText = (await callCorporateAI({ prompt })).trim().toUpperCase();
         if (["CRITICAL", "HIGH", "MODERATE", "LOW"].includes(responseText)) {
           aiSeverity = responseText;
         }

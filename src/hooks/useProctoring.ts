@@ -109,6 +109,49 @@ export function useProctoring({ assessmentTokenId, candidateId, onViolation, max
       }
     };
 
+    // --- Web Audio API Microphone Noise & Speech Anomaly Detection ---
+    let audioCtx: AudioContext | null = null;
+    let micStream: MediaStream | null = null;
+    let audioInterval: number | null = null;
+
+    const initAudioMonitoring = async () => {
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const source = audioCtx.createMediaStreamSource(micStream);
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 256;
+        source.connect(analyser);
+
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        let highDecibelStreak = 0;
+
+        audioInterval = window.setInterval(() => {
+          analyser.getByteFrequencyData(dataArray);
+          let sum = 0;
+          for (let i = 0; i < dataArray.length; i++) {
+            sum += dataArray[i];
+          }
+          const avgVolume = sum / dataArray.length;
+
+          // Flag sustained loud ambient noise or speech (decibel volume threshold > 65)
+          if (avgVolume > 65) {
+            highDecibelStreak++;
+            if (highDecibelStreak >= 4) { // Sustained background speech (> 4 sec)
+              logEvent("audio_anomaly", "warning", "Sustained background speech or loud noise detected");
+              highDecibelStreak = 0;
+            }
+          } else {
+            highDecibelStreak = Math.max(0, highDecibelStreak - 1);
+          }
+        }, 1000);
+      } catch (err) {
+        // Audio capture permission denied or unavailable
+      }
+    };
+
+    initAudioMonitoring();
+
     document.addEventListener("visibilitychange", handleVisibility);
     window.addEventListener("blur", handleBlur);
     window.addEventListener("focus", handleFocus);
@@ -119,6 +162,10 @@ export function useProctoring({ assessmentTokenId, candidateId, onViolation, max
     document.addEventListener("keydown", handleKeyDown);
 
     return () => {
+      if (audioInterval) clearInterval(audioInterval);
+      if (micStream) micStream.getTracks().forEach(track => track.stop());
+      if (audioCtx) audioCtx.close();
+
       document.removeEventListener("visibilitychange", handleVisibility);
       window.removeEventListener("blur", handleBlur);
       window.removeEventListener("focus", handleFocus);
