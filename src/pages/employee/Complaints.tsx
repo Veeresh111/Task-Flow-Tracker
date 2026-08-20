@@ -9,7 +9,8 @@ import { Label } from "@/components/ui/label";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, AlertTriangle, CheckCircle, Clock, ShieldAlert, Sparkles, Send } from "lucide-react";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { callCorporateAI } from "@/lib/ai";
+import { notificationService } from "@/lib/notifications";
 
 export default function EmployeeComplaints() {
   const { toast } = useToast();
@@ -55,11 +56,8 @@ export default function EmployeeComplaints() {
       // AI TRIAGE ENGINE: Automatically assess severity to prevent false reporting
       let aiSeverity = "MODERATE";
       try {
-        const genAI = new GoogleGenerativeAI(import.meta.env.VITE_GEMINI_API_KEY);
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
         const prompt = `Analyze this corporate employee complaint: "${form.title} - ${form.description}". Return EXACTLY ONE WORD determining the severity: CRITICAL, HIGH, MODERATE, or LOW. No markdown, no punctuation.`;
-        const result = await model.generateContent(prompt);
-        const responseText = result.response.text().trim().toUpperCase();
+        const responseText = (await callCorporateAI({ prompt })).trim().toUpperCase();
         if (["CRITICAL", "HIGH", "MODERATE", "LOW"].includes(responseText)) {
           aiSeverity = responseText;
         }
@@ -78,6 +76,14 @@ export default function EmployeeComplaints() {
       }]);
 
       if (error) throw error;
+
+      await notificationService.sendToRole(form.target_role === 'ADMIN' ? ['admin'] : ['team_lead', 'admin'], {
+        title: `New Ticket Filed [${aiSeverity}]`,
+        message: `${userProfile.name || 'Employee'} submitted: "${form.title}" (${form.category}).`,
+        type: "complaint",
+        link: form.target_role === 'ADMIN' ? "/admin/complaints" : "/team-lead/dashboard"
+      });
+
       toast({ title: "Ticket Submitted", description: `Routed to ${form.target_role === 'ADMIN' ? 'System Admin' : 'Team Lead'} (Severity: ${aiSeverity})` });
       setForm({ title: "", description: "", category: "General Workflow", target_role: "TEAM_LEAD" });
       fetchComplaints();

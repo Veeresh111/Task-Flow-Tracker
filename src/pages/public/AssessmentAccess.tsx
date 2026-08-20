@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, ShieldCheck, Timer, Award, AlertCircle, Lock, Camera, Monitor, AlertTriangle, Key, ScanFace } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { notificationService } from "@/lib/notifications";
 import { loadFaceModels, detectFace, getStoredFaceDescriptor, compareFaceDescriptors, getFaceVerificationState } from "@/hooks/useFaceVerification";
 
 interface PublicQuestion {
@@ -14,7 +15,7 @@ interface PublicQuestion {
 }
 
 export default function AssessmentAccess() {
-  useEffect(() => { document.title = "Assessment - TaskFlow"; }, []);
+  useEffect(() => { document.title = "Assessment - FWC"; }, []);
   const { toast } = useToast();
   const navigate = useNavigate();
 
@@ -819,6 +820,14 @@ export default function AssessmentAccess() {
 
       setCurrentStep('result');
       toast({ title: "Assessment Submitted Successfully" });
+
+      // Notify HR and Admin about assessment grading & proctoring results
+      await notificationService.sendToRole(['hr', 'admin'], {
+        title: "Candidate Assessment Completed",
+        message: `Candidate finished examination with score ${gradingPayloadResult.score || 0}%. (${violationCountRef.current} proctor incident flags recorded).`,
+        type: "assessment",
+        link: "/hr/recruitment/proctoring"
+      });
     } catch (err: any) {
       toast({ title: "Submission Failed", description: "Could not submit your assessment. Please try again.", variant: "destructive" });
     } finally {
@@ -901,9 +910,9 @@ export default function AssessmentAccess() {
             <div className="space-y-2 bg-amber-50 border border-amber-200 p-4 rounded-xl text-xs font-semibold text-amber-900 leading-relaxed">
               <p className="font-black flex items-center gap-1.5 text-amber-950 mb-1"><AlertTriangle className="w-4 h-4 text-amber-600"/> Proctored Environment Guard Directives:</p>
               <ul className="list-decimal pl-4 space-y-1">
-                <li>Your hardware webcam and microphone feeds must remain engaged for validation auditing logs tracks.</li>
-                <li>Exiting proctored fullscreen windows or switching browser tabs logging index points triggers immediate system violation counts.</li>
-                <li>Hitting 3 structural window violations forces immediate automated execution submission failures.</li>
+                <li>Your hardware webcam and microphone feeds must remain active throughout the examination.</li>
+                <li>Exiting proctored fullscreen windows or switching browser tabs will trigger automatic security violation logs.</li>
+                <li>Reaching {getMaxViolations()} total violations will force automated exam disqualification.</li>
               </ul>
             </div>
 

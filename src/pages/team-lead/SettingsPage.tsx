@@ -47,8 +47,8 @@ export default function SettingsPage() {
 
       // Get signed URL and save to database
       const { data: signedData } = await supabase.storage.from('avatars').createSignedUrl(fileName, 86400);
-      const url = signedData?.signedUrl || '';
-      await supabase.from('profiles').update({ avatar_url: url }).eq('id', profile.id);
+      const { error: updateError } = await supabase.from('profiles').update({ avatar_url: url }).eq('id', profile.id);
+      if (updateError) throw updateError;
 
       setProfile({ ...profile, avatar_url: url });
       toast({ title: "Profile Photo Updated!" });

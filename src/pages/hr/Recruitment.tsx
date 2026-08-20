@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { DashboardLayout } from "@/components/layout/DashboardLayout";
+
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -87,7 +87,7 @@ export default function HRRecruitment() {
         "responsibilities": ["Resp 1", "Resp 2", "Resp 3", "Resp 4", "Resp 5"],
         "techStack": [{"skill": "Core Skill", "level": "Expert"}, {"skill": "Secondary Skill", "level": "Intermediate"}]
       }`;
-      const res = await callHF(prompt);
+      const res = await callCorporateAI({ prompt });
       let cleanText = res.replace(/```[a-z]*\n?/gi, '').replace(/```/g, '').trim();
       const startIdx = cleanText.indexOf('{');
       const endIdx = cleanText.lastIndexOf('}');
@@ -125,7 +125,7 @@ export default function HRRecruitment() {
         "candidateName": "${offerInputs.name}",
         "paragraphs": ["Para 1 (Welcome & Role context)", "Para 2 (Detailed Compensation & Bonus)", "Para 3 (Reporting conditions & closing)"]
       }`;
-      const res = await callHF(prompt);
+      const res = await callCorporateAI({ prompt, max_tokens: 2048 });
       let cleanText = res.replace(/```[a-z]*\n?/gi, '').replace(/```/g, '').trim();
       const startIdx = cleanText.indexOf('{');
       const endIdx = cleanText.lastIndexOf('}');
@@ -235,17 +235,10 @@ export default function HRRecruitment() {
     setSavingOffer(false);
   };
 
-  const callHF = async (prompt: string, sysInstruct?: string) => {
-    try {
-      return await callCorporateAI({ prompt, systemInstruction: sysInstruct, max_tokens: 2048 });
-    } catch {
-      toast({ title: "AI Offline", description: "AI proxy service unavailable.", variant: "destructive" });
-      return "";
-    }
-  };
+
 
   return (
-    <DashboardLayout role="hr">
+    <>
       <div className="max-w-7xl mx-auto space-y-6 animate-fade-in pb-12">
         <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
           <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-2"><UserPlus className="text-indigo-600"/> AI Recruitment & ATS</h1>
@@ -481,6 +474,6 @@ export default function HRRecruitment() {
         </div>
       )}
 
-    </DashboardLayout>
+    </>
   );
 }

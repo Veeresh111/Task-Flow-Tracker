@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabase";
-import { Loader2, Calendar, FileMinus, Send, CheckCircle2, XCircle, Clock, AlertTriangle } from "lucide-react"; // ALL IMPORTS FIXED
+import { notificationService } from "@/lib/notifications";
+import { Loader2, Calendar, FileMinus, Send, CheckCircle2, XCircle, Clock, AlertTriangle } from "lucide-react";
 
 export default function EmployeeLeaves() {
   const { toast } = useToast();
@@ -46,7 +47,15 @@ export default function EmployeeLeaves() {
         user_id: userId, leave_type: leaveData.type, start_date: leaveData.start, end_date: leaveData.end, reason: leaveData.reason, status: 'Pending'
       }]);
       if (error) throw error;
-      toast({ title: "Leave Request Submitted", description: "Sent to Team Lead for approval." });
+
+      await notificationService.sendToRole(['team_lead', 'hr', 'admin'], {
+        title: "New Leave Request Submitted",
+        message: `Employee requested ${leaveData.type} leave from ${leaveData.start} to ${leaveData.end}.`,
+        type: "leave",
+        link: "/team-lead/leaves"
+      });
+
+      toast({ title: "Leave Request Submitted", description: "Sent to Team Lead & HR for approval." });
       setLeaveData({ type: "Casual", start: "", end: "", reason: "" });
       fetchHistory();
     } catch (err: any) {
@@ -64,6 +73,14 @@ export default function EmployeeLeaves() {
         user_id: userId, expected_last_day: resignationData.date, reason: resignationData.reason, status: 'Pending'
       }]);
       if (error) throw error;
+
+      await notificationService.sendToRole(['hr', 'admin'], {
+        title: "Official Resignation Submitted",
+        message: `An employee submitted an official resignation notice. Expected last day: ${resignationData.date}.`,
+        type: "hr",
+        link: "/hr/leaves"
+      });
+
       toast({ title: "Resignation Submitted", description: "HR has been notified." });
       setResignationData({ date: "", reason: "" });
       fetchHistory();

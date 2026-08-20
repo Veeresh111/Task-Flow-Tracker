@@ -35,13 +35,8 @@ export default function ResetPassword() {
       <Card className="w-full max-w-md shadow-xl dark:bg-slate-900 dark:border-slate-700">
         <CardHeader className="text-center">
           <div className="flex flex-col items-center gap-3 mb-4">
-            <div className="relative group">
-              <div className="absolute inset-0 bg-indigo-500/20 rounded-full blur-2xl group-hover:bg-indigo-500/30 transition-all duration-500" />
-              <div className="relative w-16 h-16 shadow-lg group-hover:scale-105 transition-all duration-300">
-                <img src="/fwc-logo.png" alt="FWC" className="w-full h-full brightness-0 invert" />
-              </div>
-            </div>
-            <h1 className="text-xl font-bold text-slate-900 dark:text-white">FWC</h1>
+            <img src="/fwc-logo.png" alt="FWC Logo" className="h-12 w-auto drop-shadow-[0_2px_8px_rgba(99,102,241,0.35)]" />
+            <h1 className="text-xl font-extrabold text-slate-900 dark:text-white tracking-wider">FWC</h1>
           </div>
           <CardTitle className="text-2xl font-bold dark:text-white">Create New Password</CardTitle>
           <CardDescription>Enter a strong new password for your account.</CardDescription>

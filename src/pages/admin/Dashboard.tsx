@@ -8,7 +8,7 @@ import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip as RechartsToolti
 import { CareerPredictor } from "@/components/dashboard/CareerPredictor";
 
 export default function AdminDashboard() {
-  useEffect(() => { document.title = "Admin Dashboard - TaskFlow"; }, []);
+  useEffect(() => { document.title = "Admin Dashboard - FWC"; }, []);
   const [stats, setStats] = useState({ employees: 0, leads: 0, admins: 0, total: 0 });
   const [departmentData, setDepartmentData] = useState<any[]>([]);
     const [payrollSummary, setPayrollSummary] = useState<any>(null);

@@ -6,7 +6,7 @@ import { Loader2, Users, CheckSquare, Clock, AlertCircle } from "lucide-react";
 import { CareerPredictor } from "@/components/dashboard/CareerPredictor";
 
 export default function TeamLeadDashboard() {
-  useEffect(() => { document.title = "Team Lead Dashboard - TaskFlow"; }, []);
+  useEffect(() => { document.title = "Team Lead Dashboard - FWC"; }, []);
   const [stats, setStats] = useState({ teamMembers: 0, activeProjects: 0, pendingApprovals: 0, openComplaints: 0 });
   const [loading, setLoading] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);

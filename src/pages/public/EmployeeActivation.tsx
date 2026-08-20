@@ -46,12 +46,10 @@ export default function EmployeeActivation() {
       <div className="w-full max-w-md animate-fade-in">
         <div className="flex justify-center mb-8">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-xl gradient-primary flex items-center justify-center shadow-lg">
-              <span className="text-xl font-bold text-white">WM</span>
-            </div>
+            <img src="/fwc-logo.png" alt="FWC Logo" className="h-12 w-auto drop-shadow-[0_2px_8px_rgba(99,102,241,0.35)]" />
             <div>
-              <h1 className="text-2xl font-bold text-foreground">WorkFlow</h1>
-              <p className="text-sm text-muted-foreground">Employee Activation</p>
+              <h1 className="text-2xl font-extrabold text-foreground tracking-wider">FWC</h1>
+              <p className="text-sm text-muted-foreground font-medium">Employee Activation Portal</p>
             </div>
           </div>
         </div>

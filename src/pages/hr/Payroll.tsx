@@ -12,6 +12,7 @@ import {
   X, ShieldCheck, FileText, Download, ArrowRight
 } from "lucide-react";
 import { formatINR } from "@/lib/payroll";
+import { notificationService } from "@/lib/notifications";
 
 type CycleStatus = 'draft' | 'generated' | 'verified' | 'finance_approved' | 'hr_approved' | 'released';
 type TabKey = 'active' | 'history';
@@ -128,13 +129,19 @@ export default function HRPayroll() {
         .select('*')
         .order('year', { ascending: false })
         .order('month', { ascending: false });
-      if (error) throw error;
+      if (error) {
+        if (error.code === '42501' || (error as any).status === 403) {
+          console.warn("[PAYROLL_RLS] Access requires authenticated HR/Admin role:", error.message);
+        } else {
+          throw error;
+        }
+      }
       setCycles(data || []);
       if (!selectedCycle && data && data.length > 0) {
         setSelectedCycle(data[0]);
       }
     } catch (e: any) {
-      if (e.code === 'PGRST202' || e.code === '42P01') {
+      if (e.code === 'PGRST202' || e.code === '42P01' || e.code === '42501' || e.status === 403) {
         setDbReady(false);
       }
     } finally {
@@ -150,7 +157,15 @@ export default function HRPayroll() {
         .select('*')
         .eq('cycle_id', cycleId)
         .order('created_at');
-      if (error) throw error;
+      
+      if (error) {
+        if (error.code === '42501' || (error as any).status === 403) {
+          console.warn("[PAYROLL_RLS] Payslip access requires authenticated HR/Admin role:", error.message);
+          setPayslips([]);
+          return;
+        }
+        throw error;
+      }
 
       // Use snapped employee data from payslip row; fall back to profiles join
       // if snapshot columns are empty (pre-migration rows).
@@ -167,7 +182,7 @@ export default function HRPayroll() {
       }));
       setPayslips(enriched);
     } catch (e: any) {
-      if (e.code !== 'PGRST202' && e.code !== '42P01') {
+      if (e.code !== 'PGRST202' && e.code !== '42P01' && e.code !== '42501' && e.status !== 403) {
         toast({ title: 'Failed to load payslips', variant: 'destructive' });
       }
       setPayslips([]);
@@ -210,6 +225,14 @@ export default function HRPayroll() {
           title: 'Payroll Generated',
           description: `${data.employees_generated} payslips created for ${MONTHS[currentMonth-1]} ${currentYear}. Evidence: ${data.evidence_code}`,
         });
+
+        await notificationService.sendToRole(['admin', 'hr'], {
+          title: `Payroll Generated: ${MONTHS[currentMonth-1]} ${currentYear}`,
+          message: `${data.employees_generated} payslips generated (Total Gross: ₹${Number(data.total_gross || 0).toLocaleString('en-IN')}). Ready for audit & verification.`,
+          type: "payroll",
+          link: "/hr/payroll"
+        });
+
         await fetchCycles();
       } else {
         toast({
@@ -246,6 +269,15 @@ export default function HRPayroll() {
         title: 'Status Updated',
         description: `Cycle moved to ${nextStatus.replace('_', ' ')}. Evidence: ${data.evidence_code}`,
       });
+
+      if (nextStatus === 'released') {
+        await notificationService.sendToRole(['employee', 'team_lead', 'hr', 'admin'], {
+          title: `Official Payslip Released 💰`,
+          message: `Payroll for ${MONTHS[(selectedCycle.month || 1) - 1]} ${selectedCycle.year} has been released. View your payslip in the portal.`,
+          type: "payroll",
+          link: "/employee/payroll"
+        });
+      }
 
       setSelectedCycle(prev => prev ? { ...prev, status: nextStatus } as PayrollCycle : prev);
       setCycles(prev => prev.map(c => c.id === selectedCycle.id ? { ...c, status: nextStatus } as PayrollCycle : c));

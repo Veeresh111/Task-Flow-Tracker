@@ -39,7 +39,7 @@ BEGIN
   -- Only fire when status changes TO 'Rejected'
   IF NEW.status IS DISTINCT FROM OLD.status AND NEW.status = 'Rejected' THEN
     -- Resolve candidate email and name from profiles table
-    SELECT p.email, COALESCE(p.full_name, 'Candidate')
+    SELECT p.email, COALESCE(p.name, 'Candidate')
     INTO v_candidate_email, v_candidate_name
     FROM profiles p
     WHERE p.id = NEW.candidate_id;

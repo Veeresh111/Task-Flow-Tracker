@@ -5,11 +5,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, ShieldCheck, FileText, UploadCloud, CheckCircle2, AlertCircle, User, Mail, Phone, Briefcase, Sparkles } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { VectorMath } from "@/lib/dsa/VectorMath";
+import { notificationService } from "@/lib/notifications";
 
 export default function JobApplication() {
-  useEffect(() => { document.title = "Apply - TaskFlow"; }, []);
+  useEffect(() => { document.title = "Apply - FWC"; }, []);
   const { formId } = useParams<{ formId: string }>();
   const { toast } = useToast();
   const navigate = useNavigate();
@@ -296,9 +297,17 @@ export default function JobApplication() {
           const parsed = await response.json();
           calculatedAIScore = Math.max(0, Math.min(100, Number(parsed.score || 0)));
           calculatedAIVerdict = parsed.verdict || calculatedAIVerdict;
+        } else {
+          const dsaScore = VectorMath.computeCandidateMatchScore(resumeParsedText || "", targetJD);
+          calculatedAIScore = dsaScore.overallScore;
+          calculatedAIVerdict = `Automated vector analysis: ${dsaScore.overallScore}% compatibility with required requisition parameters.`;
         }
       } catch (aiExc) {
-        console.error("AI pre-screening failed:", aiExc);
+        console.error("AI pre-screening failed, engaging VectorMath engine:", aiExc);
+        const targetJD = formMeta.jd_text || 'Corporate Requisition Role Profile';
+        const dsaScore = VectorMath.computeCandidateMatchScore(resumeParsedText || "", targetJD);
+        calculatedAIScore = dsaScore.overallScore;
+        calculatedAIVerdict = `Automated vector analysis: ${dsaScore.overallScore}% compatibility with required requisition parameters.`;
       }
 
       const passThresholdGated = calculatedAIScore !== null && calculatedAIScore >= 75;
@@ -357,41 +366,35 @@ export default function JobApplication() {
             tokenIssuedAlert = true;
             finalPipelineStatus = "Assessment Assigned";
             
-            // Push direct candidate notification (Simulating automated outreach mailer dispatch)
-            await supabase
-              .from("candidate_notifications")
-              .insert([{
-                candidate_id: candidateRecordId,
-                title: "Pre-Exam Invitation Granted",
-                message: `Congratulations! Your screening index has passed our AI threshold score model criteria. Your unique access token is [ ${secureUUIDToken} ]. Navigate to the portal, input this hash string, and start your exam window within 48 hours.`,
-                read: false
-              }]);
+            // Push direct candidate notification with deep link
+            await notificationService.sendToCandidate(candidateRecordId, {
+              title: "Pre-Exam Assessment Granted",
+              message: `Congratulations! Your screening index has passed our AI threshold criteria. Your unique access token is [ ${secureUUIDToken} ]. Start your exam window within 48 hours.`,
+              type: "assessment",
+              link: `/assessment/${secureUUIDToken}`
+            });
 
-            // Notify HR team about new shortlisted candidate
-            try {
-              const { data: hrUsers } = await supabase
-                .from('profiles')
-                .select('id')
-                .eq('role', 'hr');
-              if (hrUsers && hrUsers.length > 0) {
-                const hrNotifications = hrUsers.map((hr: any) => ({
-                  user_id: hr.id,
-                  title: "Candidate Auto-Shortlisted",
-                  message: `${fullName.trim()} has been auto-shortlisted for ${formMeta.job_title} (ATS Score: ${calculatedAIScore}%). An assessment token has been auto-assigned. Review in Recruitment Pipeline.`,
-                  is_read: false,
-                  created_at: new Date().toISOString()
-                }));
-                await supabase.from('notifications').insert(hrNotifications);
-              }
-            } catch (hrNotifErr) {
-              console.error("HR notification error:", hrNotifErr);
-            }
+            // Notify HR & Admin team about new shortlisted candidate
+            await notificationService.sendToRole(['hr', 'admin'], {
+              title: "Candidate Auto-Shortlisted",
+              message: `${fullName.trim()} has applied & auto-shortlisted for ${formMeta.job_title} (ATS Score: ${calculatedAIScore || 'N/A'}%). Assessment token auto-assigned.`,
+              type: "recruitment",
+              link: "/hr/recruitment"
+            });
 
             // Update primary job applications status row to match timeline change
             await supabase
               .from("job_applications")
               .update({ status: "Assessment Assigned" })
               .eq("id", applicationRow.id);
+          } else {
+            // Standard application notification to HR/Admin
+            await notificationService.sendToRole(['hr', 'admin'], {
+              title: "New Job Application Received",
+              message: `${fullName.trim()} applied for ${formMeta.job_title} (ATS Score: ${calculatedAIScore || 'N/A'}%). Review in Recruitment Pipeline.`,
+              type: "recruitment",
+              link: "/hr/recruitment"
+            });
           }
         }
       }

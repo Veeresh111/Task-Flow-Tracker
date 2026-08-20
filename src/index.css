@@ -208,3 +208,611 @@
     background: linear-gradient(180deg, hsl(var(--card)) 0%, hsl(var(--muted)) 100%);
   }
 }
+
+/* ============================================================================
+   ENTERPRISE DARK MODE CASCADE
+   
+   Fixes ~1,300+ hardcoded Tailwind light-mode classes that were written without
+   dark: variants. This layer intercepts ALL common light-mode patterns and maps
+   them to appropriate dark equivalents when .dark class is active.
+   
+   Architecture: Uses .dark descendant selectors to override Tailwind utility
+   classes at the CSS layer, so component files don't need to be modified.
+   ============================================================================ */
+
+/* --- BACKGROUND OVERRIDES --- */
+.dark .bg-white {
+  background-color: hsl(222 47% 11%) !important;
+}
+
+.dark .bg-gray-50,
+.dark .bg-slate-50 {
+  background-color: hsl(222 47% 14%) !important;
+}
+
+.dark .bg-gray-100,
+.dark .bg-slate-100 {
+  background-color: hsl(222 47% 16%) !important;
+}
+
+.dark .bg-slate-200 {
+  background-color: hsl(222 47% 18%) !important;
+}
+
+/* Subtle background tints for status areas */
+.dark .bg-blue-50 {
+  background-color: hsl(217 60% 15%) !important;
+}
+
+.dark .bg-indigo-50 {
+  background-color: hsl(226 50% 15%) !important;
+}
+
+.dark .bg-emerald-50,
+.dark .bg-green-50 {
+  background-color: hsl(142 40% 12%) !important;
+}
+
+.dark .bg-red-50 {
+  background-color: hsl(0 40% 14%) !important;
+}
+
+.dark .bg-amber-50,
+.dark .bg-yellow-50,
+.dark .bg-orange-50 {
+  background-color: hsl(38 40% 14%) !important;
+}
+
+.dark .bg-purple-50,
+.dark .bg-violet-50 {
+  background-color: hsl(270 40% 14%) !important;
+}
+
+.dark .bg-pink-50 {
+  background-color: hsl(330 40% 14%) !important;
+}
+
+/* Surface-level light backgrounds */
+.dark .bg-slate-100\/50,
+.dark .bg-slate-200\/50 {
+  background-color: hsl(222 47% 14% / 0.5) !important;
+}
+
+/* --- TEXT COLOR OVERRIDES --- */
+/* Primary dark text → light */
+.dark .text-slate-900 {
+  color: hsl(210 40% 96%) !important;
+}
+
+.dark .text-slate-800 {
+  color: hsl(210 40% 90%) !important;
+}
+
+.dark .text-slate-700 {
+  color: hsl(215 20% 80%) !important;
+}
+
+.dark .text-slate-600 {
+  color: hsl(215 20% 70%) !important;
+}
+
+.dark .text-slate-500 {
+  color: hsl(215 16% 60%) !important;
+}
+
+/* Gray text variants */
+.dark .text-gray-900 {
+  color: hsl(210 40% 96%) !important;
+}
+
+.dark .text-gray-800 {
+  color: hsl(210 40% 90%) !important;
+}
+
+.dark .text-gray-700 {
+  color: hsl(215 20% 80%) !important;
+}
+
+.dark .text-gray-600 {
+  color: hsl(215 20% 70%) !important;
+}
+
+.dark .text-gray-500 {
+  color: hsl(215 16% 60%) !important;
+}
+
+/* --- BORDER OVERRIDES --- */
+.dark .border-slate-200 {
+  border-color: hsl(222 30% 22%) !important;
+}
+
+.dark .border-slate-300 {
+  border-color: hsl(222 30% 25%) !important;
+}
+
+.dark .border-slate-100 {
+  border-color: hsl(222 30% 18%) !important;
+}
+
+.dark .border-gray-200 {
+  border-color: hsl(222 30% 22%) !important;
+}
+
+.dark .border-gray-300 {
+  border-color: hsl(222 30% 25%) !important;
+}
+
+/* Colored borders in dark mode */
+.dark .border-blue-200 {
+  border-color: hsl(217 60% 30%) !important;
+}
+
+.dark .border-indigo-200,
+.dark .border-indigo-100 {
+  border-color: hsl(226 50% 30%) !important;
+}
+
+.dark .border-emerald-200,
+.dark .border-green-200 {
+  border-color: hsl(142 40% 25%) !important;
+}
+
+.dark .border-red-200 {
+  border-color: hsl(0 40% 30%) !important;
+}
+
+.dark .border-amber-200,
+.dark .border-yellow-200,
+.dark .border-orange-200 {
+  border-color: hsl(38 40% 30%) !important;
+}
+
+.dark .border-purple-200 {
+  border-color: hsl(270 40% 30%) !important;
+}
+
+/* --- HOVER STATE OVERRIDES --- */
+.dark .hover\:bg-slate-50:hover {
+  background-color: hsl(222 47% 16%) !important;
+}
+
+.dark .hover\:bg-slate-100:hover {
+  background-color: hsl(222 47% 18%) !important;
+}
+
+.dark .hover\:bg-gray-50:hover {
+  background-color: hsl(222 47% 16%) !important;
+}
+
+/* --- SHADOW REFINEMENT --- */
+.dark .shadow-sm,
+.dark .shadow-md,
+.dark .shadow-lg,
+.dark .shadow-xl,
+.dark .shadow-2xl {
+  --tw-shadow-color: rgba(0, 0, 0, 0.4);
+}
+
+/* --- RING OVERRIDES --- */
+.dark .ring-slate-200 {
+  --tw-ring-color: hsl(222 30% 25%);
+}
+
+.dark .focus\:ring-blue-500:focus {
+  --tw-ring-color: hsl(217 91% 50%);
+}
+
+/* --- DIVIDER / SEPARATOR --- */
+.dark .divide-slate-200 > :not([hidden]) ~ :not([hidden]) {
+  border-color: hsl(222 30% 22%) !important;
+}
+
+.dark .divide-slate-100 > :not([hidden]) ~ :not([hidden]) {
+  border-color: hsl(222 30% 18%) !important;
+}
+
+/* --- SELECT / INPUT OVERRIDES --- */
+.dark select,
+.dark input[type="text"],
+.dark input[type="email"],
+.dark input[type="password"],
+.dark input[type="date"],
+.dark input[type="number"],
+.dark input[type="search"],
+.dark input[type="tel"],
+.dark input[type="url"],
+.dark textarea {
+  background-color: hsl(222 47% 14%);
+  color: hsl(210 40% 96%);
+  border-color: hsl(222 30% 25%);
+}
+
+.dark select:focus,
+.dark input:focus,
+.dark textarea:focus {
+  border-color: hsl(226 71% 55%);
+}
+
+/* --- PLACEHOLDER TEXT --- */
+.dark .placeholder\:text-slate-400::placeholder,
+.dark .placeholder\:text-slate-500::placeholder,
+.dark .placeholder\:text-gray-400::placeholder {
+  color: hsl(215 16% 45%) !important;
+}
+
+/* --- TABLE OVERRIDES --- */
+.dark table thead {
+  background-color: hsl(222 47% 14%);
+}
+
+.dark table thead th {
+  color: hsl(215 20% 75%);
+  border-color: hsl(222 30% 22%);
+}
+
+.dark table tbody tr {
+  border-color: hsl(222 30% 18%);
+}
+
+.dark table tbody td {
+  border-color: hsl(222 30% 18%);
+}
+
+.dark table tbody tr:hover {
+  background-color: hsl(222 47% 14%);
+}
+
+/* --- MODAL / DIALOG OVERRIDES --- */
+.dark .bg-slate-900\/60 {
+  background-color: rgba(2, 8, 23, 0.75) !important;
+}
+
+/* --- SCROLLBAR STYLING --- */
+.dark .custom-scrollbar::-webkit-scrollbar-track {
+  background: hsl(222 47% 8%);
+}
+
+.dark .custom-scrollbar::-webkit-scrollbar-thumb {
+  background: hsl(222 30% 25%);
+}
+
+.dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: hsl(222 30% 35%);
+}
+
+/* --- BADGE / CHIP OVERRIDES --- */
+.dark .bg-indigo-100 {
+  background-color: hsl(226 50% 20%) !important;
+}
+
+.dark .bg-blue-100 {
+  background-color: hsl(217 50% 18%) !important;
+}
+
+.dark .bg-emerald-100,
+.dark .bg-green-100 {
+  background-color: hsl(142 40% 15%) !important;
+}
+
+.dark .bg-red-100 {
+  background-color: hsl(0 40% 18%) !important;
+}
+
+.dark .bg-amber-100,
+.dark .bg-yellow-100,
+.dark .bg-orange-100 {
+  background-color: hsl(38 40% 18%) !important;
+}
+
+.dark .bg-purple-100 {
+  background-color: hsl(270 40% 18%) !important;
+}
+
+.dark .bg-pink-100 {
+  background-color: hsl(330 40% 18%) !important;
+}
+
+/* --- TEXT ON COLORED BACKGROUNDS (ensure readability) --- */
+.dark .text-indigo-700 {
+  color: hsl(226 71% 70%) !important;
+}
+
+.dark .text-indigo-600 {
+  color: hsl(226 71% 65%) !important;
+}
+
+.dark .text-blue-700 {
+  color: hsl(217 91% 70%) !important;
+}
+
+.dark .text-blue-600 {
+  color: hsl(217 91% 65%) !important;
+}
+
+.dark .text-emerald-700,
+.dark .text-green-700 {
+  color: hsl(142 71% 60%) !important;
+}
+
+.dark .text-emerald-600,
+.dark .text-green-600 {
+  color: hsl(142 71% 55%) !important;
+}
+
+.dark .text-red-700 {
+  color: hsl(0 72% 60%) !important;
+}
+
+.dark .text-red-600 {
+  color: hsl(0 72% 55%) !important;
+}
+
+.dark .text-amber-700,
+.dark .text-yellow-700 {
+  color: hsl(38 92% 60%) !important;
+}
+
+.dark .text-purple-700,
+.dark .text-violet-700 {
+  color: hsl(270 67% 65%) !important;
+}
+
+.dark .text-purple-600 {
+  color: hsl(270 67% 60%) !important;
+}
+
+/* --- OFFER LETTER / DOCUMENT PRINT-AREA EXCEPTION ---
+   These elements should stay white even in dark mode for document fidelity */
+.dark .print-document,
+.dark [data-print-area="true"] {
+  background-color: white !important;
+  color: #1e293b !important;
+}
+
+/* ============================================================================
+   ULTRA-FUTURISTIC REALISTIC GRAPHICS & LOGO BRACKET DESIGN SYSTEM
+   ============================================================================ */
+
+/* --- FUTURISTIC ANIMATIONS --- */
+@keyframes cyber-pulse {
+  0%, 100% {
+    box-shadow: 0 0 15px rgba(99, 102, 241, 0.35), 0 0 30px rgba(139, 92, 246, 0.2);
+    border-color: rgba(99, 102, 241, 0.6);
+  }
+  50% {
+    box-shadow: 0 0 25px rgba(56, 189, 248, 0.5), 0 0 45px rgba(99, 102, 241, 0.35);
+    border-color: rgba(56, 189, 248, 0.8);
+  }
+}
+
+@keyframes scanline-sweep {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(1000%); }
+}
+
+@keyframes float-hologram {
+  0%, 100% { transform: translateY(0px) rotate(0deg); }
+  50% { transform: translateY(-6px) rotate(0.5deg); }
+}
+
+@keyframes bracket-glow {
+  0%, 100% { opacity: 0.7; filter: drop-shadow(0 0 4px rgba(99, 102, 241, 0.6)); }
+  50% { opacity: 1; filter: drop-shadow(0 0 10px rgba(56, 189, 248, 0.9)); }
+}
+
+/* --- CYBER GLASS & FUTURISTIC CARDS --- */
+.cyber-glass {
+  background: rgba(255, 255, 255, 0.75);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.07);
+}
+
+.dark .cyber-glass {
+  background: rgba(10, 15, 30, 0.75);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
+}
+
+.cyber-glass-card {
+  position: relative;
+  border-radius: 1rem;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.cyber-glass-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 35px -5px rgba(99, 102, 241, 0.25);
+}
+
+.dark .cyber-glass-card:hover {
+  box-shadow: 0 12px 35px -5px rgba(56, 189, 248, 0.3);
+}
+
+/* --- LOGO IN SQUARE BRACKET DESIGN --- */
+.logo-bracket-container {
+  display: inline-flex;
+  items-center: center;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.625rem;
+  border-radius: 0.5rem;
+  background: rgba(99, 102, 241, 0.06);
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  transition: all 0.3s ease;
+  position: relative;
+}
+
+.dark .logo-bracket-container {
+  background: rgba(15, 23, 42, 0.6);
+  border-color: rgba(99, 102, 241, 0.4);
+}
+
+.logo-bracket-container:hover {
+  border-color: rgba(56, 189, 248, 0.7);
+  box-shadow: 0 0 12px rgba(99, 102, 241, 0.3);
+}
+
+.bracket-symbol {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-weight: 800;
+  font-size: 1.25rem;
+  color: #6366f1;
+  user-select: none;
+  animation: bracket-glow 3s infinite ease-in-out;
+}
+
+.dark .bracket-symbol {
+  color: #38bdf8;
+}
+
+.logo-img-placed {
+  height: 2.25rem;
+  width: auto;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 8px rgba(99, 102, 241, 0.35));
+  transition: transform 0.3s ease;
+}
+
+.logo-bracket-container:hover .logo-img-placed {
+  transform: scale(1.06);
+}
+
+/* --- FUTURISTIC GRADIENT TEXT & NEON ACCENTS --- */
+.futuristic-gradient-text {
+  background: linear-gradient(135deg, #4f46e5 0%, #06b6d4 50%, #8b5cf6 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.dark .futuristic-gradient-text {
+  background: linear-gradient(135deg, #38bdf8 0%, #818cf8 50%, #c084fc 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.glow-indigo {
+  box-shadow: 0 0 20px rgba(99, 102, 241, 0.35);
+}
+
+.glow-cyan {
+  box-shadow: 0 0 20px rgba(56, 189, 248, 0.4);
+}
+
+/* --- SCANLINE EFFECT OVERLAY --- */
+.scanline-container {
+  position: relative;
+  overflow: hidden;
+}
+
+.scanline-container::after {
+  content: " ";
+  display: block;
+  position: absolute;
+  top: 0; left: 0; bottom: 0; right: 0;
+  background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.05) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.02), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.02));
+  z-index: 10;
+  background-size: 100% 3px, 6px 100%;
+  pointer-events: none;
+  opacity: 0.4;
+}
+
+.dark .scanline-container::after {
+  opacity: 0.6;
+}
+
+/* ============================================================================
+   UNIVERSAL DARK MODE TEXT VISIBILITY & CONTRAST ENGINE
+   ============================================================================ */
+
+.dark .text-slate-900,
+.dark .text-slate-800,
+.dark .text-slate-700,
+.dark .text-slate-600,
+.dark .text-slate-500,
+.dark .text-gray-900,
+.dark .text-gray-800,
+.dark .text-gray-700,
+.dark .text-gray-600,
+.dark .text-gray-500,
+.dark .text-neutral-900,
+.dark .text-neutral-800,
+.dark .text-neutral-700,
+.dark .text-neutral-600,
+.dark .text-zinc-900,
+.dark .text-zinc-800,
+.dark .text-zinc-700,
+.dark .text-zinc-600 {
+  color: #f1f5f9 !important; /* Bright high-contrast text in dark mode */
+}
+
+.dark .text-slate-400,
+.dark .text-gray-400,
+.dark .text-neutral-400,
+.dark .text-zinc-400,
+.dark .text-muted-foreground {
+  color: #cbd5e1 !important; /* High contrast secondary text in dark mode */
+}
+
+.dark .text-slate-300,
+.dark .text-gray-300 {
+  color: #e2e8f0 !important;
+}
+
+/* --- TABLE CONTRAST IN DARK MODE --- */
+.dark table th,
+.dark table td,
+.dark table tr,
+.dark th,
+.dark td {
+  color: #f1f5f9 !important;
+}
+
+.dark table thead th {
+  color: #94a3b8 !important;
+  background-color: #0f172a !important;
+}
+
+.dark table tbody tr:hover {
+  background-color: rgba(30, 41, 59, 0.6) !important;
+}
+
+/* --- CARDS, INPUTS & CONTAINERS IN DARK MODE --- */
+.dark .bg-white,
+.dark .bg-slate-50,
+.dark .bg-slate-100 {
+  background-color: #0f172a !important;
+  color: #f8fafc !important;
+  border-color: #1e293b !important;
+}
+
+.dark .bg-slate-50\/50 {
+  background-color: rgba(15, 23, 42, 0.5) !important;
+}
+
+.dark input,
+.dark select,
+.dark textarea {
+  background-color: #0f172a !important;
+  color: #f8fafc !important;
+  border-color: #334155 !important;
+}
+
+.dark select option {
+  background-color: #0f172a !important;
+  color: #f8fafc !important;
+}
+
+.dark h1,
+.dark h2,
+.dark h3,
+.dark h4,
+.dark h5,
+.dark h6 {
+  color: #ffffff !important;
+}
+
+

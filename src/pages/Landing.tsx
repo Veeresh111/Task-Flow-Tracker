@@ -116,7 +116,8 @@ export default function Landing() {
           <div className="grid lg:grid-cols-2 gap-12 items-center">
             <div className="space-y-8">
               <div className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-100/80 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 rounded-full text-sm font-medium backdrop-blur-sm border border-indigo-200/50 dark:border-indigo-700/30">
-                <Sparkles className="w-4 h-4" />
+                <img src="/fwc-logo.png" alt="FWC Logo" className="h-5 w-auto" />
+                <Sparkles className="w-4 h-4 text-indigo-500" />
                 Enterprise Digital Transformation Partner
               </div>
 
@@ -171,8 +172,8 @@ export default function Landing() {
               <div className="relative bg-white/60 dark:bg-slate-900/60 backdrop-blur-xl rounded-3xl p-8 border border-slate-200/50 dark:border-slate-700/50 shadow-2xl">
                 <div className="space-y-6">
                   <div className="flex items-center gap-4 pb-6 border-b border-slate-200 dark:border-slate-700">
-                    <div className="w-16 h-16 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-lg transition-all duration-300 group-hover:shadow-indigo-500/30 group-hover:scale-110">
-                      <img src="/fwc-logo.png" alt="FWC" className="w-10 h-10 brightness-0 invert" />
+                    <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-lg">
+                      <img src="/fwc-logo.png" alt="FWC Logo" className="w-9 h-9 object-contain" />
                     </div>
                     <div>
                       <div className="font-semibold text-slate-900 dark:text-white">Platform Overview</div>

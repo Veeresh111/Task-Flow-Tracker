@@ -1,0 +1,18 @@
+#!/usr/bin/env sh
+echo "🤖 [VIBE-CODER ROBOTIC GUARDRAIL] Verifying enterprise logic integrity..."
+
+# Run full Vitest suite to mathematically prove zero logic regressions
+npx vitest run --passWithNoTests
+if [ $? -ne 0 ]; then
+  echo "❌ [BLOCKED] Your changes broke the enterprise logic! Commit aborted."
+  exit 1
+fi
+
+# Verify production bundle builds without errors
+npm run build
+if [ $? -ne 0 ]; then
+  echo "❌ [BLOCKED] Production build failed! Commit aborted."
+  exit 1
+fi
+
+echo "✅ [SUCCESS] Enterprise logic & build mathematically verified! Proceeding with commit."

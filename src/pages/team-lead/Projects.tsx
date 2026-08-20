@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase";
 import { Loader2, Briefcase, Calendar, Flag, Search, Filter, Sparkles, BrainCircuit, X } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { callCorporateAI } from "@/lib/ai";
 
 export default function TeamLeadProjects() {
   const [projects, setProjects] = useState<any[]>([]);
@@ -24,19 +24,22 @@ export default function TeamLeadProjects() {
   const [isAiLoading, setIsAiLoading] = useState(false);
 
   useEffect(() => { 
-    fetchProjects(); 
-    fetchTeamMembers();
+    fetchTeamData();
   }, []);
 
-  const fetchTeamMembers = async () => {
+  const fetchTeamData = async () => {
+    setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-    const { data } = await supabase.from('profiles').select('name, role, performance_score').eq('team_lead_id', user.id);
-    if (data) setTeamMembers(data);
+    if (user) {
+      const { data: members } = await supabase.from('profiles').select('id, name, role, department').eq('team_lead_id', user.id);
+      if (members) setTeamMembers(members);
+      fetchProjects();
+    } else {
+      setLoading(false);
+    }
   };
 
   const fetchProjects = async () => {
-    setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
     if (user) {
       const { data } = await supabase.from('projects').select('*').eq('team_lead_id', user.id).order('created_at', { ascending: false });
@@ -62,14 +65,10 @@ export default function TeamLeadProjects() {
       
       Do not use markdown backticks, output clean readable text.`;
 
-      const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-      const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-      const result = await model.generateContent(prompt);
-      
-      setAiRoadmap(result.response.text());
-    } catch (e) {
-      toast({ title: "AI Error", description: "Failed to generate project roadmap.", variant: "destructive" });
+      const roadmap = await callCorporateAI({ prompt });
+      setAiRoadmap(roadmap);
+    } catch (err) {
+      toast({ title: "AI Framework Error", description: "Defaulting to baseline team roadmap.", variant: "destructive" });
     }
     setIsAiLoading(false);
   };

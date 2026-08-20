@@ -61,8 +61,8 @@ export function isValidStatusTransition(from: string, to: string): boolean {
   if (from === "Interview Cleared" && to === "Offer Generated") return true;
   if (from === "Offer Generated" && to === "Offer Accepted") return true;
   if (from === "Offer Generated" && to === "Offer Declined") return true;
-  if (from === "Offer Accepted" && to === "Offer Declined") return true;
   if (from === "Offer Accepted" && to === "Onboarding") return true;
+  if (from === "Offer Accepted" && to === "Offer Declined") return false;
   const fromGroup = getStageGroup(from);
   const toGroup = getStageGroup(to);
   if (fromGroup === "unknown" || toGroup === "unknown") return false;

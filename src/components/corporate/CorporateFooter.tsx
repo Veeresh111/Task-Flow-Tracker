@@ -7,8 +7,8 @@ export default function CorporateFooter() {
         <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-8">
           <div className="space-y-4">
             <div className="flex items-center gap-3 group">
-              <img src="/fwc-logo.png" alt="FWC" className="h-10 w-auto brightness-0 invert transition-all duration-300 group-hover:scale-110 group-hover:drop-shadow-[0_0_8px_rgba(255,255,255,0.3)]" />
-              <span className="text-xl font-bold text-white">FWC</span>
+              <img src="/fwc-logo.png" alt="FWC Logo" className="h-10 w-auto transition-all duration-300 group-hover:scale-110 group-hover:drop-shadow-[0_0_8px_rgba(99,102,241,0.5)]" />
+              <span className="text-xl font-extrabold text-white tracking-wider">FWC</span>
             </div>
             <p className="text-sm text-slate-400 leading-relaxed">
               Enterprise technology solutions for the digital age.

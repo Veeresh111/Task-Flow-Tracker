@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -172,13 +172,17 @@ export default function UserVerification() {
     if (!currentUserId) return;
     setProcessingAction(user.id);
     try {
-      await supabase.from("profiles").update({ status: "rejected" }).eq("id", user.id);
-      await supabase.from("notifications").insert({
+      const { error: updateErr } = await supabase.from("profiles").update({ status: "rejected" }).eq("id", user.id);
+      if (updateErr) throw updateErr;
+
+      const { error: notifErr } = await supabase.from("notifications").insert({
         user_id: user.id,
         title: "Account Disapproved",
         message: "Your registration has been reviewed and disapproved. You did not have an active job application associated with your account. Please contact HR if you believe this is an error.",
         is_read: false,
       });
+      if (notifErr) console.warn("[USER_VERIFICATION] Warning inserting notification:", notifErr.message);
+
       toast({ title: "User Disapproved", description: `${user.name} has been marked as rejected.` });
       fetchUsers();
     } catch (err: any) {
@@ -192,11 +196,15 @@ export default function UserVerification() {
     if (!currentUserId) return;
     setProcessingAction(user.id);
     try {
-      await supabase.from("profiles").update({ status: "active" }).eq("id", user.id);
-      await supabase.from("notifications").insert({
+      const { error: updateErr } = await supabase.from("profiles").update({ status: "active" }).eq("id", user.id);
+      if (updateErr) throw updateErr;
+
+      const { error: notifErr } = await supabase.from("notifications").insert({
         user_id: user.id, title: "Account Approved",
         message: "Your account has been approved. You can now access the portal.", is_read: false,
       });
+      if (notifErr) console.warn("[USER_VERIFICATION] Warning inserting notification:", notifErr.message);
+
       toast({ title: "User Approved", description: `${user.name} has been activated.` });
       fetchUsers();
     } catch (err: any) {
@@ -210,9 +218,12 @@ export default function UserVerification() {
     setProcessingAction(`assign_${user.id}`);
     try {
       if (user.candidate_id) {
-        await supabase.from("job_applications").update({ assigned_recruiter: recruiterId }).eq("candidate_id", user.candidate_id);
+        const { error: appErr } = await supabase.from("job_applications").update({ assigned_recruiter: recruiterId }).eq("candidate_id", user.candidate_id);
+        if (appErr) throw appErr;
       }
-      await supabase.from("profiles").update({ assigned_recruiter: recruiterId }).eq("id", user.id);
+      const { error: profErr } = await supabase.from("profiles").update({ assigned_recruiter: recruiterId }).eq("id", user.id);
+      if (profErr) throw profErr;
+
       toast({ title: "Recruiter Assigned", description: `HR handler assigned for ${user.name}.` });
       fetchUsers();
     } catch (err: any) {

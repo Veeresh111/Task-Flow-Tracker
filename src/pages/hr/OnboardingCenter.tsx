@@ -48,7 +48,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 
 export default function OnboardingCenter() {
-  useEffect(() => { document.title = "Onboarding Center - TaskFlow"; }, []);
+  useEffect(() => { document.title = "Onboarding Center - FWC"; }, []);
   const { toast } = useToast();
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [filtered, setFiltered] = useState<Candidate[]>([]);
@@ -305,9 +305,43 @@ export default function OnboardingCenter() {
         await supabase.from('candidate_notifications').insert({
           candidate_id: candidateTableId,
           title: 'Onboarding Complete',
-          message: `Congratulations! You have been successfully onboarded. Your employee code is: ${employeeCode}. You can now access employee features.`,
+          message: `Congratulations! You have been successfully onboarded. Your employee code is: ${employeeCode}. You can now access employee features. Please log out and log back in to switch to your Employee Workspace.`,
           read: false
         });
+      }
+
+      // Step 5b: Dispatch Official Onboarding & Welcome Email
+      try {
+        if (selectedCandidate.email) {
+          await supabase.functions.invoke("send-email", {
+            body: {
+              type: "onboarding_welcome",
+              to: selectedCandidate.email,
+              subject: `Welcome to FWC — Official Onboarding Complete (${employeeCode})`,
+              html: `
+                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 32px; background: #ffffff;">
+                  <h2 style="color: #1e1b4b; margin-top: 0;">Welcome to the Team, ${selectedCandidate.name}!</h2>
+                  <p style="color: #475569; font-size: 14px; line-height: 1.6;">Congratulations on completing your formal onboarding process with FWC India. Your corporate employee profile has been fully activated in the system.</p>
+                  
+                  <div style="background: #f8fafc; border: 1px solid #cbd5e1; padding: 20px; border-radius: 8px; margin: 24px 0;">
+                    <p style="margin: 4px 0; font-size: 13px; font-weight: bold; color: #334155;">Employee Details:</p>
+                    <p style="margin: 4px 0; font-size: 13px; color: #475569;">• <strong>Employee Code:</strong> <span style="font-family: monospace; color: #4f46e5; font-weight: bold;">${employeeCode}</span></p>
+                    <p style="margin: 4px 0; font-size: 13px; color: #475569;">• <strong>Department:</strong> ${selectedDepartment}</p>
+                    <p style="margin: 4px 0; font-size: 13px; color: #475569;">• <strong>Annual CTC:</strong> ₹${Number(assignedPayroll).toLocaleString('en-IN')}</p>
+                    ${joiningDate ? `<p style="margin: 4px 0; font-size: 13px; color: #475569;">• <strong>Joining Date:</strong> ${joiningDate}</p>` : ''}
+                  </div>
+
+                  <p style="color: #475569; font-size: 14px; line-height: 1.6;"><strong>Next Steps:</strong> Log into your FWC portal account using your registered email. If you are currently logged in, please log out and log back in to automatically access your new <strong>Employee Workspace Dashboard</strong>.</p>
+                  
+                  <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 28px 0;" />
+                  <p style="color: #94a3b8; font-size: 12px; margin: 0;">FWC Enterprise Recruitment & HR Operations Division</p>
+                </div>
+              `
+            }
+          });
+        }
+      } catch (emailErr) {
+        console.warn("Welcome email dispatch attempt failed (non-blocking):", emailErr);
       }
 
       // Step 7: Audit trail for candidate-to-employee transition

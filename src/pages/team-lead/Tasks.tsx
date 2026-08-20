@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabase";
 import { callCorporateAI } from "@/lib/ai";
+import { notificationService } from "@/lib/notifications";
 import { Loader2, CheckSquare, Edit, Trash2, Plus, UserCircle, X, ClipboardList, Search, Filter, BrainCircuit, Sparkles } from "lucide-react";
 
 export default function TeamLeadTasks() {
@@ -68,12 +69,24 @@ export default function TeamLeadTasks() {
     setLoading(true);
     try {
       if (editingId) {
-        await supabase.from('tasks').update(formData).eq('id', editingId);
+        const { error } = await supabase.from('tasks').update(formData).eq('id', editingId);
+        if (error) throw error;
         toast({ title: "Task Updated!" });
       } else {
-        await supabase.from('tasks').insert([formData]);
+        const { error } = await supabase.from('tasks').insert([formData]);
+        if (error) throw error;
         toast({ title: "Task Created!" });
       }
+
+      if (formData.assigned_to) {
+        await notificationService.sendToUser(formData.assigned_to, {
+          title: editingId ? "Task Updated" : "New Task Assigned",
+          message: `Task "${formData.title}" (${formData.complexity} priority) assigned to you.`,
+          type: "task",
+          link: "/employee/tasks"
+        });
+      }
+
       setIsModalOpen(false);
       fetchTasks();
     } catch (err: any) {

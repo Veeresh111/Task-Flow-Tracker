@@ -7,7 +7,8 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabase";
 import { Loader2, Clock, Calendar, CheckCircle2, Building2, Home as HomeIcon, Sparkles, Wand2, Copy, Send, FileText, Download, Search } from "lucide-react";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { callCorporateAI } from "@/lib/ai";
+import { TelemetryEngine } from "@/lib/telemetry";
 
 export default function EmployeeWorkLogs() {
   const [workLogs, setWorkLogs] = useState<any[]>([]);
@@ -38,17 +39,12 @@ export default function EmployeeWorkLogs() {
     if (!roughNotes.trim()) return;
     setIsPolishing(true);
     try {
-      const apiKey = import.meta.env.VITE_GEMINI_API_KEY ;
-      const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-      
-      const prompt = `Act as an elite Corporate Communications AI. 
-      Take these rough, messy daily work notes and polish them into a highly professional, concise daily stand-up update suitable for a corporate manager. 
-      Format it with clear professional bullet points (e.g., 'Completed:', 'In Progress:', 'Blockers:'). Do not use markdown backticks.
-      Rough notes: """${roughNotes}"""`;
-      
-      const result = await model.generateContent(prompt);
-      setPolishedNotes(result.response.text());
+      const result = await TelemetryEngine.polishStandupNotes(roughNotes);
+      setPolishedNotes(result.polishedText);
+      toast({
+        title: "Standup Notes Polished",
+        description: `Sentiment: ${result.sentiment} • Ready for team lead dispatch.`
+      });
     } catch (error: any) {
       console.error(error);
       toast({ title: "AI Engine Error", description: "Failed to polish notes. Please try again.", variant: "destructive" });

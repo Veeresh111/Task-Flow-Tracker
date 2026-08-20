@@ -6,7 +6,7 @@ import { supabase } from "@/lib/supabase";
 import { CareerPredictor } from "@/components/dashboard/CareerPredictor";
 
 export default function EmployeeDashboard() {
-  useEffect(() => { document.title = "Employee Dashboard - TaskFlow"; }, []);
+  useEffect(() => { document.title = "Employee Dashboard - FWC"; }, []);
   const [stats, setStats] = useState({ tasks: 0, projects: 0, hours: 0, complaints: 0 });
   const [tasks, setTasks] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);

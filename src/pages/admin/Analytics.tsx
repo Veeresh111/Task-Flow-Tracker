@@ -19,7 +19,7 @@ import {
 const DEPT_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4'];
 
 export default function AdminAnalytics() {
-  useEffect(() => { document.title = "Analytics - TaskFlow"; }, []);
+  useEffect(() => { document.title = "Analytics - FWC"; }, []);
   const { toast } = useToast();
   const [allData, setAllData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);

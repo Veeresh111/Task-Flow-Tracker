@@ -10,7 +10,7 @@ import { supabase } from "@/lib/supabase";
 import { Loader2, Users, UserCircle, Edit, UserX, X, TrendingUp, Plus, ShieldCheck, Search, Filter } from "lucide-react";
 
 export default function AdminEmployees() {
-  useEffect(() => { document.title = "Employees - TaskFlow"; }, []);
+  useEffect(() => { document.title = "Employees - FWC"; }, []);
   const { toast } = useToast();
   const [employees, setEmployees] = useState<any[]>([]);
   const [teamLeads, setTeamLeads] = useState<any[]>([]);

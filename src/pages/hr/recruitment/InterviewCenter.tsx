@@ -597,7 +597,7 @@ Output as JSON: {"strengths": "...", "concerns": "...", "verdict": "${aiRecommen
               <div className="space-y-1">
                 <label className="text-[10px] font-black tracking-wider text-slate-500 uppercase">Timezone</label>
                 <select value={newTimezone} onChange={e => setNewTimezone(e.target.value)} className="w-full p-2.5 border border-slate-200 rounded-lg text-sm bg-white font-medium text-slate-700 outline-none">
-                  {Intl.supportedValuesOf('timeZone').map(tz => <option key={tz} value={tz}>{tz}</option>)}
+                  {getSupportedTimezones().map(tz => <option key={tz} value={tz}>{tz}</option>)}
                 </select>
               </div>
             </div>
@@ -671,7 +671,7 @@ Output as JSON: {"strengths": "...", "concerns": "...", "verdict": "${aiRecommen
                 onChange={e => setRawTranscript(e.target.value)}
               />
               <div className="flex justify-end pt-1">
-                <Button onClick={executeLiveAIScoringEngine} disabled={aiLoading || !rawTranscript.trim()} className="bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs uppercase tracking-widest px-6 h-10 shadow-md rounded-lg flex items-center gap-2">
+                <Button onClick={executeLiveAIScoringEngine} disabled={aiLoading} className="bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs uppercase tracking-widest px-6 h-10 shadow-md rounded-lg flex items-center gap-2">
                   {aiLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
                   Commit Grading & Finalize Session
                 </Button>

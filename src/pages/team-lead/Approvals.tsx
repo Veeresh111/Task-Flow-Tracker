@@ -5,6 +5,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabase";
+import { notificationService } from "@/lib/notifications";
 import { Loader2, CheckCircle, XCircle, Calendar, User } from "lucide-react";
 
 export default function TeamLeadApprovals() {
@@ -61,8 +62,19 @@ export default function TeamLeadApprovals() {
 
   const handleDecision = async (id: string, decision: 'Approved' | 'Rejected') => {
     try {
+      const targetLeave = leaves.find(l => l.id === id);
       const { error } = await supabase.from('leaves').update({ status: decision }).eq('id', id);
       if (error) throw error;
+
+      if (targetLeave?.user_id) {
+        await notificationService.sendToUser(targetLeave.user_id, {
+          title: `Leave Request ${decision}`,
+          message: `Your ${targetLeave.leave_type} leave request (${targetLeave.start_date} to ${targetLeave.end_date}) was ${decision.toLowerCase()} by your Team Lead.`,
+          type: "leave",
+          link: "/employee/leaves"
+        });
+      }
+
       toast({ title: `Leave ${decision}`, variant: decision === 'Approved' ? "default" : "destructive" });
       setLeaves(leaves.filter(l => l.id !== id));
     } catch (err: any) {

@@ -58,8 +58,10 @@ serve(async (req) => {
       .eq("id", token.assessment_id)
       .single();
 
-    // Server-side violation aggregation from proctor_log
-    const actualViolations = (Array.isArray(proctorLog) ? proctorLog.filter((l: any) => l.type === 'violation').length : 0);
+    // Server-side violation aggregation from proctor_log.
+    // Client logs violations as descriptive type strings (e.g. "Tab Switch / Window Focus Lost"),
+    // NOT as the literal string "violation". Count all log entries as violations.
+    const actualViolations = Array.isArray(proctorLog) ? proctorLog.length : (typeof violationCount === 'number' ? violationCount : 0);
     const maxViolations = assessment?.max_violations ?? 5;
 
     // Enforce max_attempts
@@ -149,53 +151,93 @@ serve(async (req) => {
     let aiFeedback = "";
 
     if (ambiguousAnswers.length > 0) {
-      try {
-        const HF_TOKEN = Deno.env.get("HF_TOKEN");
-        if (HF_TOKEN) {
-          const prompt = `You are evaluating candidate answers for correctness. For each question, determine if the candidate's answer is semantically equivalent to the correct answer (same meaning, even if worded differently). Respond with ONLY a JSON array of booleans: true if answer is correct, false if wrong.
+      const HF_TOKEN = Deno.env.get("HF_TOKEN");
+      if (HF_TOKEN) {
+        const maxRetries = 3;
+        for (let attempt = 0; attempt < maxRetries; attempt++) {
+          try {
+            const prompt = `You are an expert exam grader for a Fortune 500 corporate assessment platform.
 
-${ambiguousAnswers.map(a =>
-  `Question ${a.index + 1}: "${a.question}"
-Correct answer: "${a.correctAnswer}"
-Candidate answer: "${a.userAnswer}"`
-).join("\n\n")}`;
+TASK: For each question below, determine if the candidate's answer is semantically correct — meaning it conveys the same essential meaning as the correct answer, even if worded differently, abbreviated, or uses synonyms.
 
-          const hfRes = await fetch("https://router.huggingface.co/v1/chat/completions", {
-            method: "POST",
-            headers: {
-              "Authorization": `Bearer ${HF_TOKEN}`,
-              "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-              model: "Qwen/Qwen3-32B:groq",
-              messages: [
-                { role: "system", content: "You are a strict but fair exam evaluator. Evaluate semantic equivalence, not exact string matching." },
-                { role: "user", content: prompt }
-              ],
-              temperature: 0.2,
-              max_tokens: 1024,
-              response_format: { type: "json_object" }
-            })
-          });
+RULES:
+- Accept answers that are semantically equivalent (e.g. "JS" = "JavaScript", "ML" = "Machine Learning")
+- Accept answers with minor typos if the intent is clearly correct
+- Reject answers that are factually wrong or describe a different concept
+- Be strict on technical accuracy — partial answers are wrong unless they capture the core concept
 
-          if (hfRes.ok) {
-            const hfData = await hfRes.json();
-            const raw = hfData.choices?.[0]?.message?.content || "[]";
-            const clean = raw.replace(/```[a-z]*\n?/gi, '').replace(/```/g, '').trim();
-            const evaluations = JSON.parse(clean);
+QUESTIONS TO EVALUATE:
+${ambiguousAnswers.map((a, idx) =>
+  `[${idx + 1}] Question: "${a.question}"
+   Expected: "${a.correctAnswer}"
+   Candidate: "${a.userAnswer}"`
+).join("\n\n")}
 
-            if (Array.isArray(evaluations)) {
-              for (let i = 0; i < Math.min(evaluations.length, ambiguousAnswers.length); i++) {
-                if (evaluations[i] === true) {
-                  correctCount++;
-                  aiEvaluatedCount++;
+RESPOND WITH ONLY a JSON object in this exact format:
+{"results": [true, false, ...]}
+where each boolean corresponds to the question in order. true = correct, false = wrong.`;
+
+            const hfRes = await fetch("https://router.huggingface.co/v1/chat/completions", {
+              method: "POST",
+              headers: {
+                "Authorization": `Bearer ${HF_TOKEN}`,
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify({
+                model: "Qwen/Qwen3-32B:groq",
+                messages: [
+                  { role: "system", content: "You are a precise exam evaluator for enterprise recruitment. Output only valid JSON. Do not include explanations, markdown, or code fences." },
+                  { role: "user", content: prompt }
+                ],
+                temperature: 0.1,
+                max_tokens: 1024,
+                response_format: { type: "json_object" }
+              })
+            });
+
+            if (hfRes.ok) {
+              const hfData = await hfRes.json();
+              let raw = hfData.choices?.[0]?.message?.content || "{}";
+              // Strip thinking tags that some models emit
+              raw = raw.replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/<thinking>[\s\S]*?<\/thinking>/gi, "").trim();
+              const clean = raw.replace(/```[a-z]*\n?/gi, '').replace(/```/g, '').trim();
+
+              let evaluations: boolean[] = [];
+              try {
+                const parsed = JSON.parse(clean);
+                evaluations = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.results) ? parsed.results : []);
+              } catch {
+                // Try extracting array from malformed response
+                const arrayMatch = clean.match(/\[[\s\S]*?\]/);
+                if (arrayMatch) {
+                  evaluations = JSON.parse(arrayMatch[0]);
                 }
               }
+
+              if (Array.isArray(evaluations) && evaluations.length > 0) {
+                for (let i = 0; i < Math.min(evaluations.length, ambiguousAnswers.length); i++) {
+                  if (evaluations[i] === true) {
+                    correctCount++;
+                    aiEvaluatedCount++;
+                  }
+                }
+                break; // Success — exit retry loop
+              }
+            } else if (hfRes.status === 429 || hfRes.status === 503) {
+              // Rate limited or service unavailable — retry with backoff
+              if (attempt < maxRetries - 1) {
+                await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+                continue;
+              }
+            }
+            break; // Non-retryable response
+          } catch (semanticErr) {
+            console.error(`Semantic evaluation attempt ${attempt + 1} error:`, semanticErr);
+            if (attempt < maxRetries - 1) {
+              await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
             }
           }
         }
-      } catch (semanticErr) {
-        console.error("Semantic evaluation error:", semanticErr);
       }
     }
 

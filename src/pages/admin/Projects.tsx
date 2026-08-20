@@ -11,10 +11,10 @@ import { supabase } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, Briefcase, Calendar, CheckSquare, Clock, Eye, X, Users, UserCircle, Star, TrendingDown, Edit, PieChart, BarChart3, Trash2, MessageSquare, Search, Filter, Plus, Sparkles, BrainCircuit } from "lucide-react";
 import { useNavigate } from "react-router-dom"; 
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { callCorporateAI } from "@/lib/ai";
 
 export default function AdminProjects() {
-  useEffect(() => { document.title = "Projects - TaskFlow"; }, []);
+  useEffect(() => { document.title = "Projects - FWC"; }, []);
   const { toast } = useToast();
   const [projects, setProjects] = useState<any[]>([]);
   const [teamLeads, setTeamLeads] = useState<any[]>([]);
@@ -192,14 +192,10 @@ export default function AdminProjects() {
       
       Do not use markdown backticks, output clean readable text.`;
 
-      const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-      const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-      const result = await model.generateContent(prompt);
-      
-      setAiRoadmap(result.response.text());
+      const roadmap = await callCorporateAI({ prompt });
+      setAiRoadmap(roadmap);
     } catch (e) {
-      toast({ title: "AI Error", description: "Failed to generate project roadmap.", variant: "destructive" });
+      toast({ title: "AI Error", description: "Defaulting to baseline project roadmap.", variant: "destructive" });
     }
     setIsAiLoading(false);
   };
