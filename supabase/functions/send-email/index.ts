@@ -82,6 +82,23 @@ function startOfUtcDayIso(): string {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
 }
 
+// Verifies the Bearer token is a REAL GoTrue session (signature + user), not
+// merely a JWT-shaped string. The anon key is itself a long JWT and MUST NOT
+// authorize privileged operations — platform verify_jwt is disabled for this
+// function, so in-function verification is the only auth boundary.
+async function hasAuthenticatedUser(authHeader: string): Promise<boolean> {
+  if (!authHeader.startsWith("Bearer ")) return false;
+  const token = authHeader.slice("Bearer ".length).trim();
+  if (token.length < 20) return false;
+  const supabase = createClient(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_ANON_KEY")!,
+    { global: { headers: { Authorization: authHeader } } },
+  );
+  const { data, error } = await supabase.auth.getUser();
+  return !error && !!data?.user && data.user.aud === "authenticated";
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -99,24 +116,23 @@ serve(async (req) => {
     const provider = resolved.config;
 
     // WORKER AUTH: the scheduler (pg_cron → pg_net) authenticates with the
-    // shared x-cron-secret; user-facing direct sends must carry a Supabase
-    // JWT. Unauthenticated queue processing is refused (EV-EMAIL-401).
+    // shared x-cron-secret; user-facing calls must carry a VERIFIED Supabase
+    // user session. Unauthenticated queue processing is refused (EV-EMAIL-401).
     const cronSecret = Deno.env.get("EMAIL_CRON_SECRET") || "";
     const providedCronSecret = req.headers.get("x-cron-secret") || "";
     const isQueueMode = body.process_queue || req.headers.get("x-process-queue") === "true";
     const authHeader = req.headers.get("Authorization") || "";
-    const hasJwt = authHeader.startsWith("Bearer ") && authHeader.length > 40;
 
     if (isQueueMode) {
       const secretConfigured = cronSecret.length > 0;
       const secretValid = secretConfigured && providedCronSecret.length > 0 && providedCronSecret === cronSecret;
-      if (!secretValid && !hasJwt) {
+      if (!secretValid && !(await hasAuthenticatedUser(authHeader))) {
         return new Response(
           JSON.stringify({ error: "Queue processing requires x-cron-secret or an authenticated session (EV-EMAIL-401)." }),
           { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
       }
-    } else if (!hasJwt) {
+    } else if (!(await hasAuthenticatedUser(authHeader))) {
       // Direct sends are a privileged operation — no anonymous emails.
       return new Response(
         JSON.stringify({ error: "Direct email sending requires an authenticated session (EV-EMAIL-401)." }),
