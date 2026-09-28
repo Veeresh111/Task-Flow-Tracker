@@ -454,6 +454,11 @@ function = "auto-generate-payroll"
 
 [functions.send-email]
 enabled = true
-verify_jwt = true
+# The gateway must NOT require a Supabase JWT here: the pg_cron → pg_net worker
+# authenticates with the shared x-cron-secret (vault), and the function code
+# itself enforces auth for every mode (EV-EMAIL-401) — queue calls need the
+# cron secret, direct sends need a user JWT. Platform-level verify_jwt=true
+# would 401 the scheduler at the gateway before in-function auth runs.
+verify_jwt = false
 import_map = "./functions/ats-screen/deno.json"
 entrypoint = "./functions/send-email/index.ts"
