@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CheckSquare, Clock, Briefcase, AlertCircle, Loader2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { CareerPredictor } from "@/components/dashboard/CareerPredictor";
+import { ErrorBoundary } from "@/components/common/ErrorBoundary";
 
 export default function EmployeeDashboard() {
   useEffect(() => { document.title = "Employee Dashboard - FWC"; }, []);
@@ -11,6 +12,8 @@ export default function EmployeeDashboard() {
   const [tasks, setTasks] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [profile, setProfile] = useState<any>(null);
+  // TODAY'S ATTENDANCE — derived from the actual work_logs row for today.
+  const [todayLog, setTodayLog] = useState<{ clock_in: string; clock_out: string | null; status: string } | null>(null);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -31,6 +34,17 @@ export default function EmployeeDashboard() {
 
         const { data: complaintData } = await supabase.from('complaints').select('id').eq('user_id', user.id);
         if (complaintData) setStats(prev => ({ ...prev, complaints: complaintData.length }));
+
+        // TODAY'S ATTENDANCE: real clock-in/clock-out from today's actual work_log
+        const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+        const { data: todayLogs } = await supabase
+          .from('work_logs')
+          .select('clock_in, clock_out, status')
+          .eq('user_id', user.id)
+          .gte('clock_in', todayStart.toISOString())
+          .order('clock_in', { ascending: false })
+          .limit(1);
+        if (todayLogs && todayLogs.length > 0) setTodayLog(todayLogs[0]);
 
         // Exact Total Hours Worked Calculation
         const { data: logs } = await supabase.from('work_logs').select('*').eq('user_id', user.id).eq('status', 'Completed');
@@ -95,6 +109,46 @@ export default function EmployeeDashboard() {
           </Card>
         </div>
 
+        {/* TODAY'S ATTENDANCE — real clock data only; honest "not clocked in yet" state. */}
+        <Card className="border-0 shadow-md">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+              <Clock className="w-4 h-4" /> Today's Attendance
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {todayLog ? (
+              <div className="grid grid-cols-3 gap-4 text-sm">
+                <div>
+                  <p className="text-[10px] font-bold uppercase text-muted-foreground">Clock In</p>
+                  <p className="font-bold">{new Date(todayLog.clock_in).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold uppercase text-muted-foreground">Clock Out</p>
+                  <p className="font-bold">
+                    {todayLog.clock_out
+                      ? new Date(todayLog.clock_out).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                      : '— (shift open)'}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold uppercase text-muted-foreground">Hours Today</p>
+                  <p className="font-bold">
+                    {(() => {
+                      if (!todayLog.clock_in) return '0h';
+                      const start = new Date(todayLog.clock_in).getTime();
+                      const end = todayLog.clock_out ? new Date(todayLog.clock_out).getTime() : Date.now();
+                      return `${Math.max(0, (end - start) / 3600000).toFixed(1)}h`;
+                    })()}
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">Not clocked in yet today. Your attendance will appear here after you clock in.</p>
+            )}
+          </CardContent>
+        </Card>
+
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
           <div className="lg:col-span-2">
             <Card className="border-0 shadow-lg h-full">
@@ -133,7 +187,13 @@ export default function EmployeeDashboard() {
           </div>
           
           <div className="lg:col-span-1">
-            {profile?.id && <CareerPredictor userId={profile.id} />}
+            {/* Widget isolation: a crash here degrades to a local fallback,
+                never a blank dashboard (root cause of the white screens). */}
+            {profile?.id && (
+              <ErrorBoundary label="Career Predictor">
+                <CareerPredictor userId={profile.id} />
+              </ErrorBoundary>
+            )}
           </div>
         </div>
       </div>

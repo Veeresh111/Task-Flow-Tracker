@@ -6,6 +6,7 @@ import { supabase } from "@/lib/supabase";
 import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from "recharts";
 import { useToast } from "@/hooks/use-toast";
 import { callCorporateAI } from "@/lib/ai";
+import { parseCareerPrediction, type CareerPrediction } from "@/lib/schemas/career-prediction";
 
 const PIE_COLORS = ['#10b981', '#f43f5e', '#f59e0b', '#3b82f6'];
 
@@ -13,7 +14,9 @@ export function CareerPredictor({ userId }: { userId: string }) {
   const [profile, setProfile] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [fetchingData, setFetchingData] = useState(true);
-  const [prediction, setPrediction] = useState<any>(null);
+  // State is ONLY ever a schema-validated prediction or null — an untrusted
+  // DB/AI blob can no longer reach render (white-screen root cause removed).
+  const [prediction, setPrediction] = useState<CareerPrediction | null>(null);
   
   // Real-world Data States for Analytics
   const [workHoursData, setWorkHoursData] = useState<any[]>([]);
@@ -31,7 +34,13 @@ export function CareerPredictor({ userId }: { userId: string }) {
       // 1. Fetch Profile & Historical Ratings
       const { data: profData } = await supabase.from('profiles').select('*').eq('id', userId).single();
       if (profData) setProfile(profData);
-      if (profData?.ai_career_prediction) setPrediction(profData.ai_career_prediction);
+      // Read-time validation: an old/malformed DB row degrades to "no
+      // prediction" instead of crashing the dashboard.
+      if (profData?.ai_career_prediction != null) {
+        const parsed = parseCareerPrediction(profData.ai_career_prediction);
+        if (parsed.ok) setPrediction(parsed.data);
+        else console.warn('[CareerPredictor] stored prediction rejected by schema:', parsed.issues);
+      }
 
       // 2. Fetch ALL Work Logs for Login/Logout analytics (Last 7 Days)
       const { data: logs } = await supabase.from('work_logs').select('clock_in, clock_out').eq('user_id', userId).order('clock_in', { ascending: true });
@@ -122,8 +131,22 @@ export function CareerPredictor({ userId }: { userId: string }) {
 
       const parsed = JSON.parse(cleanText);
 
-      setPrediction(parsed);
-      await supabase.from('profiles').update({ ai_career_prediction: parsed }).eq('id', userId);
+      // Write-time validation (same contract as read-time): AI output is
+      // untrusted input. An invalid shape is NEVER persisted and NEVER
+      // rendered as success — the user gets an honest failure.
+      const check = parseCareerPrediction(parsed);
+      if (!check.ok) {
+        console.warn('[CareerPredictor] AI prediction rejected by schema:', check.issues);
+        toast({
+          title: "AI Output Invalid",
+          description: "The AI returned a malformed prediction. Nothing was saved. Please try again.",
+          variant: "destructive"
+        });
+        return;
+      }
+
+      setPrediction(check.data);
+      await supabase.from('profiles').update({ ai_career_prediction: check.data }).eq('id', userId);
       toast({ title: "Analysis Complete", description: "Your career prediction has been updated." });
     } catch (e) {
       console.error(e);

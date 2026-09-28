@@ -232,138 +232,25 @@ export default function OnboardingCenter() {
         }
       }
 
-      // Step 1: Elevate candidate role profile values
-      const profileUpdate: any = {
-        role: "employee",
-        department: selectedDepartment,
-        team_lead_id: selectedTeamLead,
-        payroll_ctc: Number(assignedPayroll),
-        verification_status: "verified",
-        employment_status: "active"
-      };
-      if (joiningDate) {
-        profileUpdate.join_date = joiningDate;
-      }
-
-      const { error: profileError } = await supabase
-        .from("profiles")
-        .update(profileUpdate)
-        .eq("id", selectedCandidate.id);
-
-      if (profileError) throw profileError;
-
-      // Audit trail: log to salary_revision_history
-      const { data: { user: currentUser } } = await supabase.auth.getUser();
-      await supabase.from('salary_revision_history').insert({
-        employee_id: selectedCandidate.id,
-        old_salary: 0,
-        new_salary: Number(assignedPayroll),
-        revision_percentage: 100,
-        revised_by: currentUser?.id,
-        revision_reason: 'Initial salary assignment via onboarding'
-      });
-
-      // Step 2: Create onboarding record with correct candidate_id FK
-      const employeeCode = `EMP-${selectedCandidate.id.substring(0,6).toUpperCase()}${Date.now().toString(36).toUpperCase()}`;
-      // Delete any existing onboarding record for this candidate
-      await supabase.from("candidate_onboarding").delete().eq("candidate_id", candidateTableId);
-      const { error: onboardingRecordError } = await supabase
-        .from("candidate_onboarding")
-        .insert({
-          candidate_id: candidateTableId,
-          onboarding_stage: "completed",
-          completion_percentage: 100,
+      // Invoke authoritative hire-candidate Edge Function
+      const { data: hireResult, error: hireError } = await supabase.functions.invoke("hire-candidate", {
+        body: {
+          candidateId: candidateTableId,
+          applicationId: selectedCandidate.application_id,
           department: selectedDepartment,
-          manager_id: selectedTeamLead,
-          salary: Number(assignedPayroll),
-          employee_code: employeeCode,
-          asset_status: "pending",
-          payroll_status: "active",
-          onboarding_completed: true
-        });
-
-      if (onboardingRecordError) throw onboardingRecordError;
-
-      // Step 3: Update job_application status to Onboarding
-      if (selectedCandidate.application_id) {
-        await supabase
-          .from("job_applications")
-          .update({ status: "Onboarding" })
-          .eq("id", selectedCandidate.application_id);
-      }
-
-      // Step 4: Sync candidates.stage with job_application status
-      if (candidateTableId) {
-        await supabase
-          .from("candidates")
-          .update({ stage: "Onboarding" })
-          .eq("id", candidateTableId);
-      }
-
-      // Step 5: Notify candidate of successful onboarding
-      if (candidateTableId) {
-        await supabase.from('candidate_notifications').insert({
-          candidate_id: candidateTableId,
-          title: 'Onboarding Complete',
-          message: `Congratulations! You have been successfully onboarded. Your employee code is: ${employeeCode}. You can now access employee features. Please log out and log back in to switch to your Employee Workspace.`,
-          read: false
-        });
-      }
-
-      // Step 5b: Dispatch Official Onboarding & Welcome Email
-      try {
-        if (selectedCandidate.email) {
-          await supabase.functions.invoke("send-email", {
-            body: {
-              type: "onboarding_welcome",
-              to: selectedCandidate.email,
-              subject: `Welcome to FWC — Official Onboarding Complete (${employeeCode})`,
-              html: `
-                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 32px; background: #ffffff;">
-                  <h2 style="color: #1e1b4b; margin-top: 0;">Welcome to the Team, ${selectedCandidate.name}!</h2>
-                  <p style="color: #475569; font-size: 14px; line-height: 1.6;">Congratulations on completing your formal onboarding process with FWC India. Your corporate employee profile has been fully activated in the system.</p>
-                  
-                  <div style="background: #f8fafc; border: 1px solid #cbd5e1; padding: 20px; border-radius: 8px; margin: 24px 0;">
-                    <p style="margin: 4px 0; font-size: 13px; font-weight: bold; color: #334155;">Employee Details:</p>
-                    <p style="margin: 4px 0; font-size: 13px; color: #475569;">• <strong>Employee Code:</strong> <span style="font-family: monospace; color: #4f46e5; font-weight: bold;">${employeeCode}</span></p>
-                    <p style="margin: 4px 0; font-size: 13px; color: #475569;">• <strong>Department:</strong> ${selectedDepartment}</p>
-                    <p style="margin: 4px 0; font-size: 13px; color: #475569;">• <strong>Annual CTC:</strong> ₹${Number(assignedPayroll).toLocaleString('en-IN')}</p>
-                    ${joiningDate ? `<p style="margin: 4px 0; font-size: 13px; color: #475569;">• <strong>Joining Date:</strong> ${joiningDate}</p>` : ''}
-                  </div>
-
-                  <p style="color: #475569; font-size: 14px; line-height: 1.6;"><strong>Next Steps:</strong> Log into your FWC portal account using your registered email. If you are currently logged in, please log out and log back in to automatically access your new <strong>Employee Workspace Dashboard</strong>.</p>
-                  
-                  <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 28px 0;" />
-                  <p style="color: #94a3b8; font-size: 12px; margin: 0;">FWC Enterprise Recruitment & HR Operations Division</p>
-                </div>
-              `
-            }
-          });
+          teamLeadId: selectedTeamLead,
+          assignedPayroll: Number(assignedPayroll),
+          joiningDate: joiningDate || undefined,
+          origin: window.location.origin
         }
-      } catch (emailErr) {
-        console.warn("Welcome email dispatch attempt failed (non-blocking):", emailErr);
-      }
-
-      // Step 7: Audit trail for candidate-to-employee transition
-      await supabase.from('payroll_audit').insert({
-        evidence_code: `ONB-${Date.now().toString(36).toUpperCase()}`,
-        entity: 'profiles',
-        entity_id: selectedCandidate.id,
-        action: 'ONBOARDED',
-        old_value: { role: 'candidate', employment_status: 'active' },
-        new_value: { role: 'employee', department: selectedDepartment, team_lead_id: selectedTeamLead, payroll_ctc: Number(assignedPayroll) },
-        performed_by: currentUser?.id,
-        reason: `Candidate ${selectedCandidate.name} onboarded as employee. Code: ${employeeCode}`
       });
 
-      // Step 8: Update candidate_notifications to mark onboarding as read for all old notifications
-      if (candidateTableId) {
-        await supabase.from('candidate_notifications').update({ read: true }).eq('candidate_id', candidateTableId);
-      }
+      if (hireError) throw new Error(hireError.message || "Failed to execute hiring operation.");
+      if (hireResult?.error) throw new Error(hireResult.error);
 
       toast({ 
-        title: "Onboarding Complete", 
-        description: `${selectedCandidate.name} onboarded successfully. Employee Code: ${employeeCode}. All notifications cleared. Audit trail recorded.` 
+        title: "Hiring & Onboarding Complete", 
+        description: `${selectedCandidate.name} onboarded successfully. Employee Code: ${hireResult.employeeCode}. Activation email queued.`,
       });
 
       setSelectedCandidate(null);
@@ -375,7 +262,7 @@ export default function OnboardingCenter() {
       
       // Step 6: Hot-reload active grids.
       await fetchCandidates();
-    } catch (err) {
+    } catch (err: any) {
       console.error("Critical onboarding chain failure:", err);
       toast({ title: "Onboarding Aborted", description: err.message || "Failed to finalize database conversion.", variant: "destructive" });
     } finally {

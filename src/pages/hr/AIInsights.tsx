@@ -86,7 +86,8 @@ export default function HRAIInsights() {
         {insight && (
           <Card className="shadow-xl border-indigo-200 bg-gradient-to-br from-indigo-50 to-white animate-in slide-in-from-bottom-4">
             <CardHeader className="border-b border-indigo-100 pb-4">
-              <CardTitle className="text-lg text-indigo-900 flex items-center gap-2"><BrainCircuit className="w-5 h-5"/> AI Strategic Output (Qwen 3)</CardTitle>
+              <CardTitle className="text-lg text-indigo-900 flex items-center gap-2"><BrainCircuit className="w-5 h-5"/> {insight.startsWith('[Deterministic') || insight.startsWith('[Rule-Based') || insight.startsWith('[Standard Delivery') ? 'Rule-Based System Output — AI Offline' : 'AI Strategic Output (Qwen 3)'}
+            </CardTitle>
             </CardHeader>
             <CardContent className="p-8 whitespace-pre-wrap text-slate-700 leading-relaxed font-medium text-sm">
               {insight}

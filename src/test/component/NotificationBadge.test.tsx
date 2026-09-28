@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { BrowserRouter } from "react-router-dom";
 import React from "react";
 
@@ -68,6 +68,10 @@ function NotificationBadgeDisplay({ badgeCount, isOnPage }: { badgeCount: number
 }
 
 describe("NotificationBadgeDisplay Component", () => {
+  // Explicit cleanup: relying on RTL auto-cleanup leaked renders across
+  // tests under the single-thread worker ("Found multiple elements").
+  afterEach(cleanup);
+
   it("shows badge count when not on notifications page", () => {
     render(
       <BrowserRouter>

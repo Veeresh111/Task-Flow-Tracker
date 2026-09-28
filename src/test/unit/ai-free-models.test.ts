@@ -5,6 +5,7 @@ import {
   clearHuggingFaceToken,
   HF_FREE_MODELS,
   callFreeHFModel,
+  AI_UNAVAILABLE_MARKER,
   DEFAULT_FREE_HF_TOKEN
 } from "@/lib/ai-models";
 
@@ -46,7 +47,7 @@ describe("Hugging Face Free AI Models & Token Manager", () => {
     expect(HF_FREE_MODELS.INTERVIEW_GENERATOR.id).toBe("mistralai/Mistral-7B-Instruct-v0.3");
   });
 
-  it("executes deterministic fallback when network endpoints are simulated offline", async () => {
+  it("returns explicit AI-offline marker (never fabricated content) when network is down", async () => {
     // Force network fetch to fail
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("Network offline")));
 
@@ -56,12 +57,14 @@ describe("Hugging Face Free AI Models & Token Manager", () => {
       useCache: false
     });
 
+    // TRUTH POLICY: the offline path must NOT invent analyses, scores, or
+    // verdicts. It returns an explicit AI-unavailable notice.
     expect(result).toBeDefined();
-    expect(result.length).toBeGreaterThan(10);
-    expect(result.toLowerCase()).toContain("deliverables");
+    expect(result).toContain("AI Offline");
+    expect(result.toLowerCase()).not.toContain("deliverables");
   });
 
-  it("generates structured JSON fallback for ATS queries when offline", async () => {
+  it("offline JSON fallback is the AI_UNAVAILABLE marker — parse fails into honest error path", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("Cloud timeout")));
 
     const result = await callFreeHFModel({
@@ -71,9 +74,11 @@ describe("Hugging Face Free AI Models & Token Manager", () => {
       useCache: false
     });
 
-    const parsed = JSON.parse(result);
-    expect(parsed.score).toBeDefined();
-    expect(typeof parsed.score).toBe("number");
-    expect(parsed.recommendation).toBeDefined();
+    // TRUTH POLICY: no fabricated { score, recommendation } objects. The
+    // marker is intentionally non-JSON so callers' JSON.parse throws and
+    // their catch path surfaces an honest "AI unavailable" failure.
+    expect(result).toBe(AI_UNAVAILABLE_MARKER);
+    expect(() => JSON.parse(result)).toThrow();
+    expect(result).not.toContain("score");
   });
 });

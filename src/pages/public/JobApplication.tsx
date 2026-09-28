@@ -8,6 +8,7 @@ import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabase";
 import { VectorMath } from "@/lib/dsa/VectorMath";
 import { notificationService } from "@/lib/notifications";
+import { Loader2, AlertCircle, FileText, User, Mail, Phone, Briefcase, UploadCloud, ShieldCheck, CheckCircle2, Sparkles } from "lucide-react";
 
 export default function JobApplication() {
   useEffect(() => { document.title = "Apply - FWC"; }, []);
@@ -21,16 +22,17 @@ export default function JobApplication() {
   const [formMeta, setFormMeta] = useState<any>(null);
   const [filteredSchema, setFilteredSchema] = useState<any[]>([]);
   const [submissionComplete, setSubmissionComplete] = useState(false);
+  const [shortlistedBanner, setShortlistedBanner] = useState(false);
 
   // Core Applicant Information Inputs
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [experienceYears, setExperienceYears] = useState("");
-  
+
   // Custom Dynamic Structural Questionnaire Fields Answer Map
   const [customAnswers, setCustomAnswers] = useState<Record<string, string>>({});
-  
+
   // Resume Upload Document Reference Node
   const [resumeFile, setResumeFile] = useState<File | null>(null);
   const [resumeParsedText, setResumeParsedText] = useState("");
@@ -62,8 +64,8 @@ export default function JobApplication() {
       let questionsList: any[] = [];
       if (data.form_schema) {
         try {
-          questionsList = typeof data.form_schema === "string" 
-            ? JSON.parse(data.form_schema) 
+          questionsList = typeof data.form_schema === "string"
+            ? JSON.parse(data.form_schema)
             : data.form_schema;
         } catch (e) {
           console.error("Schema parse exception:", e);
@@ -72,7 +74,7 @@ export default function JobApplication() {
       }
 
       const verifiedQuestions = Array.isArray(questionsList) ? questionsList : [];
-      
+
       // Filter out standard baseline keys from the dynamic loop using field.id strings
       const isolatedSchema = verifiedQuestions.filter((field: any) => {
         const fieldKey = String(field.id || field.label || "").toLowerCase().trim();
@@ -181,101 +183,68 @@ export default function JobApplication() {
     try {
       const cleanEmail = email.trim().toLowerCase();
 
-      // 1. Resolve or provision master record within public.candidates ledger
-      let candidateRecordId = null;
-      const { data: existingCandidate, error: matchErr } = await supabase
-        .from("candidates")
-        .select("id")
-        .eq("email", cleanEmail)
-        .maybeSingle();
+      // 1. SERVER-AUTHORITATIVE SUBMISSION (SECURITY DEFINER RPC):
+      // validates requisition openness, resolves/creates the candidate,
+      // enforces one application per requisition, links profiles, and
+      // persists the application with status 'Applied'. Anonymous clients
+      // have NO direct REST write path to candidates/job_applications.
+      const { data: submitResult, error: submitErr } = await supabase
+        .rpc("submit_public_application", {
+          p_form_id: formMeta.id,
+          p_full_name: fullName.trim(),
+          p_email: cleanEmail,
+          p_phone: phone.trim(),
+          p_experience_years: Number(experienceYears) || 0,
+          p_answers: customAnswers
+        });
 
-      if (matchErr) throw matchErr;
-
-      if (!existingCandidate) {
-        const { data: newCand, error: createErr } = await supabase
-          .from("candidates")
-          .insert([{
-            full_name: fullName.trim(),
-            email: cleanEmail,
-            phone: phone.trim(),
-            experience_years: Number(experienceYears) || 0,
-            stage: "Screening"
-          }])
-          .select("id")
-          .single();
-
-        if (createErr) throw createErr;
-        candidateRecordId = newCand.id;
-      } else {
-        candidateRecordId = existingCandidate.id;
-
-        // Check for pre-existing applications to avoid pipeline duplicates
-        // Use job_applications (authoritative source) for duplicate detection
-        const { data: existingJobApp, error: jobAppCheckErr } = await supabase
-          .from("job_applications")
-          .select("id, status")
-          .eq("candidate_id", candidateRecordId)
-          .eq("form_id", formMeta.id)
-          .maybeSingle();
-
-        if (jobAppCheckErr) throw jobAppCheckErr;
-
-        if (existingJobApp) {
+      if (submitErr) throw submitErr;
+      if (!submitResult?.success) {
+        if (submitResult?.code === "DUPLICATE_APPLICATION") {
           toast({
             title: "Application Already Submitted",
-            description: `You have already applied for this position. Current status: ${existingJobApp.status}.`,
+            description: submitResult.error,
             variant: "destructive"
           });
-          setSubmitting(false);
-          return;
+        } else {
+          toast({ title: "Submission Failed", description: submitResult?.error || "Could not submit your application.", variant: "destructive" });
         }
-
-        await supabase
-          .from("candidates")
-          .update({ experience_years: Number(experienceYears) || 0, stage: "Screening" })
-          .eq("id", candidateRecordId);
+        return;
       }
 
-      // DI-1 FIX: Link profiles to candidates — if a registered user with this email exists, set their candidate_id
-      const { data: matchingProfile } = await supabase
-        .from("profiles")
-        .select("id, candidate_id")
-        .eq("email", cleanEmail)
-        .maybeSingle();
+      const candidateRecordId: string = submitResult.candidate_id;
+      const applicationId: string = submitResult.application_id;
 
-      if (matchingProfile && !matchingProfile.candidate_id) {
-        await supabase
-          .from("profiles")
-          .update({ candidate_id: candidateRecordId })
-          .eq("id", matchingProfile.id);
-      }
-
-      // 2. Stream binary document payload directly into public object storage buckets
+      // 2. Resume upload to PRIVATE storage. The stored value is the bucket
+      // path; downloads require authorized signed URLs issued by privileged
+      // callers. Attachment happens through the RPC, not anonymous UPDATE.
       const fileExtension = resumeFile.name.split('.').pop();
       const storageFilePath = `${candidateRecordId}/${crypto.randomUUID()}.${fileExtension}`;
-      
-      let computedResumeUrl = '';
+
       const { error: uploadError } = await supabase.storage
         .from("resumes")
-        .upload(storageFilePath, resumeFile, { cacheControl: '3600', upsert: true });
+        .upload(storageFilePath, resumeFile, { cacheControl: '3600', upsert: false });
 
       if (uploadError) {
-        console.error("Resume upload failed (non-fatal):", uploadError.message);
+        console.error("Resume upload failed:", uploadError.message);
+        toast({
+          title: "Resume Upload Failed",
+          description: "Your application was saved but the resume file could not be stored. Please contact HR.",
+          variant: "destructive"
+        });
       } else {
-        const { data: urlData } = await supabase.storage
-          .from("resumes")
-          .createSignedUrl(storageFilePath, 86400);
-        computedResumeUrl = urlData?.signedUrl || '';
+        const { error: attachErr } = await supabase.rpc("attach_public_resume", {
+          p_application_id: applicationId,
+          p_resume_path: storageFilePath,
+          p_parsed_resume_text: resumeParsedText || ""
+        });
+        if (attachErr) console.error("Resume attachment failed:", attachErr);
       }
 
-      await supabase
-        .from("candidates")
-        .update({ resume_url: computedResumeUrl })
-        .eq("id", candidateRecordId);
-
-      // 3. ATS SCREENING via secure edge function (no HF_TOKEN exposed client-side)
+      // 3. ATS SCREENING via secure edge function (server never exposes HF_TOKEN)
       let calculatedAIScore: number | null = null;
       let calculatedAIVerdict = "Pending human review";
+      let evaluationType: "AI_EVALUATION" | "RULE_BASED" = "RULE_BASED";
 
       try {
         const targetJD = formMeta.jd_text || 'Corporate Requisition Role Profile';
@@ -296,132 +265,115 @@ export default function JobApplication() {
         if (response.ok) {
           const parsed = await response.json();
           calculatedAIScore = Math.max(0, Math.min(100, Number(parsed.score || 0)));
+          evaluationType = (parsed.evaluation_type === 'AI_EVALUATION') ? 'AI_EVALUATION' : 'RULE_BASED';
+          // The server labels rule-based verdicts itself; no client-side prefixing.
           calculatedAIVerdict = parsed.verdict || calculatedAIVerdict;
         } else {
           const dsaScore = VectorMath.computeCandidateMatchScore(resumeParsedText || "", targetJD);
           calculatedAIScore = dsaScore.overallScore;
+          evaluationType = "RULE_BASED";
           calculatedAIVerdict = `Automated vector analysis: ${dsaScore.overallScore}% compatibility with required requisition parameters.`;
         }
       } catch (aiExc) {
-        console.error("AI pre-screening failed, engaging VectorMath engine:", aiExc);
+        console.error("AI pre-screening unavailable, engaging deterministic engine:", aiExc);
         const targetJD = formMeta.jd_text || 'Corporate Requisition Role Profile';
         const dsaScore = VectorMath.computeCandidateMatchScore(resumeParsedText || "", targetJD);
         calculatedAIScore = dsaScore.overallScore;
+        evaluationType = "RULE_BASED";
         calculatedAIVerdict = `Automated vector analysis: ${dsaScore.overallScore}% compatibility with required requisition parameters.`;
       }
 
-      const passThresholdGated = calculatedAIScore !== null && calculatedAIScore >= 75;
-      const initialStatusValue = passThresholdGated ? "Shortlisted" : "Screening";
+      // 4. SERVER-AUTHORITATIVE SCREENING PERSISTENCE + threshold transition.
+      // The anonymous client cannot UPDATE job_applications; the server owns
+      // score, provenance and the shortlist decision.
+      const { data: screeningResult, error: screeningErr } = await supabase
+        .rpc("record_public_screening", {
+          p_application_id: applicationId,
+          p_score: calculatedAIScore,
+          p_verdict: calculatedAIVerdict,
+          p_evaluation_type: evaluationType
+        });
 
-      // 4. Commit application payload cleanly to public.job_applications single source of truth
-      const { data: applicationRow, error: applicationErr } = await supabase
-        .from("job_applications")
-        .insert([{
-          form_id: formMeta.id,
-          candidate_id: candidateRecordId,
-          candidate_name: fullName.trim(),
-          candidate_email: cleanEmail,
-          answers: customAnswers,
-          resume_url: computedResumeUrl,
-          parsed_resume_text: resumeParsedText || null,
-          match_score: calculatedAIScore,
-          ai_verdict: calculatedAIVerdict,
-          status: initialStatusValue
-        }])
-        .select()
-        .single();
-
-      if (applicationErr) throw applicationErr;
-
-      // 5. PHASE 3 REALIZED: Dynamic screening invitation workflow validation logic
-      let tokenIssuedAlert = false;
-      let finalPipelineStatus = initialStatusValue;
-
-      if (formMeta.requires_assessment && passThresholdGated) {
-        const { data: targetAssessment } = await supabase
-          .from("assessments")
-          .select("id")
-          .eq("job_form_id", formMeta.id)
-          .eq("status", "Active")
-          .limit(1)
-          .maybeSingle();
-
-        if (targetAssessment) {
-          const secureUUIDToken = crypto.randomUUID();
-          
-          // Commit token invite to assessment_tokens with a 48-hour expiration window
-          const { error: tokenInsertErr } = await supabase
-            .from("assessment_tokens")
-            .insert([{
-              assessment_id: targetAssessment.id,
-              candidate_id: candidateRecordId,
-              application_id: applicationRow.id,
-              token: secureUUIDToken,
-              status: "Active",
-              used: false,
-              expires_at: new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString()
-            }]);
-
-          if (!tokenInsertErr) {
-            tokenIssuedAlert = true;
-            finalPipelineStatus = "Assessment Assigned";
-            
-            // Push direct candidate notification with deep link
-            await notificationService.sendToCandidate(candidateRecordId, {
-              title: "Pre-Exam Assessment Granted",
-              message: `Congratulations! Your screening index has passed our AI threshold criteria. Your unique access token is [ ${secureUUIDToken} ]. Start your exam window within 48 hours.`,
-              type: "assessment",
-              link: `/assessment/${secureUUIDToken}`
-            });
-
-            // Notify HR & Admin team about new shortlisted candidate
-            await notificationService.sendToRole(['hr', 'admin'], {
-              title: "Candidate Auto-Shortlisted",
-              message: `${fullName.trim()} has applied & auto-shortlisted for ${formMeta.job_title} (ATS Score: ${calculatedAIScore || 'N/A'}%). Assessment token auto-assigned.`,
-              type: "recruitment",
-              link: "/hr/recruitment"
-            });
-
-            // Update primary job applications status row to match timeline change
-            await supabase
-              .from("job_applications")
-              .update({ status: "Assessment Assigned" })
-              .eq("id", applicationRow.id);
-          } else {
-            // Standard application notification to HR/Admin
-            await notificationService.sendToRole(['hr', 'admin'], {
-              title: "New Job Application Received",
-              message: `${fullName.trim()} applied for ${formMeta.job_title} (ATS Score: ${calculatedAIScore || 'N/A'}%). Review in Recruitment Pipeline.`,
-              type: "recruitment",
-              link: "/hr/recruitment"
-            });
-          }
-        }
+      if (screeningErr) {
+        console.error("Screening persistence failed:", screeningErr);
       }
 
-      // Notify HR team about new application submission
-      try {
-        const { data: hrUsers } = await supabase
-          .from('profiles')
-          .select('id')
-          .eq('role', 'hr');
-        if (hrUsers && hrUsers.length > 0) {
-          const hrNotifications = hrUsers.map((hr: any) => ({
-            user_id: hr.id,
-            title: "New Application Received",
-            message: `${fullName.trim()} has applied for ${formMeta.job_title}. ATS Score: ${calculatedAIScore !== null ? calculatedAIScore + '%' : 'Pending'}. Status: ${finalPipelineStatus}.`,
-            is_read: false,
-            created_at: new Date().toISOString()
-          }));
-          await supabase.from('notifications').insert(hrNotifications);
+      const passThresholdGated = screeningResult?.shortlisted === true
+        || (screeningResult?.already_scored && Number(screeningResult?.score ?? 0) >= 75);
+      const finalPipelineStatus = passThresholdGated ? "Shortlisted" : "Screening";
+
+      // 5. ASSESSMENT TOKEN via server RPC (server mints a high-entropy token,
+      // stores only its hash, binds it candidate/application/assessment, and
+      // advances the pipeline; idempotent per candidate/assessment).
+      if (formMeta.requires_assessment && passThresholdGated) {
+        const { data: issuedToken, error: tokenIssueErr } = await supabase
+          .rpc("issue_public_assessment_token", {
+            p_form_id: formMeta.id,
+            p_candidate_id: candidateRecordId,
+            p_application_id: applicationId,
+            p_score: calculatedAIScore
+          });
+
+        const secureTokenValue = typeof issuedToken === "string" ? issuedToken : null;
+
+        if (!tokenIssueErr && secureTokenValue) {
+          // Push direct candidate notification with deep link (best-effort)
+          try {
+            await notificationService.sendToCandidate(candidateRecordId, {
+              title: "Pre-Exam Assessment Granted",
+              message: `Your screening passed our criteria. Your unique access token is [ ${secureTokenValue} ]. Start your exam window within 48 hours.`,
+              type: "assessment",
+              link: `/assessment/${secureTokenValue}`
+            });
+          } catch (notifErr) {
+            console.error("Candidate assessment notification failed:", notifErr);
+          }
+
+          try {
+            await notificationService.sendToRole(['hr', 'admin'], {
+              title: "Candidate Auto-Shortlisted",
+              message: `${fullName.trim()} has applied & auto-shortlisted for ${formMeta.job_title} (ATS Score: ${calculatedAIScore ?? 'N/A'}%). Assessment token auto-assigned.`,
+              type: "recruitment",
+              link: "/hr/recruitment"
+            });
+          } catch (notifErr) {
+            console.error("HR shortlist notification failed:", notifErr);
+          }
+        } else {
+          if (tokenIssueErr) console.error("Assessment token issuance failed:", tokenIssueErr);
+          try {
+            await notificationService.sendToRole(['hr', 'admin'], {
+              title: "New Job Application Received",
+              message: `${fullName.trim()} applied for ${formMeta.job_title} (ATS Score: ${calculatedAIScore ?? 'N/A'}%). Review in Recruitment Pipeline.`,
+              type: "recruitment",
+              link: "/hr/recruitment"
+            });
+          } catch (notifErr) {
+            console.error("HR application notification failed:", notifErr);
+          }
         }
-      } catch (hrNotifErr) {
-        console.error("HR notification error:", hrNotifErr);
+      } else {
+        try {
+          await notificationService.sendToRole(['hr', 'admin'], {
+            title: "New Job Application Received",
+            message: `${fullName.trim()} applied for ${formMeta.job_title} (ATS Score: ${calculatedAIScore ?? 'N/A'}%). Status: ${finalPipelineStatus}.`,
+            type: "recruitment",
+            link: "/hr/recruitment"
+          });
+        } catch (notifErr) {
+          console.error("HR application notification failed:", notifErr);
+        }
       }
 
       // Stage sync handled automatically by DB trigger trg_job_applications_sync_stage
+      setShortlistedBanner(passThresholdGated);
       setSubmissionComplete(true);
-      toast({ title: "Application Submitted", description: "Your application has been submitted successfully." });
+      toast({
+        title: "Application Submitted",
+        description: passThresholdGated
+          ? "Your application has been submitted and shortlisted by our screening engine."
+          : "Your application has been submitted and is under review."
+      });
     } catch (err: any) {
       toast({
         title: "Submission Failed",
@@ -466,7 +418,7 @@ export default function JobApplication() {
     <div className="min-h-screen bg-slate-50/50 py-12 px-4 sm:px-6 lg:px-8 font-sans">
       {!submissionComplete ? (
         <div className="max-w-3xl mx-auto grid md:grid-cols-3 gap-6 animate-fade-in items-start">
-          
+
           <div className="md:col-span-1 space-y-4">
             <Card className="border-slate-200 bg-white shadow-md rounded-xl overflow-hidden">
               <div className="bg-slate-900 p-4 text-white">
@@ -487,7 +439,7 @@ export default function JobApplication() {
               </div>
               <CardContent className="p-6">
                 <form onSubmit={handleFormSubmissionPipeline} className="space-y-5">
-                  
+
                   <div className="grid sm:grid-cols-2 gap-4">
                     <div className="space-y-1">
                       <label className="text-[10px] font-black tracking-wider text-slate-500 uppercase flex items-center gap-1"><User className="w-3 h-3"/> Full Legal Name</label>
@@ -567,7 +519,11 @@ export default function JobApplication() {
               <Sparkles className="w-5 h-5 text-indigo-600 mt-0.5 shrink-0 animate-pulse" />
               <div>
                 <p className="text-[11px] font-black text-slate-400 uppercase">Automated ATS Screening Notice</p>
-                <p className="text-xs font-medium text-slate-600 leading-relaxed mt-1">Your intake responses are currently being evaluated by our AI pre-screening matrix layers. If your objective match score meets our technical criteria threshold, an **Individualized Examination Token link** will be dispatched to your email notifications directory shortly.</p>
+                <p className="text-xs font-medium text-slate-600 leading-relaxed mt-1">
+                  {shortlistedBanner
+                    ? "Your intake responses passed our screening criteria. An individualized examination token has been issued to your notifications — start your assessment window within 48 hours."
+                    : "Your intake responses are currently being evaluated by our screening engine. If your objective match score meets our technical criteria threshold, an individualized examination token link will be dispatched to your notifications shortly."}
+                </p>
               </div>
             </div>
             <Button onClick={() => navigate("/login")} variant="outline" className="h-10 text-xs font-bold w-full max-w-xs mt-2">Return to Careers Portal</Button>

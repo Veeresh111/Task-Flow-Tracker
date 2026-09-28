@@ -143,4 +143,26 @@ export class VectorMath {
       missingSkills,
     };
   }
+
+  /**
+   * Mathematically compute an individual skill's depth score based on resume frequency and context.
+   */
+  static computeIndividualSkillScore(resumeText: string, skill: string, baselineScore: number): number {
+    if (!resumeText || !skill) return 0;
+    const cleanSkill = skill.toLowerCase().trim();
+    const lowerText = resumeText.toLowerCase();
+    
+    if (!lowerText.includes(cleanSkill)) return 0;
+    
+    // Count exact keyword occurrences
+    const escaped = cleanSkill.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`\\b${escaped}\\b`, 'gi');
+    const matches = resumeText.match(regex);
+    const count = matches ? matches.length : 1;
+    
+    // Frequency depth: 1 occurrence = 70% of baseline, 2 = 85%, 3+ = up to 100%
+    const frequencyMultiplier = Math.min(1.0, 0.6 + count * 0.15);
+    const calibrated = Math.round(baselineScore * frequencyMultiplier);
+    return Math.min(100, Math.max(35, calibrated));
+  }
 }

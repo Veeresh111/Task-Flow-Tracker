@@ -288,10 +288,11 @@ export const notificationService = {
   ): Promise<number> {
     try {
       const roleList = Array.isArray(roles) ? roles : [roles];
+      // B4 minimization: role → id resolution goes through the server-side
+      // projection (id + role only, staff-list gate for non-staff callers)
+      // instead of a direct cross-user SELECT on profiles.
       const { data: users, error } = await supabase
-        .from('profiles')
-        .select('id, role')
-        .in('role', roleList);
+        .rpc('get_profile_ids_for_roles', { p_roles: roleList });
 
       if (error || !users || users.length === 0) return 0;
 

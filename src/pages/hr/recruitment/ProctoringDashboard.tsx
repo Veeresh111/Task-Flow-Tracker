@@ -85,7 +85,7 @@ export default function ProctoringDashboard() {
       try {
         const tokensRes = await supabase
           .from("assessment_tokens")
-          .select("id, status, updated_at, candidate_id, assessment_id, proctor_log");
+          .select("id, status, created_at, candidate_id, assessment_id, proctor_log");
         if (!tokensRes.error) tokensData = tokensRes.data || [];
       } catch (e) {
         console.warn("assessment_tokens query blocked by RLS:", e);

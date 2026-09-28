@@ -13,6 +13,32 @@ serve(async (req) => {
   }
 
   try {
+    // Authorization wall: require a valid Supabase Auth JWT. The anon key is
+    // NOT sufficient — unauthenticated callers must never reach the paid/quota
+    // AI provider. This closes the previous unauthenticated abuse path.
+    const authHeader = req.headers.get('Authorization') || '';
+    const rawToken = authHeader.replace(/^Bearer\s+/i, '').trim();
+
+    if (!rawToken) {
+      return new Response(JSON.stringify({ error: "401 Unauthorized: Authentication required." }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const authClient = createClient(supabaseUrl, supabaseAnonKey, {
+      global: { headers: { Authorization: authHeader } }
+    });
+    const { data: { user }, error: authError } = await authClient.auth.getUser(rawToken);
+    if (authError || !user) {
+      return new Response(JSON.stringify({ error: "401 Unauthorized: Invalid or expired session token." }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
     const { prompt, systemInstruction, messages, temperature = 0.3, max_tokens = 2000, response_format } = await req.json();
 
     const HF_TOKEN = Deno.env.get("HF_TOKEN");

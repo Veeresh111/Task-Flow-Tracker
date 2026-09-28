@@ -38,11 +38,20 @@ export default function HRCandidates() {
     const { data: { user } } = await supabase.auth.getUser();
     if (user) setCurrentUserId(user.id);
 
-    // Fetch registered candidate profiles
-    const { data: profileCandidates } = await supabase.from('profiles').select('*').eq('role', 'candidate');
+    // Fetch registered candidate profiles with selective columns and bounds
+    const { data: profileCandidates } = await supabase
+      .from('profiles')
+      .select('id, name, email, phone, role, status, verification_status, created_at')
+      .eq('role', 'candidate')
+      .order('created_at', { ascending: false })
+      .limit(200);
     
-    // Fetch ATS candidates (applied via public job forms)
-    const { data: atsCandidates } = await supabase.from('candidates').select('id, full_name, email, phone, created_at');
+    // Fetch ATS candidates with bounded query
+    const { data: atsCandidates } = await supabase
+      .from('candidates')
+      .select('id, full_name, email, phone, created_at')
+      .order('created_at', { ascending: false })
+      .limit(200);
 
     // Merge: start with profile candidates, add ATS-only candidates
     const profileEmails = new Set((profileCandidates || []).map(p => p.email?.toLowerCase()));
@@ -79,8 +88,14 @@ export default function HRCandidates() {
           message: content,
           read: false
         }));
-        const { error } = await supabase.from('candidate_notifications').insert(notificationsPayload);
-        if (error) throw error;
+
+        // Controlled chunking to prevent large unbuffered payload errors
+        const CHUNK_SIZE = 100;
+        for (let i = 0; i < notificationsPayload.length; i += CHUNK_SIZE) {
+          const chunk = notificationsPayload.slice(i, i + CHUNK_SIZE);
+          const { error } = await supabase.from('candidate_notifications').insert(chunk);
+          if (error) throw error;
+        }
       }
 
       toast({

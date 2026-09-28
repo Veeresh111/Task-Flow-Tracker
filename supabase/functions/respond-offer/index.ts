@@ -14,13 +14,16 @@ serve(async (req) => {
 
   try {
     const authHeader = req.headers.get('Authorization') || '';
+    const rawToken = authHeader.replace(/^Bearer\s+/i, '').trim();
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    
     const supabase = createClient(supabaseUrl, supabaseAnonKey);
-    const { data: { user }, error: authError } = await supabase.auth.getUser(authHeader.replace('Bearer ', ''));
+    const { data: { user }, error: authError } = await supabase.auth.getUser(rawToken);
 
     if (authError || !user) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+      return new Response(JSON.stringify({ error: "401 Unauthorized: Valid session token required." }), {
         status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" }
       });
@@ -28,40 +31,50 @@ serve(async (req) => {
 
     const { offerId, action } = await req.json();
     if (!offerId || !action || !['accepted', 'declined'].includes(action)) {
-      return new Response(JSON.stringify({ error: "Missing offerId or invalid action" }), {
+      return new Response(JSON.stringify({ error: "Missing offerId or invalid action ('accepted' | 'declined')." }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" }
       });
     }
 
-    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const serviceClient = createClient(supabaseUrl, supabaseKey);
 
-    // Verify the offer belongs to this candidate
-    const { data: profile } = await supabase
+    // Fetch caller's profile
+    const { data: callerProfile } = await serviceClient
       .from('profiles')
-      .select('candidate_id')
+      .select('id, role, candidate_id, email')
       .eq('id', user.id)
       .maybeSingle();
 
-    const candidateId = profile?.candidate_id || user.id;
+    const callerRole = (callerProfile?.role || "").toLowerCase();
+    const isHrOrAdmin = ['admin', 'hr'].includes(callerRole);
 
     const { data: offer, error: offerErr } = await serviceClient
       .from('offer_letters')
-      .select('id, status, candidate_id, application_id')
+      .select('id, status, candidate_id, application_id, candidate_email')
       .eq('id', offerId)
-      .eq('candidate_id', candidateId)
       .single();
 
     if (offerErr || !offer) {
-      return new Response(JSON.stringify({ error: "Offer not found or unauthorized" }), {
+      return new Response(JSON.stringify({ error: "Offer not found." }), {
         status: 404,
         headers: { ...corsHeaders, "Content-Type": "application/json" }
       });
     }
 
+    // Security check: must be either Admin/HR or the candidate to whom this offer belongs
+    const candidateId = callerProfile?.candidate_id || user.id;
+    const isOwner = (offer.candidate_id === candidateId) || (offer.candidate_email && (offer.candidate_email.toLowerCase() === user.email?.toLowerCase()));
+
+    if (!isHrOrAdmin && !isOwner) {
+      return new Response(JSON.stringify({ error: "403 Forbidden: You are not authorized to respond to this offer letter." }), {
+        status: 403,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+
     if (offer.status !== 'Sent') {
-      return new Response(JSON.stringify({ error: "Offer is not in 'Sent' status and cannot be responded to" }), {
+      return new Response(JSON.stringify({ error: `Offer is currently '${offer.status}' and cannot be responded to.` }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" }
       });
@@ -69,10 +82,20 @@ serve(async (req) => {
 
     const newStatus = action === 'accepted' ? 'Accepted' : 'Declined';
 
+    // Immutable fields protected: only status and responded_at updated
     await serviceClient
       .from('offer_letters')
       .update({ status: newStatus, responded_at: new Date().toISOString() })
       .eq('id', offerId);
+
+    // Synchronize job application status
+    if (offer.application_id) {
+      const appStatus = action === 'accepted' ? 'Offer Accepted' : 'Offer Declined';
+      await serviceClient
+        .from('job_applications')
+        .update({ status: appStatus })
+        .eq('id', offer.application_id);
+    }
 
     // Notify HR
     const { data: hrUsers } = await serviceClient

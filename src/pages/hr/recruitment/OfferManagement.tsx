@@ -2,6 +2,8 @@ import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -22,6 +24,68 @@ const STATUS_COLORS: Record<string, string> = {
 
 export default function OfferManagement() {
   const { toast } = useToast();
+
+  // ---- Create Offer (authoritative RPC path; product decision A) ----
+  const [createOpen, setCreateOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [eligibleApps, setEligibleApps] = useState<JobApplication[]>([]);
+  const [selectedAppId, setSelectedAppId] = useState("");
+  const [offeredCtc, setOfferedCtc] = useState("");
+  const [joiningDate, setJoiningDate] = useState("");
+  const [jobTitle, setJobTitle] = useState("");
+
+  const openCreateDialog = async () => {
+    setCreateError(null);
+    setSelectedAppId(""); setOfferedCtc(""); setJoiningDate(""); setJobTitle("");
+    setCreateOpen(true);
+    // Offer-eligible applications: server re-validates; this is UX pre-filtering only.
+    const { data, error } = await supabase
+      .from("job_applications")
+      .select("id, candidate_name, candidate_email, status, form_id")
+      .in("status", ["Assessment Completed", "Interview Scheduled", "Interview Cleared", "Offer Generated"])
+      .order("created_at", { ascending: false })
+      .limit(50);
+    if (error) {
+      toast({ title: "Load Failed", description: error.message, variant: "destructive" });
+      return;
+    }
+    setEligibleApps((data as JobApplication[]) || []);
+  };
+
+  const submitCreateOffer = async () => {
+    setCreateError(null);
+    if (!selectedAppId || !offeredCtc || !joiningDate) {
+      setCreateError("Application, CTC and joining date are required.");
+      return;
+    }
+    const ctc = Number(offeredCtc);
+    if (!Number.isFinite(ctc) || ctc <= 0) {
+      setCreateError("CTC must be a positive number.");
+      return;
+    }
+    setCreating(true);
+    try {
+      const { data: result, error } = await supabase.rpc("create_offer_for_application", {
+        p_application_id: selectedAppId,
+        p_offered_ctc: ctc,
+        p_joining_date: joiningDate,
+        p_job_title: jobTitle.trim() || null
+      });
+      if (error) throw error;
+      if (!result?.success) {
+        setCreateError(result?.error || "Server refused offer creation.");
+        return;
+      }
+      toast({ title: "Offer Created", description: `Reference ${result.reference}. Pending approval.` });
+      setCreateOpen(false);
+      fetchOffers();
+    } catch (err: any) {
+      setCreateError(err.message || "Unexpected error.");
+    } finally {
+      setCreating(false);
+    }
+  };
   const [offers, setOffers] = useState<OfferLetter[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -76,41 +140,36 @@ export default function OfferManagement() {
   const updateOfferStatus = async (id: string, newStatus: string) => {
     setProcessingId(id);
     try {
-      const offer = offers.find(o => o.id === id);
-      if (offer && !isValidOfferStatusTransition(offer.status, newStatus)) {
-        toast({ title: "Invalid Transition", description: `Cannot move offer from "${offer.status}" to "${newStatus}".`, variant: "destructive" });
+      // SERVER-AUTHORITATIVE STATE MACHINE: the RPC derives the actor from
+      // the JWT, validates the transition against the canonical offer state
+      // machine and performs timestamping + pipeline sync in one transaction.
+      const actionMap: Record<string, string> = {
+        "Approved": "approve",
+        "Sent": "send",
+        "Accepted": "accept",
+        "Declined": "decline",
+        "Expired": "expire"
+      };
+      const action = actionMap[newStatus];
+      if (!action) {
+        toast({ title: "Unsupported Transition", description: `Status '${newStatus}' is not an actionable offer transition.`, variant: "destructive" });
         setProcessingId(null);
         return;
       }
-      const updateData = { status: newStatus };
-      if (newStatus === "Approved") {
-        updateData.approved_at = new Date().toISOString();
-        const { data: { user } } = await supabase.auth.getUser();
-        updateData.approved_by = user?.id;
-      } else if (newStatus === "Sent") {
-        updateData.sent_at = new Date().toISOString();
-      } else if (newStatus === "Accepted" || newStatus === "Declined") {
-        updateData.responded_at = new Date().toISOString();
-      }
 
-      const { error } = await supabase
-        .from("offer_letters")
-        .update(updateData)
-        .eq("id", id);
+      const { data: result, error } = await supabase.rpc("transition_offer_status", {
+        p_offer_id: id,
+        p_action: action
+      });
 
       if (error) throw error;
-
-      if (offer) {
-        const pipelineStatus = newStatus === "Accepted" ? "Offer Accepted" : newStatus === "Declined" ? "Rejected" : null;
-        if (pipelineStatus && offer.application_id) {
-          await supabase
-            .from("job_applications")
-            .update({ status: pipelineStatus })
-            .eq("id", offer.application_id);
-        }
+      if (!result?.success) {
+        toast({ title: "Transition Refused", description: result?.error || "Server refused the transition.", variant: "destructive" });
+        setProcessingId(null);
+        return;
       }
 
-      toast({ title: "Status Updated", description: `Offer moved to '${newStatus}'.` });
+      toast({ title: "Status Updated", description: `Offer moved to '${result.status}'.` });
       fetchOffers();
     } catch (err) {
       toast({ title: "Update Failed", description: err.message, variant: "destructive" });
@@ -134,7 +193,12 @@ export default function OfferManagement() {
           <CardTitle className="text-sm font-black text-slate-700 uppercase tracking-wider flex items-center gap-2">
             <FileSignature className="w-4 h-4 text-indigo-600" /> Offer Letter Management
           </CardTitle>
-          <div className="text-xs text-slate-400 font-medium">{offers.length} total</div>
+          <div className="flex items-center gap-3">
+            <div className="text-xs text-slate-400 font-medium">{offers.length} total</div>
+            <Button size="sm" className="h-8 text-xs font-bold bg-indigo-600 text-white" onClick={openCreateDialog}>
+              <FileSignature className="w-3.5 h-3.5 mr-1.5" /> Create Offer
+            </Button>
+          </div>
         </CardHeader>
         <CardContent className="p-4 space-y-4">
           <div className="flex flex-col sm:flex-row gap-3">
@@ -275,6 +339,61 @@ export default function OfferManagement() {
           </CardContent>
         </Card>
       )}
+
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <FileSignature className="w-4 h-4 text-indigo-600" /> Create Offer
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label className="text-xs font-bold text-slate-600">Application (offer-eligible)</Label>
+              <Select value={selectedAppId} onValueChange={setSelectedAppId}>
+                <SelectTrigger className="h-10 text-sm"><SelectValue placeholder="Select application" /></SelectTrigger>
+                <SelectContent>
+                  {eligibleApps.map(a => (
+                    <SelectItem key={a.id} value={a.id}>
+                      {a.candidate_name || a.candidate_email} — {a.status}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs font-bold text-slate-600">Role title</Label>
+              <Input className="h-10 text-sm" value={jobTitle} onChange={e => setJobTitle(e.target.value)} placeholder="e.g. Senior React Engineer" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold text-slate-600">Annual CTC (₹)</Label>
+                <Input className="h-10 text-sm" type="number" min="1" value={offeredCtc} onChange={e => setOfferedCtc(e.target.value)} placeholder="1800000" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold text-slate-600">Joining date</Label>
+                <Input className="h-10 text-sm" type="date" min={new Date().toISOString().slice(0, 10)} value={joiningDate} onChange={e => setJoiningDate(e.target.value)} />
+              </div>
+            </div>
+            {createError && (
+              <div className="flex items-start gap-2 text-xs text-red-600 bg-red-50 border border-red-200 rounded-md p-3">
+                <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" /> {createError}
+              </div>
+            )}
+            <p className="text-[11px] text-slate-400">
+              The server validates HR authorization, the candidate/application relationship and the current pipeline state.
+              The offer is created as <span className="font-semibold">Pending Approval</span> and continues through the existing state machine.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setCreateOpen(false)} disabled={creating}>Cancel</Button>
+            <Button size="sm" className="bg-indigo-600 text-white" onClick={submitCreateOffer} disabled={creating}>
+              {creating ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <FileSignature className="w-3.5 h-3.5 mr-1.5" />}
+              {creating ? "Creating…" : "Create Offer"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

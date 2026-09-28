@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
 import { Camera, RefreshCw, CheckCircle2, AlertCircle, Upload, User, ScanFace } from "lucide-react";
-import { loadFaceModels, detectFace, storeFaceDescriptor, getFaceVerificationState } from "@/hooks/useFaceVerification";
+import { loadFaceModels, detectFace, getFaceVerificationState } from "@/hooks/useFaceVerification";
 
 interface IdentityEnrollmentProps {
   candidateId: string;
@@ -26,6 +26,10 @@ export default function IdentityEnrollment({ candidateId, userId, onComplete }: 
   const [faceDetected, setFaceDetected] = useState<boolean | null>(null);
   const [faceModelsReady, setFaceModelsReady] = useState(false);
   const [faceConfidence, setFaceConfidence] = useState(0);
+  // Descriptor is held only in memory for the immediate enrollment request —
+  // never localStorage, never logs (server owns the biometric record).
+  const [lastDescriptor, setLastDescriptor] = useState<Float32Array | null>(null);
+  const [lastConfidence, setLastConfidence] = useState(0);
   const [isInitializing, setIsInitializing] = useState(true);
 
   useEffect(() => {
@@ -95,7 +99,8 @@ export default function IdentityEnrollment({ candidateId, userId, onComplete }: 
       img.onload = async () => {
         const result = await detectFace(img);
         if (result.detected && result.descriptor) {
-          storeFaceDescriptor(result.descriptor);
+          setLastDescriptor(result.descriptor);
+          setLastConfidence(result.confidence);
           setFaceDetected(true);
           setFaceConfidence(result.confidence);
         } else {
@@ -129,7 +134,8 @@ export default function IdentityEnrollment({ candidateId, userId, onComplete }: 
         img.onload = async () => {
           const result = await detectFace(img);
           if (result.detected && result.descriptor) {
-            storeFaceDescriptor(result.descriptor);
+            setLastDescriptor(result.descriptor);
+            setLastConfidence(result.confidence);
             setFaceDetected(true);
             setFaceConfidence(result.confidence);
           } else {
@@ -149,23 +155,44 @@ export default function IdentityEnrollment({ candidateId, userId, onComplete }: 
 
   const submitPhoto = async () => {
     if (!capturedImage) return;
+    if (!lastDescriptor) {
+      setError("No biometric descriptor was captured. Please retake the photo with a clearly visible face.");
+      return;
+    }
     setIsLoading(true);
     setError(null);
 
     try {
+      // Single authoritative biometric path: server-owned enrollment.
+      // Identity is derived from the authenticated JWT server-side
+      // (enroll_authenticated_biometric); the client never supplies one.
+      const descriptorArray = Array.from(lastDescriptor);
+      const { data, error: enrollErr } = await supabase.rpc("enroll_authenticated_biometric", {
+        p_descriptor: descriptorArray,
+        p_confidence: lastConfidence > 0 ? lastConfidence : 0.9,
+      });
+      if (enrollErr) throw enrollErr;
+      if (!data?.success) {
+        throw new Error(data?.error || "Biometric enrollment rejected by server.");
+      }
+
       const { error: updateErr } = await supabase
         .from("profiles")
         .update({ avatar_url: capturedImage })
         .eq("id", userId);
-
       if (updateErr) throw updateErr;
 
       setStep("complete");
-      toast({ title: "Identity Photo Saved", description: "Your photo has been enrolled successfully." });
+      toast({
+        title: "Identity Photo Saved",
+        description: data.already_enrolled
+          ? "Your biometric identity was already enrolled; photo updated."
+          : "Your photo has been enrolled and verified server-side.",
+      });
       onComplete?.();
     } catch (err: any) {
       setError(err.message || "Failed to save photo");
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+      toast({ title: "Enrollment Failed", description: err.message, variant: "destructive" });
     } finally {
       setIsLoading(false);
     }
@@ -176,6 +203,8 @@ export default function IdentityEnrollment({ candidateId, userId, onComplete }: 
     setError(null);
     setFaceDetected(null);
     setFaceConfidence(0);
+    setLastDescriptor(null);
+    setLastConfidence(0);
     setStep("select");
     stopCamera();
   };

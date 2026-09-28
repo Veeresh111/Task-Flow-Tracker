@@ -64,11 +64,11 @@ export class AgenticAssistantEngine {
 
       let teamLeadName = 'Executive Board';
       if (profile.team_lead_id) {
-        const { data: tl } = await supabase
-          .from('profiles')
-          .select('name')
-          .eq('id', profile.team_lead_id)
-          .single();
+        // B4 minimization: name resolution via the server-side directory
+        // projection instead of a direct cross-user profiles SELECT.
+        const { data: dir } = await supabase
+          .rpc('get_directory_profiles', { p_ids: [profile.team_lead_id] });
+        const tl = dir?.[0];
         if (tl) teamLeadName = tl.name;
       }
 
@@ -247,7 +247,7 @@ export class AgenticAssistantEngine {
 • **Disbursement Channel**: ${p.paymentMethod}
 • **Next Pay Date**: ${p.nextPayDate}
 
-You can download your official PDF payslip anytime from the **My Payroll** portal.`;
+You can download your payslip statement (CSV) anytime from the **My Payroll** portal.`;
     }
 
     // 2. SPRINT TASKS & WORKFLOW INTENT

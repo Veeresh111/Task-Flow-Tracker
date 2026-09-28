@@ -166,7 +166,7 @@ export default function HRRecruitment() {
         .eq('job_title', offerInputs.role)
         .maybeSingle();
 
-      // Resolve the correct job_application to link this offer and sync status
+      // Resolve the correct job_application to link this offer
       let applicationId: string | null = null;
       if (candidate?.id && jobForm?.id) {
         const { data: profile } = await supabase
@@ -187,47 +187,35 @@ export default function HRRecruitment() {
         applicationId = application?.id || null;
       }
 
-      const { data: offer, error: offerErr } = await supabase
-        .from('offer_letters')
-        .insert([{
-          candidate_id: candidate?.id || null,
-          job_form_id: jobForm?.id || null,
-          application_id: applicationId,
-          offered_ctc: parsedCtc,
-          offer_date: new Date().toISOString().split('T')[0],
-          joining_date: joiningDate,
-          status: 'Pending Approval',
-          created_by: currentUserId,
-          terms: `Role: ${offerInputs.role}\nBonus/Stock: ${offerInputs.bonus}\nReference: ${structuredOffer.refNo || 'FWC-OFF-' + Date.now()}`,
-          notes: `AI Generated Offer Letter. Candidate: ${offerInputs.name}, Email: ${offerInputs.email}`
-        }])
-        .select()
-        .single();
-
-      if (offerErr) throw offerErr;
-
-      // Sync job_applications status to Offer Generated
-      if (applicationId) {
-        await supabase
-          .from("job_applications")
-          .update({ status: "Offer Generated" })
-          .eq("id", applicationId)
-          .in("status", ["Interview Cleared"]);
+      if (!applicationId) {
+        return toast({
+          title: "Cannot Save Offer",
+          description: "No application found in Interview Cleared state for this candidate and role. Offers can only be generated after interview clearance.",
+          variant: "destructive"
+        });
       }
 
-      // Create initial approval entry
-      await supabase
-        .from('offer_approvals')
-        .insert([{
-          offer_id: offer.id,
-          approver_id: currentUserId,
-          approval_order: 1,
-          status: 'Pending'
-        }]);
+      // SERVER-AUTHORITATIVE OFFER GENERATION: the RPC derives the actor,
+      // validates the interview-clearance precondition, creates the immutable
+      // snapshot + approval entry, and performs the pipeline transition.
+      const termsText = `Role: ${offerInputs.role}\nBonus/Stock: ${offerInputs.bonus}\nReference: ${structuredOffer.refNo || 'FWC-OFF-' + Date.now()}`;
+      const { data: genResult, error: genErr } = await supabase.rpc("generate_offer", {
+        p_application_id: applicationId,
+        p_offered_ctc: parsedCtc,
+        p_joining_date: joiningDate,
+        p_terms: termsText
+      });
+
+      if (genErr) throw genErr;
+      if (!genResult?.success) {
+        return toast({ title: "Offer Refused", description: genResult?.error || "Server refused offer generation.", variant: "destructive" });
+      }
 
       toast({
-        title: "Offer Saved to Database",
-        description: `Offer letter for ${offerInputs.name} stored with status 'Pending Approval'. Application synced to Offer Generated.`
+        title: genResult.already_offered ? "Offer Already Exists" : "Offer Saved to Database",
+        description: genResult.already_offered
+          ? "An active offer already exists for this application."
+          : `Offer letter for ${offerInputs.name} stored with status 'Pending Approval'. Application synced to Offer Generated.`
       });
     } catch (err: any) {
       toast({ title: "Save Failed", description: err.message, variant: "destructive" });

@@ -1,0 +1,81 @@
+
+===== auto_offboard_employees =====
+CREATE OR REPLACE FUNCTION public.auto_offboard_employees()
+ RETURNS void
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+BEGIN
+  -- Find anyone with an 'Approved' resignation whose last day was yesterday or earlier,
+  -- and permanently change their role to 'ARCHIVED'.
+  UPDATE public.profiles
+  SET role = 'ARCHIVED'
+  WHERE id IN (
+    SELECT user_id 
+    FROM public.resignations 
+    WHERE status = 'Approved' 
+    AND expected_last_day < CURRENT_DATE
+  ) AND role != 'ARCHIVED';
+END;
+$function$
+
+
+===== flag_daily_absentees =====
+CREATE OR REPLACE FUNCTION public.flag_daily_absentees()
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+DECLARE
+  v_today DATE := (now() AT TIME ZONE 'UTC')::DATE;
+  v_emp RECORD;
+  v_has_clocked_in BOOLEAN;
+  v_has_approved_leave BOOLEAN;
+  v_flagged_count INT := 0;
+BEGIN
+  -- Skip Saturday and Sunday (6 and 0 in DOW)
+  IF EXTRACT(DOW FROM v_today) IN (0, 6) THEN
+    RETURN jsonb_build_object('success', true, 'message', 'Weekend: Attendance check skipped', 'flagged_count', 0);
+  END IF;
+
+  FOR v_emp IN SELECT id, name FROM profiles WHERE status = 'active' AND LOWER(role) NOT IN ('candidate') LOOP
+    -- Check if clocked in today
+    SELECT EXISTS (
+      SELECT 1 FROM work_logs
+      WHERE user_id = v_emp.id
+        AND (date = v_today OR clock_in::DATE = v_today)
+    ) INTO v_has_clocked_in;
+
+    -- Check if approved leave exists for today
+    SELECT EXISTS (
+      SELECT 1 FROM leaves
+      WHERE user_id = v_emp.id
+        AND status = 'Approved'
+        AND start_date <= v_today
+        AND end_date >= v_today
+    ) INTO v_has_approved_leave;
+
+    -- If neither clocked in nor on approved leave, insert flagged attendance
+    IF NOT v_has_clocked_in AND NOT v_has_approved_leave THEN
+      INSERT INTO work_logs (
+        user_id, date, status, notes, work_location
+      ) VALUES (
+        v_emp.id, v_today, 'Unmarked / Absent',
+        'Auto-flagged by Corporate Clock: No clock-in or approved leave by 10:00 AM UTC',
+        'OFFICE'
+      );
+      v_flagged_count := v_flagged_count + 1;
+    END IF;
+  END LOOP;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'date', v_today,
+    'flagged_absentees', v_flagged_count
+  );
+END;
+$function$
+
+functions referencing work_logs QUERY_ERROR: relation "public" does not exist
+functions updating profiles (offboarding-ish) QUERY_ERROR: relation "public" does not exist

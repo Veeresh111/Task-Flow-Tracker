@@ -1,0 +1,26 @@
+-- ============================================================================
+-- 20260927000001 — Restore authenticated DML grants on assessments
+-- ============================================================================
+-- LIVE-PROVEN REGRESSION (session 9, full-lifecycle probe LC-05a):
+--   A real HR session calling the production UI path
+--       INSERT INTO assessments ... (src/pages/hr/recruitment/AssessmentCenter.tsx)
+--   fails with 42501 "permission denied for table assessments".
+--
+-- Root cause: earlier assessment hardening (20260921000018/19/20 series,
+-- closing anon assessment access) also revoked the `authenticated` role's
+-- table grants. RLS policies still correctly authorize HR writes
+-- (assessments_insert_hr: user_has_role(['admin','hr'])), but a policy can
+-- never fire when the role lacks the underlying grant — SELECT still worked
+-- via the PUBLIC grant, masking the gap.
+--
+-- Live grant census (before this migration):
+--   assessments: service_role only (anon/authenticated absent)
+--   every other lifecycle table: anon/authenticated fully granted (RLS-guarded)
+--
+-- Fix: restore DML grants for `authenticated` ONLY. Anon stays revoked —
+-- anonymous users never write assessments (handshake/attempt/grading happen
+-- through SECURITY DEFINER RPCs and the service-role grading function).
+-- Authorization remains entirely in the RLS policies, which are unchanged.
+-- ============================================================================
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.assessments TO authenticated;

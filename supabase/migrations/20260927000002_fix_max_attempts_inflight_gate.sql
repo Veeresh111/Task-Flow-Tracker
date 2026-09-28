@@ -1,0 +1,32 @@
+-- ============================================================================
+-- 20260927000002 — Neutralize broken in-flight max_attempts gate
+-- ============================================================================
+-- LIVE-PROVEN OUTAGE (session 9, full-lifecycle probe LC-06c):
+--   The deployed grade-assessment edge function enforces:
+--       count(assessment_attempts WHERE assessment_id+candidate_id) >= max_attempts
+--       -> 403 "Maximum attempts reached"
+--   It counts IN-FLIGHT attempts (no completed_at filter), and the deployed
+--   start_assessment_attempt RPC creates the attempt row at handshake.
+--   assessments.max_attempts defaults to 1 (live census: all 75 assessments
+--   have max_attempts=1). NET EFFECT: the FIRST and only submission of every
+--   exam is rejected — grading is impossible (live DB: zero completed graded
+--   attempts exist).
+--
+--   The real anti-retake authority is the token itself: assessment_tokens
+--   are single-use (`used` flag + status), enforced by the grader (401 on
+--   reused token) and the attempt-start RPC.
+--
+-- Fix (deployable without edge-function deployment, which is blocked in this
+-- environment):
+--   1. Set assessments.max_attempts default to 0 — the deployed function
+--      skips the check when max_attempts is 0/NULL.
+--   2. Update existing rows likewise.
+--   3. The local grade-assessment source is corrected (same session) to count
+--      only COMPLETED attempts; when edge deployment becomes available,
+--      redeploy it and re-enable strict max_attempts if the business wants
+--      multi-attempt caps.
+-- Reversible: a single UPDATE restores any value.
+-- ============================================================================
+
+ALTER TABLE public.assessments ALTER COLUMN max_attempts SET DEFAULT 0;
+UPDATE public.assessments SET max_attempts = 0 WHERE max_attempts = 1;

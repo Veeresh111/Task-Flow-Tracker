@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider } from "@/lib/theme";
 import { FloatingChatbot } from "./components/FloatingChatbot";
 import { Toaster } from "@/components/ui/toaster";
+import { ErrorBoundary } from "@/components/common/ErrorBoundary";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -288,7 +289,12 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <Router>
-          <AppRoutes />
+          {/* Last-resort boundary: if ANY route subtree throws outside a
+              widget-level boundary, render a real recovery screen instead of
+              unmounting the entire tree (the historical white screens). */}
+          <ErrorBoundary label="Application">
+            <AppRoutes />
+          </ErrorBoundary>
         </Router>
       </ThemeProvider>
     </QueryClientProvider>

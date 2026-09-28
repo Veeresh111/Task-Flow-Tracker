@@ -23,6 +23,8 @@ interface Candidate {
   recommendation?: string;
   missingSkills?: string;
   skillsData?: { name: string; value: number }[];
+  /** TRUTH LABEL: how this score was actually produced. */
+  evaluationMethod?: 'ai' | 'rule_based';
 }
 
 const COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#6366f1'];
@@ -262,6 +264,7 @@ export default function ATSScanner() {
         const prompt = `Compare candidate resume text against JD matrix. JD: ${jdText}. Candidate Resume Data: ${updated[i].text}. Output STRICTLY a valid JSON object matching shape: {"score": 85, "name": "Extracted Name", "recommendation": "Hire", "missing": "Skills", "skills": [{"name": "React", "value": 90}]}`;
         
         let parsed: any = null;
+        let evaluationMethod: 'ai' | 'rule_based' = 'rule_based';
         try {
           const generatedText = await callHF(prompt);
           if (generatedText) {
@@ -274,6 +277,7 @@ export default function ATSScanner() {
 
         // Fallback to deterministic VectorMath if LLM returned invalid shape
         if (!parsed || typeof parsed.score !== "number" || typeof parsed.name !== "string") {
+          evaluationMethod = 'rule_based';
           const dsaResult = VectorMath.computeCandidateMatchScore(updated[i].text, jdText);
           const firstLine = updated[i].text.split('\n')[0]?.trim() || "Applicant";
           parsed = {
@@ -281,8 +285,13 @@ export default function ATSScanner() {
             name: firstLine.length < 40 ? firstLine : "Applicant",
             recommendation: dsaResult.overallScore >= 75 ? "Hire" : dsaResult.overallScore >= 60 ? "Consider" : "Review",
             missing: dsaResult.missingSkills.join(", ") || "None",
-            skills: dsaResult.matchedSkills.slice(0, 4).map(s => ({ name: s, value: 85 }))
+            skills: dsaResult.matchedSkills.slice(0, 4).map(s => ({
+              name: s,
+              value: VectorMath.computeIndividualSkillScore(updated[i].text, s, dsaResult.overallScore)
+            }))
           };
+        } else {
+          evaluationMethod = 'ai';
         }
 
         updated[i].candidateName = parsed.name;
@@ -290,6 +299,7 @@ export default function ATSScanner() {
         updated[i].recommendation = parsed.recommendation;
         updated[i].missingSkills = parsed.missing || "None";
         updated[i].skillsData = parsed.skills || [];
+        updated[i].evaluationMethod = evaluationMethod;
 
         const emailMatch = updated[i].text.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/);
         const phoneMatch = updated[i].text.match(/(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}|\b\d{10}\b/);
@@ -306,6 +316,7 @@ export default function ATSScanner() {
             recommendation: updated[i].recommendation,
             missing_skills: updated[i].missingSkills,
             skills: updated[i].skillsData,
+            evaluation_method: updated[i].evaluationMethod,
             stage: 'Screening'
           }]).select('id').single();
           
@@ -325,6 +336,7 @@ export default function ATSScanner() {
               recommendation: updated[i].recommendation,
               missing_skills: updated[i].missingSkills,
               skills: updated[i].skillsData,
+              evaluation_method: updated[i].evaluationMethod,
               stage: 'Screening'
             }]).select('id').single();
             
@@ -512,7 +524,16 @@ export default function ATSScanner() {
                     )}
                   </TableCell>
                   <TableCell className="text-xs text-slate-600 truncate max-w-[150px]">{c.missingSkills || "--"}</TableCell>
-                  <TableCell>{c.recommendation || "--"}</TableCell>
+                  <TableCell>
+                    <div className="flex flex-col gap-0.5">
+                      <span>{c.recommendation || "--"}</span>
+                      {c.evaluationMethod && (
+                        <span className={`text-[9px] font-bold uppercase tracking-wider ${c.evaluationMethod === 'ai' ? 'text-emerald-600' : 'text-amber-600'}`}>
+                          {c.evaluationMethod === 'ai' ? 'AI Evaluated' : 'Rule-Based — AI Offline'}
+                        </span>
+                      )}
+                    </div>
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>

@@ -167,19 +167,18 @@ export default function CandidateDashboard() {
   const handleOfferResponse = async (offerId: string, action: 'accepted' | 'declined') => {
     setRespondingOfferId(offerId);
     try {
-      const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/respond-offer`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`
-          },
-          body: JSON.stringify({ offerId, action })
-        }
-      );
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || "Failed to process offer response");
+      // SERVER-AUTHORITATIVE OFFER DECISION: the RPC derives the actor from
+      // the JWT, verifies offer ownership, enforces the state machine and
+      // server-side expiry, and syncs the pipeline. No anonymous endpoints.
+      const rpcAction = action === 'accepted' ? 'accept' : 'decline';
+      const { data: result, error: rpcErr } = await supabase.rpc("transition_offer_status", {
+        p_offer_id: offerId,
+        p_action: rpcAction
+      });
+
+      if (rpcErr) throw rpcErr;
+      if (!result?.success) throw new Error(result?.error || "Failed to process offer response");
+
       toast({
         title: action === 'accepted' ? "Offer Accepted" : "Offer Declined",
         description: action === 'accepted'

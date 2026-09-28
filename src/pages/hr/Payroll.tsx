@@ -74,7 +74,7 @@ const STATUS_BADGE: Record<CycleStatus, { label: string; class: string }> = {
   verified: { label: 'Verified', class: 'bg-indigo-100 text-indigo-700' },
   finance_approved: { label: 'Finance Approved', class: 'bg-purple-100 text-purple-700' },
   hr_approved: { label: 'HR Approved', class: 'bg-emerald-100 text-emerald-700' },
-  released: { label: 'Released', class: 'bg-green-100 text-green-700' },
+  released: { label: 'Credited (Released)', class: 'bg-green-100 text-green-700' },
 };
 
 const STATUS_ACTIONS: Record<CycleStatus, { label: string; nextStatus: CycleStatus; requiredRole: string }[]> = {
@@ -101,9 +101,13 @@ export default function HRPayroll() {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [dbReady, setDbReady] = useState<boolean | null>(null);
 
+  // SALARY CREDIT CONVENTION: payroll for month M is generated & credited
+  // on the 1st of M+1. The default target is therefore the PREVIOUS month —
+  // e.g. clicking Generate on Nov 1 produces October payroll.
   const now = new Date();
-  const currentMonth = now.getMonth() + 1;
-  const currentYear = now.getFullYear();
+  const prevMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const currentMonth = prevMonthDate.getMonth() + 1;
+  const currentYear = prevMonthDate.getFullYear();
 
   const fetchUser = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -223,12 +227,12 @@ export default function HRPayroll() {
       if (data?.success) {
         toast({
           title: 'Payroll Generated',
-          description: `${data.employees_generated} payslips created for ${MONTHS[currentMonth-1]} ${currentYear}. Evidence: ${data.evidence_code}`,
+          description: `${data.employees_generated} payslips created for ${MONTHS[currentMonth-1]} ${currentYear} (previous month — credited on the 1st). Evidence: ${data.evidence_code}`,
         });
 
         await notificationService.sendToRole(['admin', 'hr'], {
           title: `Payroll Generated: ${MONTHS[currentMonth-1]} ${currentYear}`,
-          message: `${data.employees_generated} payslips generated (Total Gross: ₹${Number(data.total_gross || 0).toLocaleString('en-IN')}). Ready for audit & verification.`,
+          message: `${data.employees_generated} payslips generated for ${MONTHS[currentMonth-1]} ${currentYear} (Total Gross: ₹${Number(data.total_gross || 0).toLocaleString('en-IN')}). Ready for audit & verification.`,
           type: "payroll",
           link: "/hr/payroll"
         });
@@ -272,8 +276,8 @@ export default function HRPayroll() {
 
       if (nextStatus === 'released') {
         await notificationService.sendToRole(['employee', 'team_lead', 'hr', 'admin'], {
-          title: `Official Payslip Released 💰`,
-          message: `Payroll for ${MONTHS[(selectedCycle.month || 1) - 1]} ${selectedCycle.year} has been released. View your payslip in the portal.`,
+          title: `Salary Credited in Payroll System 💰`,
+          message: `Payroll for ${MONTHS[(selectedCycle.month || 1) - 1]} ${selectedCycle.year} has been released — salary credited in the payroll system. View your payslip in the portal.`,
           type: "payroll",
           link: "/employee/payroll"
         });

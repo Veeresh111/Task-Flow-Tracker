@@ -7,7 +7,9 @@ import { useToast } from "@/hooks/use-toast";
 import { Loader2, ShieldCheck, Timer, Award, AlertCircle, Lock, Camera, Monitor, AlertTriangle, Key, ScanFace } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { notificationService } from "@/lib/notifications";
-import { loadFaceModels, detectFace, getStoredFaceDescriptor, compareFaceDescriptors, getFaceVerificationState } from "@/hooks/useFaceVerification";
+import { loadFaceModels, detectFace, getFaceVerificationState } from "@/hooks/useFaceVerification";
+import { startProctoringSession, recordProctorEvent, startHeartbeat, runLivenessChallenge, finalizeProctoringSession, type ProctoringSessionHandle, type ProctorEventType } from "@/lib/proctoring/proctor-session";
+import { loadLandmarkEngine, analyzeLandmarks, classifyLandmarksTemporal, createLandmarkTemporalState, type LandmarkTemporalState } from "@/lib/proctoring/landmark-engine";
 
 interface PublicQuestion {
   question: string;
@@ -55,6 +57,9 @@ export default function AssessmentAccess() {
   const [faceVerified, setFaceVerified] = useState(false);
   const [faceCheckLoading, setFaceCheckLoading] = useState(false);
   const [faceCheckError, setFaceCheckError] = useState<string | null>(null);
+  // Mirror for non-React readers (auto-check retry loop reads the latest
+  // decision without a stale-closure).
+  const faceCheckErrorRef = useRef<string | null>(null);
   const [faceModelsReady, setFaceModelsReady] = useState(false);
   const [faceMatchDistance, setFaceMatchDistance] = useState<number | null>(null);
 
@@ -75,6 +80,12 @@ export default function AssessmentAccess() {
 
   // Structured proctor log for server-side persistence (assessment_tokens.proctor_log)
   const proctorLogRef = useRef<{ type: string; timestamp: string; time: string }[]>([]);
+
+  // Server-authoritative proctoring session (Session 6)
+  const proctorHandleRef = useRef<ProctoringSessionHandle | null>(null);
+  const stopHeartbeatRef = useRef<(() => void) | null>(null);
+  const landmarkTemporalRef = useRef<LandmarkTemporalState>(createLandmarkTemporalState());
+  const landmarkReadyRef = useRef(false);
 
   // Corporate proctoring: grace period + dedup tracking
   const examStartTimeRef = useRef<number | null>(null);
@@ -109,6 +120,9 @@ export default function AssessmentAccess() {
       if (state.loadError) { console.warn('[Assessment] Face models unavailable:', state.loadError); return; }
       const loaded = await loadFaceModels();
       setFaceModelsReady(loaded);
+      // Landmark engine is observation-only (blink/head/mouth signals); load
+      // opportunistically. Its absence must never block the exam.
+      loadLandmarkEngine().then(ok => { landmarkReadyRef.current = ok; });
     })();
   }, []);
 
@@ -215,6 +229,40 @@ export default function AssessmentAccess() {
       }
     }, 5000);
 
+    // CAMERA-FAILURE / NETWORK OBSERVERS (Session 6 Phase 12/14): camera
+    // death and network loss must produce SERVER-VISIBLE events, never
+    // silently continue.
+    const h = proctorHandleRef.current;
+    const token = validatedSecureToken;
+    const trackHandlers: Array<{ track: MediaStreamTrack; onEnd: () => void; onMute: () => void }> = [];
+    if (h && token) {
+      mediaStreamRef.current.getVideoTracks().forEach(track => {
+        const onEnd = () => recordProctorEvent(h, token, "CAMERA_INTERRUPTED", { severity: "MEDIUM", metadata: { reason: "track_ended" } });
+        const onMute = () => recordProctorEvent(h, token, "CAMERA_INTERRUPTED", { severity: "LOW", metadata: { reason: "track_muted" } });
+        track.addEventListener("ended", onEnd);
+        track.addEventListener("mute", onMute);
+        trackHandlers.push({ track, onEnd, onMute });
+      });
+      mediaStreamRef.current.getAudioTracks().forEach(track => {
+        const onEnd = () => recordProctorEvent(h, token, "MIC_INTERRUPTED", { severity: "MEDIUM", metadata: { reason: "track_ended" } });
+        track.addEventListener("ended", onEnd);
+        trackHandlers.push({ track, onEnd, onMute: onEnd });
+      });
+      const goOffline = () => recordProctorEvent(h, token, "NETWORK_OFFLINE", { severity: "MEDIUM" });
+      const goOnline = () => recordProctorEvent(h, token, "NETWORK_RESTORED", { severity: "LOW" });
+      window.addEventListener("offline", goOffline);
+      window.addEventListener("online", goOnline);
+      return () => {
+        clearInterval(streamTrackMonitor);
+        trackHandlers.forEach(({ track, onEnd, onMute }) => {
+          track.removeEventListener("ended", onEnd);
+          track.removeEventListener("mute", onMute);
+        });
+        window.removeEventListener("offline", goOffline);
+        window.removeEventListener("online", goOnline);
+      };
+    }
+
     return () => clearInterval(streamTrackMonitor);
   }, [currentStep]);
 
@@ -283,7 +331,7 @@ export default function AssessmentAccess() {
     const checkAudioLevel = () => {
       if (isSubmittingRef.current) return;
       const analyser = audioAnalyserRef.current;
-      const data = audioDataRef.current!;
+      const data = audioDataRef.current! as Uint8Array<ArrayBuffer>;
       analyser.getByteTimeDomainData(data);
       let sum = 0;
       let peak = 0;
@@ -337,13 +385,14 @@ export default function AssessmentAccess() {
         ctx.drawImage(video, 0, 0, 320, 240);
         const imageBase64 = canvas.toDataURL('image/jpeg', 0.7);
 
-        // Send to AI proctoring edge function
+        // Send to AI proctoring edge function (anon key satisfies VERIFY_JWT)
         const response = await fetch(
           `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/proctor-ai`,
           {
             method: "POST",
             headers: {
-              "Content-Type": "application/json"
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`
             },
             body: JSON.stringify({ image: imageBase64 })
           }
@@ -364,30 +413,60 @@ export default function AssessmentAccess() {
       }
     };
 
-    // Periodic face re-verification during test
+    // Periodic face re-verification during test (15s cadence for temporal CV)
     const faceRecheckInterval = window.setInterval(async () => {
       if (isSubmittingRef.current || !faceModelsReady || !mediaStreamRef.current) return;
       const video = webcamVideoRef.current;
       if (!video || !video.videoWidth) return;
+      // Capture at 640×480 — YuNet's small-face recall collapses below this
+      // resolution (empirically verified: 320×240 input drops real faces to
+      // sub-threshold ~20px boxes).
       const canvas = document.createElement('canvas');
-      canvas.width = 320;
-      canvas.height = 240;
+      canvas.width = 640;
+      canvas.height = 480;
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
-      ctx.drawImage(video, 0, 0, 320, 240);
+      ctx.drawImage(video, 0, 0, 640, 480);
       const result = await detectFace(canvas);
-      if (!result.detected) {
-        executeViolationLogIncident("Face Not Visible During Test");
-      } else {
-        const enrolledDescriptor = getStoredFaceDescriptor();
-        if (enrolledDescriptor && result.descriptor) {
-          const comparison = compareFaceDescriptors(result.descriptor, enrolledDescriptor);
-          if (!comparison.match) {
-            executeViolationLogIncident("Face Match Failed During Test");
-          }
+
+      // --- Temporal YuNet observations → typed proctoring events (Phase 10):
+      // transient noise never escalates; sustained states do.
+      const h = proctorHandleRef.current;
+      const tok = validatedSecureToken;
+      if (h && tok) {
+        if (!result.detected) recordProctorEvent(h, tok, "FACE_MISSING", { severity: "LOW" });
+        else if (result.multipleFaces) recordProctorEvent(h, tok, "MULTIPLE_FACES", { severity: "MEDIUM" });
+        else recordProctorEvent(h, tok, "FACE_DETECTED");
+
+        // --- MediaPipe landmark signals (observation-only)
+        if (landmarkReadyRef.current) {
+          const obs = analyzeLandmarks(video, performance.now());
+          const cls = classifyLandmarksTemporal(landmarkTemporalRef.current, obs);
+          if (cls.sustainedAway) recordProctorEvent(h, tok, "FACE_OUT_OF_FRAME", { severity: "LOW", metadata: { signal: "yaw", value: cls.yaw } });
+          if (cls.sustainedMouth) recordProctorEvent(h, tok, "SUSPICIOUS_BEHAVIOR", { severity: "LOW", metadata: { signal: "mouth_sustained" } });
         }
       }
-    }, 30000);
+
+      if (!result.detected) {
+        executeViolationLogIncident("Face Not Visible During Test");
+      } else if (validatedSecureToken && result.descriptor) {
+        // Periodic re-verification against the SERVER-enrolled descriptor via
+        // the token-bound RPC (candidate identity derived server-side).
+        try {
+          const { data: serverBio } = await supabase.rpc('verify_candidate_biometric_face_token', {
+            p_raw_token: validatedSecureToken,
+            p_input_descriptor: Array.from(result.descriptor),
+            p_threshold: 0.363
+          });
+          if (serverBio?.enrolled && !serverBio?.verified) {
+            if (h && tok) recordProctorEvent(h, tok, "IDENTITY_MISMATCH", { severity: "MEDIUM", metadata: { similarity: serverBio.similarity } });
+            executeViolationLogIncident("Face Match Failed During Test");
+          }
+        } catch (recheckErr) {
+          console.warn("Periodic face recheck unavailable:", recheckErr);
+        }
+      }
+    }, 15000);
 
     // Run AI vision proctoring every 10 seconds (balanced to avoid rate limits while maintaining security)
     const aiProctorInterval = window.setInterval(() => {
@@ -442,63 +521,40 @@ export default function AssessmentAccess() {
     try {
       setLoading(true);
       
-      // Separate queries to avoid ambiguous FK relationship between assessment_tokens and assessments
-      const now = new Date().toISOString();
-      const { data: tokenRecord, error: tokenErr } = await supabase
-        .from("assessment_tokens")
-        .select("*")
-        .eq("token", targetTokenString)
-        .eq("used", false)
-        .eq("status", "Active")
-        .or(`expires_at.gte.${now},expires_at.is.null`)
-        .maybeSingle();
+      // SERVER-AUTHORITATIVE HANDSHAKE: the token is validated and the
+      // assessment blueprint is fetched via SECURITY DEFINER RPC. Anonymous
+      // clients have no direct read on assessment_tokens or assessments
+      // (answer-key leak closed server-side); the RPC returns sanitized
+      // questions only — never answers, hashes or grading metadata.
+      const { data: handshake, error: hsErr } = await supabase.rpc("get_assessment_by_token", {
+        p_token: targetTokenString
+      });
 
-      if (tokenErr) throw tokenErr;
+      if (hsErr) throw hsErr;
 
-      if (!tokenRecord) {
+      if (!handshake?.valid) {
         toast({
           title: "Invalid Assessment Link",
-          description: "This assessment link is no longer valid. It may have expired or already been used.",
+          description: handshake?.error || "This assessment link is no longer valid. It may have expired or already been used.",
           variant: "destructive"
         });
         sessionStorage.removeItem("assessment_secure_session_token");
         return;
       }
 
-      // Fetch assessment separately
-      let rawAssessmentObj = null;
-      if (tokenRecord.assessment_id) {
-        const { data: assData } = await supabase
-          .from("assessments")
-          .select("*")
-          .eq("id", tokenRecord.assessment_id)
-          .maybeSingle();
-        rawAssessmentObj = assData;
-      }
-
-      if (!rawAssessmentObj || rawAssessmentObj.status !== "Active") {
-        throw new Error("Target parent evaluation blueprint configuration has been deactivated by administrators.");
-      }
-
-      if (Array.isArray(rawAssessmentObj.questions)) {
-        const strippedQuestions = rawAssessmentObj.questions.map((q: any) => ({
-          question: q.question || "",
-          options: Array.isArray(q.options) ? q.options : []
-        }));
-        setPublicQuestions(strippedQuestions);
-      }
+      setPublicQuestions(Array.isArray(handshake.questions) ? handshake.questions : []);
 
       sessionStorage.setItem("assessment_secure_session_token", targetTokenString);
       setValidatedSecureToken(targetTokenString);
-      setAssessmentMeta(rawAssessmentObj);
-      setResolvedCandidateId(tokenRecord.candidate_id);
-      setTargetApplicationId(tokenRecord.application_id || null);
-      setActiveAttemptId(tokenRecord.attempt_id);
-      const parsedDuration = Math.max(2, Math.floor(Number(rawAssessmentObj.duration_minutes) || 60));
+      setAssessmentMeta(handshake);
+      setResolvedCandidateId(handshake.candidate_id);
+      setTargetApplicationId(handshake.application_id || null);
+      setActiveAttemptId(null);
+      const parsedDuration = Math.max(2, Math.floor(Number(handshake.duration_minutes) || 60));
       setTimeLeft(parsedDuration * 60);
       examStartTimeRef.current = null;
       alreadySubmittedRef.current = false;
-      
+
       setCurrentStep('instructions');
     } catch (err: any) {
       toast({ title: "Access Denied", description: "Could not load this assessment. It may have been deactivated.", variant: "destructive" });
@@ -561,10 +617,20 @@ export default function AssessmentAccess() {
       setHardwareApproved(true);
       toast({ title: "Camera and Microphone Access Granted", description: "Proctoring devices are ready." });
 
-      // Trigger face verification automatically after camera is streaming
+      // Trigger face verification automatically after camera is streaming.
+      // Camera warm-up: the very first frames after getUserMedia can be blank
+      // (fake device and real hardware both), so retry a bounded number of
+      // times before surfacing a decision. Every attempt is a full real CV
+      // pass — this is temporal robustness, NOT a threshold weakening.
       setFaceCheckLoading(true);
       setTimeout(async () => {
-        await performFaceCheck();
+        const warmupAttempts = 5;
+        for (let attempt = 1; attempt <= warmupAttempts; attempt++) {
+          const ok = await performFaceCheck();
+          const transient = faceCheckErrorRef.current?.includes('No face detected');
+          if (ok || !transient || attempt === warmupAttempts) break;
+          await new Promise(r => setTimeout(r, 1200));
+        }
         setFaceCheckLoading(false);
       }, 1500);
     } catch (err) {
@@ -591,50 +657,105 @@ export default function AssessmentAccess() {
       });
       return;
     }
+
+    // SERVER-ISSUED ACTIVE LIVENESS (Session 6 Phase 8): a randomized
+    // challenge from the server must be observed BEFORE the exam starts.
+    // The pass decision is the server's (nonce-bound, single-use) — the
+    // client only reports the observation.
+    if (validatedSecureToken) {
+      const handle = proctorHandleRef.current;
+      if (handle) {
+        const verifyAction = async (action: string): Promise<boolean> => {
+          // Observation via MediaPipe landmarks where available; HEAD_* and
+          // LOOK_* actions use the yaw proxy, BLINK/MOUTH use EAR/lips.
+          if (!landmarkReadyRef.current || !webcamVideoRef.current) return false;
+          const wantsAway = action.includes("TURN") || action.includes("LOOK");
+          const wantsBlink = action.includes("BLINK");
+          const wantsMouth = action.includes("MOUTH") || action.includes("SMILE");
+          const deadline = Date.now() + 10000;
+          const dirSign = action.includes("LEFT") ? -1 : 1;
+          let seen = 0;
+          while (Date.now() < deadline) {
+            await new Promise(r => setTimeout(r, 250));
+            const obs = analyzeLandmarks(webcamVideoRef.current, performance.now());
+            if (obs.ran && obs.faceCount > 0) {
+              if (wantsAway && obs.yaw !== null && Math.sign(obs.yaw) === dirSign && Math.abs(obs.yaw) > 0.35) seen++;
+              else if (wantsBlink && obs.blink) seen += 2;
+              else if (wantsMouth && obs.mouthActive) seen++;
+              if (seen >= 3) return true;
+            }
+          }
+          return false;
+        };
+        const live = await runLivenessChallenge(handle, validatedSecureToken, verifyAction);
+        if (!live.passed) {
+          toast({
+            title: "Liveness Check Failed",
+            description: live.action
+              ? `Follow the on-screen prompt precisely. (${live.error || "not observed"})`
+              : "Liveness challenge could not be issued. Please retry.",
+            variant: "destructive"
+          });
+          return;
+        }
+        toast({ title: "Liveness Confirmed", description: "Active challenge passed." });
+      }
+    }
     try {
       const element = document.documentElement;
       if (element.requestFullscreen) {
         await element.requestFullscreen();
       }
-      
-      const { data: ongoingAttemptRow } = await supabase
-        .from("assessment_attempts")
-        .select("id, started_at")
-        .eq("assessment_id", assessmentMeta.id)
-        .eq("candidate_id", resolvedCandidateId)
-        .is("completed_at", null)
-        .maybeSingle();
 
-      let targetAttemptId = null;
+      // SERVER-AUTHORITATIVE ATTEMPT START: the server creates/resumes the
+      // attempt and returns the authoritative remaining time. The client
+      // countdown is UX only — grade-assessment enforces expiry server-side.
+      const { data: attemptStart, error: startErr } = await supabase.rpc("start_assessment_attempt", {
+        p_token: validatedSecureToken
+      });
 
-      if (ongoingAttemptRow) {
-        const passedSeconds = Math.floor((Date.now() - new Date(ongoingAttemptRow.started_at).getTime()) / 1000);
-        const originalDurationSeconds = Math.max(2, Math.floor(Number(assessmentMeta.duration_minutes) || 60)) * 60;
-        const remainingSeconds = originalDurationSeconds - passedSeconds;
-        if (remainingSeconds <= 0) {
-          toast({ title: "Time Expired", description: "Your previous attempt has expired.", variant: "destructive" });
-          return;
-        }
-        targetAttemptId = ongoingAttemptRow.id;
-        setTimeLeft(remainingSeconds);
-      } else {
-        const { data: newAttempt, error: startErr } = await supabase
-          .from("assessment_attempts")
-          .insert([{
-            assessment_id: assessmentMeta.id,
-            candidate_id: resolvedCandidateId,
-            started_at: new Date().toISOString()
-          }])
-          .select("id")
-          .single();
-
-        if (startErr) throw startErr;
-        targetAttemptId = newAttempt.id;
+      if (startErr) throw startErr;
+      if (!attemptStart?.success) {
+        toast({
+          title: "Attempt Not Started",
+          description: attemptStart?.error || "The server could not start this attempt.",
+          variant: "destructive"
+        });
+        return;
       }
-      
-      setActiveAttemptId(targetAttemptId);
+
+      setActiveAttemptId(attemptStart.attempt_id);
+      setTimeLeft(Math.max(0, Number(attemptStart.remaining_seconds) || 0));
       setIsFullscreenActive(true);
       examStartTimeRef.current = Date.now();
+
+      // SERVER-AUTHORITATIVE PROCTORING SESSION (Session 6): single-active
+      // invariant enforced server-side; heartbeat keeps the lease fresh;
+      // every observation becomes a typed, sequence-validated event row.
+      try {
+        const handle = await startProctoringSession(validatedSecureToken);
+        if (handle) {
+          proctorHandleRef.current = handle;
+          stopHeartbeatRef.current = startHeartbeat(handle, validatedSecureToken);
+          recordProctorEvent(handle, validatedSecureToken, "FULLSCREEN_ENTERED");
+          recordProctorEvent(handle, validatedSecureToken, "CAMERA_GRANTED");
+          recordProctorEvent(handle, validatedSecureToken, "MIC_GRANTED");
+        } else {
+          // Session refused (e.g. another ACTIVE session for this token).
+          // Fail closed: the exam cannot start without a proctoring session.
+          toast({
+            title: "Proctoring Session Refused",
+            description: "The server could not start a proctoring session for this token. Close any other active exam windows and try again.",
+            variant: "destructive"
+          });
+          return;
+        }
+      } catch (sessionErr) {
+        console.error("Proctoring session start error:", sessionErr);
+        toast({ title: "Proctoring Session Error", description: "Could not establish server-side proctoring.", variant: "destructive" });
+        return;
+      }
+
       setCurrentStep('test');
     } catch (err) {
       console.error("launchSecureExamWorkspace error:", err);
@@ -643,41 +764,99 @@ export default function AssessmentAccess() {
   };
 
   const performFaceCheck = async (): Promise<boolean> => {
-    if (!faceModelsReady || !mediaStreamRef.current) return true;
+    // Single writer keeping both the React state and the retry-loop ref in sync.
+    const faceErr = (v: string | null) => { faceCheckErrorRef.current = v; setFaceCheckError(v); };
+    if (!faceModelsReady || !mediaStreamRef.current) {
+      faceErr("Biometric verification engine is initializing or camera stream is unavailable.");
+      return false;
+    }
 
     try {
       const video = webcamVideoRef.current;
-      if (!video || !video.videoWidth) return true;
-
-      const canvas = document.createElement('canvas');
-      canvas.width = 320;
-      canvas.height = 240;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return true;
-      ctx.drawImage(video, 0, 0, 320, 240);
-
-      const result = await detectFace(canvas);
-      if (!result.detected || !result.descriptor) {
-        setFaceCheckError('No face detected. Please ensure you are visible to the camera.');
+      if (!video || !video.videoWidth) {
+        faceErr("Camera video stream is not active. Please ensure camera permissions are granted.");
         return false;
       }
 
-      const enrolledDescriptor = getStoredFaceDescriptor();
-      if (enrolledDescriptor) {
-        const comparison = compareFaceDescriptors(result.descriptor, enrolledDescriptor);
-        setFaceMatchDistance(comparison.distance);
-        if (!comparison.match) {
-          setFaceCheckError(`Face mismatch (distance: ${comparison.distance.toFixed(3)}). Please use the same face as your enrolled identity photo.`);
-          return false;
+      // 640×480 capture — see CV_RESOLUTION note in the recheck loop.
+      const canvas = document.createElement('canvas');
+      canvas.width = 640;
+      canvas.height = 480;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        faceErr("Image processing context could not be created.");
+        return false;
+      }
+      ctx.drawImage(video, 0, 0, 640, 480);
+
+      const result = await detectFace(canvas);
+      if (!result.detected || !result.descriptor) {
+        faceErr('No face detected. Please ensure your face is clearly visible and centered.');
+        return false;
+      }
+
+      if (result.multipleFaces) {
+        faceErr('Multiple faces detected! Only the registered candidate may be visible during assessment.');
+        return false;
+      }
+
+      // SERVER-AUTHORITATIVE identity (Session 6 architecture):
+      // - Observations: real YuNet detection + SFace embedding (browser ONNX).
+      // - Decisions: token-bound RPCs derive the candidate from the raw
+      //   assessment token; the client NEVER supplies candidate identity.
+      {
+        const { data: serverBio, error: rpcErr } = await supabase.rpc('verify_candidate_biometric_face_token', {
+          p_raw_token: validatedSecureToken,
+          p_input_descriptor: Array.from(result.descriptor),
+          p_threshold: 0.363 // SFace FR_COSINE documented threshold
+        });
+
+        if (rpcErr) {
+          console.warn('[Assessment] Server biometric RPC unavailable:', rpcErr);
+        } else if (serverBio && typeof serverBio === 'object') {
+          if (serverBio.enrolled) {
+            setFaceMatchDistance(Number(serverBio.similarity) || 0);
+            if (!serverBio.verified) {
+              faceErr(`Face mismatch detected (similarity: ${serverBio.similarity}). Face does not match registered candidate identity.`);
+              return false;
+            }
+            setFaceVerified(true);
+            faceErr(null);
+            return true;
+          } else if (serverBio.reason === 'NOT_ENROLLED') {
+            // First sighting: enroll through the token-bound SECURITY DEFINER
+            // RPC. No raw descriptor in localStorage; the server table owns
+            // the biometric identity (first-wins, idempotent).
+            const { data: enrollRes, error: enrollErr } = await supabase.rpc('enroll_candidate_biometric_token', {
+              p_raw_token: validatedSecureToken,
+              p_descriptor: Array.from(result.descriptor),
+              p_confidence: result.confidence ?? 0.9
+            });
+            if (enrollErr) {
+              console.error("Biometric enrollment failed:", enrollErr);
+              faceErr("Biometric enrollment failed. Please try again.");
+              return false;
+            }
+            if (!enrollRes?.success) {
+              faceErr(enrollRes?.error || "Biometric enrollment refused.");
+              return false;
+            }
+            setFaceVerified(true);
+            faceErr(null);
+            return true;
+          }
         }
       }
 
-      setFaceVerified(true);
-      setFaceCheckError(null);
-      return true;
-    } catch (err) {
-      console.warn('[Assessment] Face check error:', err);
-      return true;
+      // The server RPC is the only authoritative path. When it is
+      // unreachable we fail closed: without server-side enrollment the
+      // candidate identity cannot be verified.
+      faceErr("Identity verification service unavailable. Please try again.");
+      return false;
+    } catch (err: any) {
+      console.error('[Assessment] Face check error:', err);
+      faceErr('Biometric verification failed: ' + (err.message || 'System error'));
+      return false;
     }
   };
 
@@ -692,6 +871,8 @@ export default function AssessmentAccess() {
       clearInterval(faceDetectionIntervalRef.current);
       faceDetectionIntervalRef.current = null;
     }
+    stopHeartbeatRef.current?.();
+    stopHeartbeatRef.current = null;
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach(t => t.stop());
       mediaStreamRef.current = null;
@@ -732,6 +913,30 @@ export default function AssessmentAccess() {
       time: timeLabel
     });
 
+    // Authoritatively persist violation through the SECURITY DEFINER RPC.
+    // The server validates the token binding and stamps server time; the
+    // anonymous client cannot write proctoring_logs directly.
+    if (validatedSecureToken) {
+      // Structured proctoring session event (type-validated, sequence-guarded)
+      const h = proctorHandleRef.current;
+      if (h) {
+        const mapped: ProctorEventType = violationType.includes("Developer") ? "SUSPICIOUS_BEHAVIOR"
+          : violationType.includes("Clipboard") ? "COPY_ATTEMPT"
+          : violationType.includes("Fullscreen") ? "FULLSCREEN_EXITED"
+          : violationType.includes("Tab") || violationType.includes("Blur") || violationType.includes("blur") ? "TAB_HIDDEN"
+          : "PROCTORING_WARNING";
+        recordProctorEvent(h, validatedSecureToken, mapped, { severity: "MEDIUM", metadata: { detail: violationType } });
+      }
+      supabase.rpc("log_proctoring_event", {
+        p_token: validatedSecureToken,
+        p_violation_type: violationType,
+        p_severity: violationType.includes("Disabled") || violationType.includes("Developer") ? "critical" : "warning",
+        p_detail: `Incident: ${violationType} at ${timeLabel}`
+      }).then(({ error: logErr }) => {
+        if (logErr) console.warn("Failed to persist incident via RPC:", logErr);
+      }, (err: unknown) => console.warn("Failed to persist incident via RPC:", err));
+    }
+
     const nextCount = violationCountRef.current + 1;
     setViolationCount(nextCount);
     violationCountRef.current = nextCount;
@@ -759,6 +964,61 @@ export default function AssessmentAccess() {
     setSelectedAnswers(prev => ({ ...prev, [questionIndex]: selectedValue }));
   };
 
+  // === AUTHORITATIVE AUTOSAVE ===
+  // Persists answers to the server via the SECURITY DEFINER RPC
+  // autosave_assessment_answers with monotonic revision guarding. The browser
+  // is UX only; the server holds the authoritative attempt + answers.
+  const autosaveRevisionRef = useRef(0);
+  const autosaveInFlightRef = useRef(false);
+  const pendingAutosaveRef = useRef(false);
+
+  const flushAutosave = async () => {
+    if (!validatedSecureToken || isSubmittingRef.current) return;
+    if (autosaveInFlightRef.current) {
+      pendingAutosaveRef.current = true;
+      return;
+    }
+    const answersPayload = Object.entries(selectedAnswers).map(([questionId, answer]) => ({
+      questionId: String(questionId),
+      answer: String(answer)
+    }));
+    if (answersPayload.length === 0) return;
+
+    autosaveInFlightRef.current = true;
+    try {
+      const { data, error } = await supabase.rpc("autosave_assessment_answers", {
+        p_token: validatedSecureToken,
+        p_answers: answersPayload,
+        p_revision: autosaveRevisionRef.current + 1
+      });
+      if (error) throw error;
+      if (data?.success) {
+        autosaveRevisionRef.current = Number(data.revision || autosaveRevisionRef.current + 1);
+      } else if (data?.stale_revision) {
+        // A newer revision already exists server-side; adopt it and retry once.
+        autosaveRevisionRef.current = Number(data.current_revision || autosaveRevisionRef.current);
+      }
+    } catch (saveErr) {
+      // Network failure during autosave is retried on the next flush; the
+      // final submission remains the authoritative grading path.
+      console.warn("Autosave deferred:", saveErr);
+    } finally {
+      autosaveInFlightRef.current = false;
+      if (pendingAutosaveRef.current) {
+        pendingAutosaveRef.current = false;
+        setTimeout(() => { flushAutosave(); }, 300);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (currentStep !== 'test') return;
+    const autosaveInterval = setInterval(() => {
+      flushAutosave();
+    }, 20000);
+    return () => clearInterval(autosaveInterval);
+  }, [currentStep, validatedSecureToken, selectedAnswers]);
+
   // === SURGICALLY HARDENED GRADEMENT PIPELINE MATRICES PER EXPLICIT DIRECTIVES ===
   const executeAssessmentGradingEngine = async () => {
     if (!assessmentMeta || !resolvedCandidateId || !validatedSecureToken) {
@@ -781,12 +1041,15 @@ export default function AssessmentAccess() {
 
     try {
       // Delegate all grading to server-side edge function — no correct answers touch the browser
+      // Edge Functions verify VERIFY_JWT: the anon key satisfies the platform
+      // check (token identity comes from the secureToken payload, not the JWT).
       const response = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/grade-assessment`,
         {
           method: "POST",
           headers: {
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`
           },
           body: JSON.stringify({
             secureToken: validatedSecureToken,
@@ -813,6 +1076,15 @@ export default function AssessmentAccess() {
       });
 
       terminateMediaProctoringStreams();
+      // Terminal transition + server-generated proctoring report (candidate
+      // cannot fabricate the report content).
+      if (proctorHandleRef.current && validatedSecureToken) {
+        await finalizeProctoringSession(proctorHandleRef.current, validatedSecureToken).catch(err =>
+          console.warn("Proctoring finalize failed:", err));
+        stopHeartbeatRef.current?.();
+        stopHeartbeatRef.current = null;
+        proctorHandleRef.current = null;
+      }
       sessionStorage.removeItem("assessment_secure_session_token");
       if (document.fullscreenElement) {
         document.exitFullscreen().catch(() => {});

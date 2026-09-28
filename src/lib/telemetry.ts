@@ -39,6 +39,8 @@ export interface StandupPolishResult {
   sentimentScore: number;
   deliverables: string[];
   blockers: string[];
+  /** TRUTH LABEL: 'ai' = real model output; 'rule_based' = deterministic formatter. */
+  evaluationMethod: 'ai' | 'rule_based';
 }
 
 export class TelemetryEngine {
@@ -159,7 +161,8 @@ export class TelemetryEngine {
         sentiment: 'NEUTRAL',
         sentimentScore: 0.5,
         deliverables: [],
-        blockers: []
+        blockers: [],
+        evaluationMethod: 'rule_based'
       };
     }
 
@@ -198,25 +201,28 @@ Return STRICTLY a JSON object matching shape:
           sentiment: sentiment,
           sentimentScore: parsed.sentimentScore || (hasBlocker ? 0.3 : 0.8),
           deliverables: Array.isArray(parsed.deliverables) ? parsed.deliverables : [],
-          blockers: Array.isArray(parsed.blockers) ? parsed.blockers : (hasBlocker ? ["Impediment flagged"] : [])
+          blockers: Array.isArray(parsed.blockers) ? parsed.blockers : (hasBlocker ? ["Impediment flagged"] : []),
+          evaluationMethod: 'ai'
         };
       }
     } catch (e) {
       console.warn("Standup polish cloud call failed, using deterministic format:", e);
     }
 
-    // Deterministic fallback
+    // Deterministic fallback — formats the user's OWN notes locally.
+    // Clearly labeled as rule-based so it is never mistaken for AI output.
     const lines = rawNotes.split('\n').filter(l => l.trim().length > 0);
     const hasBlocker = rawNotes.toLowerCase().includes('stuck') || rawNotes.toLowerCase().includes('block') || rawNotes.toLowerCase().includes('fail') || rawNotes.toLowerCase().includes('issue');
 
     return {
-      polishedText: `• Daily Execution Deliverables: ${lines.slice(0, 2).join('; ') || 'Standard sprint backlog tasks.'}
+      polishedText: `[Rule-Based Formatter — AI Offline]\n• Completed Deliverables: ${lines.slice(0, 2).join('; ') || 'Standard sprint backlog tasks.'}
 • In-Progress Workstreams: Progressing on primary assigned sprint modules.
 • Blockers & Risks: ${hasBlocker ? 'Active technical blocker flagged for team lead review.' : 'Zero active blockers identified.'}`,
       sentiment: hasBlocker ? 'STRESS_INDICATOR' : 'POSITIVE',
       sentimentScore: hasBlocker ? 0.3 : 0.8,
       deliverables: lines.slice(0, 3),
-      blockers: hasBlocker ? ["Technical impediment logged"] : []
+      blockers: hasBlocker ? ["Technical impediment logged"] : [],
+      evaluationMethod: 'rule_based'
     };
   }
 }

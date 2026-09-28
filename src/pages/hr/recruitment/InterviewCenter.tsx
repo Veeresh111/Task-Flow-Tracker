@@ -144,37 +144,26 @@ export default function InterviewCenter() {
 
       const nextRound = (existingRounds?.[0]?.round_number || 0) + 1;
 
-      // Commit scheduling row record directly onto public.interview_sessions ledger
-      const { data: sessionObj, error: insertErr } = await supabase
-        .from("interview_sessions")
-        .insert([{
-          application_id: selectedApplicationId,
-          round_name: roundName,
-          round_number: nextRound,
-          scheduled_at: new Date(scheduledAt).toISOString(),
-          meeting_link: meetingLink.trim(),
-          meeting_provider: meetingProvider,
-          status: "Scheduled",
-          feedback: "Awaiting live candidate conversation stream loop."
-        }])
-        .select()
-        .single();
+      // SERVER-AUTHORITATIVE SCHEDULING: the RPC derives the actor from the
+      // JWT, verifies HR/Admin, validates the assessment precondition, and
+      // performs the pipeline transition. No client-authored status writes.
+      const { data: scheduleResult, error: scheduleErr } = await supabase.rpc("schedule_interview", {
+        p_application_id: selectedApplicationId,
+        p_round_name: roundName,
+        p_scheduled_at: new Date(scheduledAt).toISOString(),
+        p_meeting_link: meetingLink.trim(),
+        p_meeting_provider: meetingProvider
+      });
 
-      if (insertErr) throw insertErr;
+      if (scheduleErr) throw scheduleErr;
+      if (!scheduleResult?.success) {
+        return toast({ title: "Scheduling Refused", description: scheduleResult?.error || "Server refused scheduling.", variant: "destructive" });
+      }
 
       // Note: DB trigger trg_interview_notify handles candidate notification automatically
       // with richer content including role name, meeting link, and scheduled time.
 
-      // Update parent application record — trigger syncs candidate_applications
-      await supabase
-        .from("job_applications")
-        .update({
-          status: "Interview Scheduled",
-          interview_status: "Scheduled"
-        })
-        .eq("id", selectedApplicationId);
-
-      toast({ title: "Session Dispatched", description: "Interview token committed and candidate notification alerts issued." });
+      toast({ title: "Session Dispatched", description: "Interview scheduled; candidate notification alerts issued." });
       
       // Flush form inputs
       setSelectedApplicationId("");
@@ -264,45 +253,28 @@ Output as JSON: {"strengths": "...", "concerns": "...", "verdict": "${aiRecommen
       pipelineStageOutcome = finalOutcome ? "Interview Cleared" : "Rejected";
       interviewOutcomeStatus = finalOutcome ? "Completed" : "Rejected";
 
-      // Push final structured score dimensions back into public.interview_sessions log row
-      const { error: sessionUpdateErr } = await supabase
-        .from("interview_sessions")
-        .update({
-          status: "Completed",
-          score: calculatedOverallAverage,
-          communication_score: commScore,
-          technical_score: techScore,
-          problem_solving_score: probScore,
-          culture_fit_score: cultScore,
-          transcript: rawTranscript.trim(),
-          ai_recommendation: aiRecommendation,
-          ai_analysis_report: aiAnalysisReport,
-          feedback: `Overall Score: ${calculatedOverallAverage}%. AI analysis completed.`
-        })
-        .eq("id", focusedSession.id);
+      // SERVER-AUTHORITATIVE EVALUATION: the RPC derives the actor from the
+      // JWT, validates bounded scores, computes the server-side average and
+      // threshold decision, and performs the pipeline transition in one
+      // transaction. No client-authored score/status writes.
+      const { data: evalResult, error: evalErr } = await supabase.rpc("submit_interview_evaluation", {
+        p_session_id: focusedSession.id,
+        p_communication: Math.round(commScore),
+        p_technical: Math.round(techScore),
+        p_problem_solving: Math.round(probScore),
+        p_culture_fit: Math.round(cultScore),
+        p_transcript: rawTranscript.trim(),
+        p_ai_report: aiAnalysisReport
+      });
 
-      if (sessionUpdateErr) throw sessionUpdateErr;
-
-      // Update job_applications (single source of truth) — trigger syncs candidate_applications
-      const candidateId = focusedSession.job_application?.candidate_id;
-
-      await supabase
-        .from("job_applications")
-        .update({
-          status: pipelineStageOutcome,
-          interview_status: interviewOutcomeStatus,
-          interview_score: calculatedOverallAverage,
-          ai_verdict: `Structured interview processed. Cumulative Score: ${calculatedOverallAverage}%`
-        })
-        .eq("id", focusedSession.application_id);
-
-      // Keep master candidate stage directory target state synced
-      if (candidateId) {
-        await supabase
-          .from("candidates")
-          .update({ stage: pipelineStageOutcome })
-          .eq("id", candidateId);
+      if (evalErr) throw evalErr;
+      if (!evalResult?.success) {
+        return toast({ title: "Evaluation Refused", description: evalResult?.error || "Server refused evaluation.", variant: "destructive" });
       }
+
+      const candidateId = focusedSession.job_application?.candidate_id;
+      // Server-authoritative average (display only; the DB holds the result).
+      const serverAverage = Number(evalResult.average || 0);
 
       // Notify candidate of interview result
       try {
@@ -313,8 +285,8 @@ Output as JSON: {"strengths": "...", "concerns": "...", "verdict": "${aiRecommen
             candidate_id: candidateId,
             title: finalOutcome ? 'Interview Cleared' : 'Interview Result',
             message: finalOutcome
-              ? `Congratulations! You have cleared the interview for ${jobTitle} (Round: ${focusedSession.round_name || 'Technical'}). Score: ${calculatedOverallAverage}%. HR will contact you with next steps.`
-              : `Your interview for ${jobTitle} (Round: ${focusedSession.round_name || 'Technical'}) has been evaluated. Score: ${calculatedOverallAverage}%. HR may schedule an additional round.`,
+              ? `Congratulations! You have cleared the interview for ${jobTitle} (Round: ${focusedSession.round_name || 'Technical'}). Score: ${serverAverage}%. HR will contact you with next steps.`
+              : `Your interview for ${jobTitle} (Round: ${focusedSession.round_name || 'Technical'}) has been evaluated. Score: ${serverAverage}%. HR may schedule an additional round.`,
             read: false
           });
         }

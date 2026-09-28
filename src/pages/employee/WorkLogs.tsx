@@ -19,6 +19,7 @@ export default function EmployeeWorkLogs() {
   const [polishedNotes, setPolishedNotes] = useState("");
   const [isPolishing, setIsPolishing] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [polishMethod, setPolishMethod] = useState<'ai' | 'rule_based' | null>(null);
 
   // NEW: Search Engine State for Employee's Saved Reports
   const [searchTerm, setSearchTerm] = useState("");
@@ -41,8 +42,9 @@ export default function EmployeeWorkLogs() {
     try {
       const result = await TelemetryEngine.polishStandupNotes(roughNotes);
       setPolishedNotes(result.polishedText);
+      setPolishMethod(result.evaluationMethod);
       toast({
-        title: "Standup Notes Polished",
+        title: result.evaluationMethod === 'ai' ? "Standup Notes Polished (AI)" : "Notes Formatted (Rule-Based — AI Offline)",
         description: `Sentiment: ${result.sentiment} • Ready for team lead dispatch.`
       });
     } catch (error: any) {
@@ -215,7 +217,10 @@ export default function EmployeeWorkLogs() {
               <div className="space-y-3 flex flex-col h-full">
                 <label className="text-xs font-bold text-slate-500 uppercase tracking-wider flex justify-between items-center">
                   Professional Update
-                  {polishedNotes && (
+                  {polishedNotes && polishMethod === 'rule_based' && (
+                    <span className="text-[10px] font-bold text-amber-600 uppercase">Rule-Based — AI Offline</span>
+                  )}
+                  {polishedNotes && polishMethod === 'ai' && (
                     <button onClick={copyToClipboard} className="text-indigo-600 hover:text-indigo-800 flex items-center gap-1 font-bold transition-colors">
                       <Copy className="w-3.5 h-3.5" /> Copy
                     </button>

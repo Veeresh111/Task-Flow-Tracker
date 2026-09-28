@@ -287,7 +287,7 @@ export default function EmployeePayroll() {
                           <TableCell className="text-right text-red-600">{formatINR(p.tds_amount)}</TableCell>
                           <TableCell className="text-center">
                             <Badge variant="outline" className={`text-[10px] ${p.cycle_status === 'released' ? 'bg-green-50 text-green-700 border-green-200' : 'bg-slate-50 text-slate-500'}`}>
-                              {p.cycle_status === 'released' ? 'Released' : p.cycle_status}
+                              {p.cycle_status === 'released' ? 'Salary Credited' : p.cycle_status}
                             </Badge>
                           </TableCell>
                           <TableCell className="text-right">

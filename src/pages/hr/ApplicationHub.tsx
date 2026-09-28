@@ -167,63 +167,45 @@ export default function ApplicationHub() {
 
     setAssigningAssessment(app.id);
     try {
-      // Duplicate protection
-      const { data: existing } = await supabase
-        .from("assessment_tokens")
-        .select("id")
-        .eq("candidate_id", app.candidate_id)
-        .eq("used", false);
+      // SERVER-AUTHORITATIVE ISSUANCE: the RPC derives the actor from the
+      // JWT, verifies HR/Admin role, mints a high-entropy token, stores only
+      // its SHA-256, binds candidate/assessment/application, advances the
+      // pipeline and notifies the candidate. Idempotent per candidate+assessment.
+      const { data: issueResult, error: issueErr } = await supabase.rpc("issue_hr_assessment_token", {
+        p_application_id: app.id,
+        p_assessment_id: selectedAssessmentId
+      });
 
-      if (existing && existing.length > 0) {
-        return toast({ 
-          title: "Already Assigned", 
-          description: "This candidate already has an active assessment token.", 
-          variant: "destructive" 
-        });
+      if (issueErr) throw issueErr;
+      if (!issueResult?.success) {
+        return toast({ title: "Assignment Failed", description: issueResult?.error || "Server refused token issuance.", variant: "destructive" });
       }
 
-      const newToken = crypto.randomUUID();
       const selectedAssessment = availableAssessments.find(a => a.id === selectedAssessmentId);
-
       const assessmentTitle = selectedAssessment?.title || "Unknown";
       const assessmentDuration = selectedAssessment?.duration_minutes ?? "N/A";
       const assessmentPassingScore = selectedAssessment?.passing_score ?? "N/A";
 
-      const { error: tokenErr } = await supabase
-        .from("assessment_tokens")
-        .insert([{
-          candidate_id: app.candidate_id,
-          assessment_id: selectedAssessmentId,
-          application_id: app.id,
-          token: newToken,
-          used: false,
-          status: "Active",
-          expires_at: new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString()
-        }]);
+      // The raw token is returned ONCE for HR to hand to the candidate
+      // through the approved delivery channel. It is never stored client-side.
+      const rawToken: string | null = issueResult.already_assigned ? null : (issueResult.raw_token || null);
 
-      if (tokenErr) {
-        console.error("TOKEN INSERT ERROR:", tokenErr);
-        throw tokenErr;
+      if (rawToken) {
+        await supabase
+          .from("candidate_notifications")
+          .insert([{
+            candidate_id: app.candidate_id,
+            title: "Assessment Assigned",
+            message: `You have been assigned "${assessmentTitle}" assessment.\nDuration: ${assessmentDuration} minutes\nPassing Score: ${assessmentPassingScore}%\nToken: ${rawToken}`,
+            read: false
+          }]);
       }
 
-      await supabase
-        .from("candidate_notifications")
-        .insert([{
-          candidate_id: app.candidate_id,
-          title: "Assessment Assigned",
-          message: `You have been assigned "${assessmentTitle}" assessment.\nDuration: ${assessmentDuration} minutes\nPassing Score: ${assessmentPassingScore}%\nToken: ${newToken}`,
-          read: false
-        }]);
-
-      // Update application status
-      await supabase
-        .from('job_applications')
-        .update({ status: "Assessment Assigned" })
-        .eq('id', app.id);
-
-      toast({ 
-        title: "✅ Assessment Assigned", 
-        description: `Token: ${newToken} sent to ${app.candidate_name}` 
+      toast({
+        title: "✅ Assessment Assigned",
+        description: rawToken
+          ? `Token generated for ${app.candidate_name} — deliver it via candidate notifications.`
+          : `Candidate already has an active token for this assessment.`
       });
 
       fetchApplications();
@@ -282,16 +264,16 @@ export default function ApplicationHub() {
         if (!response.ok) throw new Error(`Edge function error: ${response.status}`);
         const parsed = await response.json();
 
-        const calculatedStatus = parsed.score >= 75 ? 'Shortlisted' : 'Rejected';
-
-        await supabase
-          .from('job_applications')
-          .update({
-            match_score: parsed.score,
-            ai_verdict: parsed.verdict,
-            status: calculatedStatus
-          })
-          .eq('id', app.id);
+        // SERVER-AUTHORITATIVE PERSISTENCE: score, provenance and threshold
+        // transition go through the definer RPC. HR cannot author the
+        // database score/status directly (guard_job_application_status_authority).
+        const evaluationType = parsed.evaluation_type || (parsed.method === 'deterministic_rule_based' ? 'RULE_BASED' : 'AI_EVALUATION');
+        await supabase.rpc('record_public_screening', {
+          p_application_id: app.id,
+          p_score: parsed.score,
+          p_verdict: parsed.verdict || '',
+          p_evaluation_type: evaluationType
+        });
 
       } catch (e) {
         console.error(`Scanner failed for app ${app.id}:`, e);
@@ -332,16 +314,15 @@ export default function ApplicationHub() {
       if (!response.ok) throw new Error("Edge function failed");
       const parsed = await response.json();
 
-      const calculatedStatus = parsed.score >= 75 ? 'Shortlisted' : 'Rejected';
-
-      await supabase
-        .from('job_applications')
-        .update({
-          match_score: parsed.score,
-          ai_verdict: parsed.verdict,
-          status: calculatedStatus
-        })
-        .eq('id', app.id);
+      // SERVER-AUTHORITATIVE PERSISTENCE (single-scan path): identical
+      // provenance contract as the batch path.
+      const evaluationType = parsed.evaluation_type || (parsed.method === 'deterministic_rule_based' ? 'RULE_BASED' : 'AI_EVALUATION');
+      await supabase.rpc('record_public_screening', {
+        p_application_id: app.id,
+        p_score: parsed.score,
+        p_verdict: parsed.verdict || '',
+        p_evaluation_type: evaluationType
+      });
 
       toast({ title: "Analysis Complete", description: `${app.candidate_name} scored ${parsed.score}%` });
       fetchApplications();

@@ -1,8 +1,10 @@
 import { useState, useEffect } from "react";
+import { Users } from "lucide-react"; // header icon — runtime ReferenceError when missing (live-proven)
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { supabase } from "@/lib/supabase";
+import { parseAiVerdict, verdictText } from "@/lib/schemas/recruitment";
 import { isValidStatusTransition } from "@/lib/status-validators";
 import { JobApplication } from "@/types";
 import { useToast } from "@/hooks/use-toast";
@@ -206,7 +208,13 @@ export default function CandidatePipeline() {
                     {app.offer_status || 'Not Generated'}
                   </TableCell>
                   <TableCell className="text-xs font-semibold text-slate-600">
-                    {candidate.recommendation || 'Pending'}
+                    {/* ai_verdict may be a string OR an object depending on AI
+                        output; rendering a raw object throws "Objects are not
+                        valid as a React child" (white-screen class bug).
+                        verdictText normalizes via the schema. */}
+                    {verdictText(parseAiVerdict(candidate.recommendation).ok
+                      ? parseAiVerdict(candidate.recommendation).data
+                      : null) || 'Pending'}
                   </TableCell>
                   <TableCell>
                     <Select value={app.status || 'Applied'} onValueChange={(v) => updateStage(app.id, v)}>

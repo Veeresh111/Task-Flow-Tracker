@@ -279,7 +279,8 @@
 }
 
 /* --- TEXT COLOR OVERRIDES --- */
-/* Primary dark text → light */
+/* Primary dark text → light (graded; see the authoritative Universal Engine
+   at the end of this file — rules there win on equal specificity). */
 .dark .text-slate-900 {
   color: hsl(210 40% 96%) !important;
 }
@@ -726,35 +727,57 @@
 
 /* ============================================================================
    UNIVERSAL DARK MODE TEXT VISIBILITY & CONTRAST ENGINE
+   Graded scale — preserves visual hierarchy while guaranteeing WCAG AA
+   contrast on every dark surface (#94a3b8 on #0f172a ≈ 5.5:1, the dimmest
+   tier, still AA for normal text). All-gray-one-color flattening removed:
+   secondary text must remain visually secondary.
    ============================================================================ */
 
 .dark .text-slate-900,
-.dark .text-slate-800,
-.dark .text-slate-700,
-.dark .text-slate-600,
-.dark .text-slate-500,
 .dark .text-gray-900,
-.dark .text-gray-800,
-.dark .text-gray-700,
-.dark .text-gray-600,
-.dark .text-gray-500,
 .dark .text-neutral-900,
-.dark .text-neutral-800,
-.dark .text-neutral-700,
-.dark .text-neutral-600,
-.dark .text-zinc-900,
-.dark .text-zinc-800,
-.dark .text-zinc-700,
-.dark .text-zinc-600 {
-  color: #f1f5f9 !important; /* Bright high-contrast text in dark mode */
+.dark .text-zinc-900 {
+  color: #f8fafc !important;
 }
+
+.dark .text-slate-800,
+.dark .text-gray-800,
+.dark .text-neutral-800,
+.dark .text-zinc-800 {
+  color: #f1f5f9 !important;
+}
+
+.dark .text-slate-700,
+.dark .text-gray-700,
+.dark .text-neutral-700,
+.dark .text-zinc-700 {
+  color: #e2e8f0 !important;
+}
+
+.dark .text-slate-600,
+.dark .text-gray-600,
+.dark .text-neutral-600,
+.dark .text-zinc-600 {
+  color: #cbd5e1 !important;
+}
+
+.dark .text-slate-500,
+.dark .text-gray-500,
+.dark .text-neutral-500,
+.dark .text-zinc-500 {
+  color: #94a3b8 !important;
+}
+
+/* NOTE: .text-muted-foreground is intentionally NOT overridden here —
+   the semantic token (--muted-foreground) already resolves to an
+   AA-compliant light gray in dark mode. Hardcoding it would break
+   the design-token architecture. */
 
 .dark .text-slate-400,
 .dark .text-gray-400,
 .dark .text-neutral-400,
-.dark .text-zinc-400,
-.dark .text-muted-foreground {
-  color: #cbd5e1 !important; /* High contrast secondary text in dark mode */
+.dark .text-zinc-400 {
+  color: #94a3b8 !important;
 }
 
 .dark .text-slate-300,
@@ -812,7 +835,7 @@
 .dark h4,
 .dark h5,
 .dark h6 {
-  color: #ffffff !important;
+  color: #f8fafc !important; /* near-white, consistent with the graded text engine */
 }
 
 

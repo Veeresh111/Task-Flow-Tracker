@@ -144,13 +144,14 @@ export default function AssessmentCenter() {
   // ==================== BUILDER LOGIC (RECRUITMENT SIDE) ====================
   const fetchPublishedAssessments = async () => {
     try {
+      // Answer-key lockdown: full assessment rows (incl. questions) come via
+      // the HR-gated server RPC; direct REST no longer serves the questions
+      // column to any browser role.
       const { data, error } = await supabase
-        .from('assessments')
-        .select('*')
-        .order('created_at', { ascending: false });
+        .rpc('list_assessments_admin');
 
       if (error) throw error;
-      if (data) setPublishedAssessments(data);
+      if (data) setPublishedAssessments(data as any[]);
     } catch (e: any) {
       console.error("Failed to load published assessments:", e);
     }
@@ -377,47 +378,43 @@ Output STRICTLY a valid JSON array where each item has: {"question": "...", "opt
   const executeTokenHandshakeVerification = async (targetTokenString: string) => {
     try {
       setLoading(true);
-      // Separate queries to avoid ambiguous FK relationship between assessment_tokens and assessments
-      const { data: tokenRecord, error: tokenErr } = await supabase
-        .from("assessment_tokens")
-        .select("*")
-        .eq("token", targetTokenString)
-        .eq("used", false)
-        .in("status", ["Active", "InProgress"])
-        .maybeSingle();
+      // Answer-key lockdown: token handshake and assessment content resolve
+      // through the sanitized server RPC (never raw REST reads of
+      // assessment_tokens/assessments — both no longer serve sensitive
+      // columns to browser roles).
+      const { data: handshake, error: hsErr } = await supabase
+        .rpc('get_assessment_by_token', { p_token: targetTokenString });
 
-      if (tokenErr) throw tokenErr;
-      if (!tokenRecord) {
+      if (hsErr) throw hsErr;
+      if (!handshake?.success || !handshake?.assessment) {
         toast({ title: "Token Denied", description: "Invalid, expired, or already utilized assessment token.", variant: "destructive" });
         return;
       }
 
-      // Fetch assessment separately
-      let assessmentData = null;
-      if (tokenRecord.assessment_id) {
-        const { data: ass } = await supabase
-          .from("assessments")
-          .select("*")
-          .eq("id", tokenRecord.assessment_id)
-          .maybeSingle();
-        assessmentData = ass;
-      }
+      const assessmentMeta = {
+        id: handshake.assessment_id,
+        title: handshake.title,
+        duration_minutes: handshake.duration_minutes,
+        passing_score: handshake.passing_score,
+      };
+      const tokenRecord = {
+        candidate_id: handshake.candidate_id,
+        application_id: handshake.application_id,
+      };
 
-      const databaseQuestions: Question[] = assessmentData?.questions || [];
-      
-      // CRITICAL SECURITY ENHANCEMENT: Purge and redact right option fields entirely before mapping questions to candidate arrays
-      const filteredPublicQuestions: PublicQuestion[] = databaseQuestions.map((q) => ({
+      // The RPC payload is already sanitized server-side (question + options
+      // only — no correctAnswer ever crosses the wire).
+      const filteredPublicQuestions: PublicQuestion[] = (handshake.questions || []).map((q: any) => ({
         question: q.question,
         options: q.options || []
       }));
 
-      setAssessmentMeta(assessmentData);
+      setAssessmentMeta(assessmentMeta);
       setStrippedQuestions(filteredPublicQuestions);
       setValidatedSecureToken(targetTokenString);
       setResolvedCandidateId(tokenRecord.candidate_id);
       setTargetApplicationId(tokenRecord.application_id);
-      setActiveAttemptId(tokenRecord.attempt_id);
-      const parsedDuration = Math.max(2, Math.floor(Number(assessmentData?.duration_minutes) || 60));
+      const parsedDuration = Math.max(2, Math.floor(Number(assessmentMeta.duration_minutes) || 60));
       setTimeLeft(parsedDuration * 60);
 
       setCurrentStep('instructions');

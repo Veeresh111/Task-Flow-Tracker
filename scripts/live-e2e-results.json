@@ -1,0 +1,82 @@
+[
+  {
+    "chain": "HR auth login",
+    "status": "PASS",
+    "evidence": "user id 17785a71-11fc-4b0d-bb70-a2daa806264d"
+  },
+  {
+    "chain": "HR identity auth->profile",
+    "status": "PASS",
+    "evidence": "{\"id\":\"17785a71-11fc-4b0d-bb70-a2daa806264d\",\"name\":\"jack \",\"role\":\"hr\",\"status\":\"active\"}"
+  },
+  {
+    "chain": "HR payroll_cycles read (RLS staff)",
+    "status": "PASS",
+    "evidence": "4 cycles, latest {\"id\":\"e2131918-1b51-49ab-9f43-b8270ed6cb60\",\"month\":11,\"year\":2026,\"status\":\"generated\",\"total_employees\":7,\"total_gross\":75749.99}"
+  },
+  {
+    "chain": "HR payslips read for cycle",
+    "status": "PASS",
+    "evidence": "5 payslips"
+  },
+  {
+    "chain": "Employee auth login (admin-issued temp pw)",
+    "status": "PASS",
+    "evidence": "user id 52973f05-9e99-46b4-beae-08f9a99bc132"
+  },
+  {
+    "chain": "Employee identity auth->profile",
+    "status": "PASS",
+    "evidence": "{\"id\":\"52973f05-9e99-46b4-beae-08f9a99bc132\",\"name\":\"Sham\",\"role\":\"employee\"}"
+  },
+  {
+    "chain": "Employee payslip isolation (RLS)",
+    "status": "PASS",
+    "evidence": "4 own rows, 0 foreign rows visible"
+  },
+  {
+    "chain": "Employee blocked from payroll_cycles (RLS)",
+    "status": "PASS",
+    "evidence": "0 cycles visible (expect 0; released-only policy would still be checked)"
+  },
+  {
+    "chain": "Employee work_logs read (own)",
+    "status": "PASS",
+    "evidence": "5 rows"
+  },
+  {
+    "chain": "Employee leaves read (own)",
+    "status": "PASS",
+    "evidence": "0 rows"
+  },
+  {
+    "chain": "Employee notifications read",
+    "status": "PASS",
+    "evidence": "0 rows"
+  },
+  {
+    "chain": "Payroll period 8/2026",
+    "status": "PASS",
+    "evidence": "cycle already exists — generating skipped; verifying idempotent RPC responds ALREADY_PROCESSED semantics"
+  },
+  {
+    "chain": "Payroll idempotency (existing cycle)",
+    "status": "PASS",
+    "evidence": "{\"error\":\"Payroll cycle for 8/2026 already exists (EV-PAY-002)\",\"success\":false}"
+  },
+  {
+    "chain": "ANON blocked from payslips (RLS)",
+    "status": "PASS",
+    "evidence": "0 rows visible to anon"
+  },
+  {
+    "chain": "ANON blocked from unreleased payroll_cycles",
+    "status": "PASS",
+    "evidence": "0 rows visible to anon"
+  },
+  {
+    "chain": "Leave ledger balance resolvable",
+    "status": "PASS",
+    "evidence": "sample user ledger balance 0"
+  }
+]

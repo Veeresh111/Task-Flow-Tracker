@@ -26,15 +26,35 @@ serve(async (req) => {
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    const { data: token, error: tokenErr } = await supabase
-      .from("assessment_tokens")
-      .select("*")
-      .eq("token", secureToken)
-      .eq("status", "Active")
-      .eq("used", false)
-      .single();
+    // HASH-AWARE TOKEN RESOLUTION: tokens are stored as SHA-256 at rest.
+    // Match the hash first; fall back to plaintext equality only for legacy    // rows created before hashing migration (they still carry raw token).
+    const encoder = new TextEncoder();
+    const tokenBytes = await crypto.subtle.digest("SHA-256", encoder.encode(String(secureToken).trim()));
+    const tokenHash = Array.from(new Uint8Array(tokenBytes)).map(b => b.toString(16).padStart(2, "0")).join("");
 
-    if (tokenErr || !token) {
+    let token: any = null;
+    let tokenErr: any = null;
+    {
+      const hashLookup = await supabase
+        .from("assessment_tokens")
+        .select("*")
+        .eq("token_hash", tokenHash)
+        .maybeSingle();
+      if (hashLookup.error) tokenErr = hashLookup.error;
+      token = hashLookup.data ?? null;
+    }
+    if (!token) {
+      // Legacy fallback: pre-hash rows match on raw token column.
+      const legacyLookup = await supabase
+        .from("assessment_tokens")
+        .select("*")
+        .eq("token", String(secureToken).trim())
+        .maybeSingle();
+      if (legacyLookup.error) tokenErr = legacyLookup.error;
+      token = legacyLookup.data ?? null;
+    }
+
+    if (tokenErr || !token || token.status !== "Active" || token.used === true) {
       return new Response(JSON.stringify({ error: "Invalid or expired token" }), {
         status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" }
@@ -52,25 +72,95 @@ serve(async (req) => {
       });
     }
 
+    // SERVER-AUTHORITATIVE TIMER: the attempt's started_at is set by the
+    // server (start_assessment_attempt). If elapsed time exceeds the
+    // assessment duration, the submission is rejected regardless of what    // the browser countdown claimed.
+    {
+      const { data: serverAttempt } = await supabase
+        .from("assessment_attempts")
+        .select("id, started_at")
+        .eq("assessment_id", token.assessment_id)
+        .eq("candidate_id", token.candidate_id)
+        .is("completed_at", null)
+        .order("started_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (serverAttempt?.started_at) {
+        const { data: durRow } = await supabase
+          .from("assessments")
+          .select("duration_minutes")
+          .eq("id", token.assessment_id)
+          .single();
+        const durationSeconds = Math.max(60, (durRow?.duration_minutes || 30) * 60);
+        const elapsed = (Date.now() - new Date(serverAttempt.started_at).getTime()) / 1000;
+        if (elapsed > durationSeconds + 30) { // 30s network tolerance
+          return new Response(JSON.stringify({
+            error: "Submission rejected: server-side time limit exceeded (EV-EXAM-TIMER)."
+          }), {
+            status: 403,
+            headers: { ...corsHeaders, "Content-Type": "application/json" }
+          });
+        }
+      }
+    }
+
     const { data: assessment } = await supabase
       .from("assessments")
       .select("*")
       .eq("id", token.assessment_id)
       .single();
 
-    // Server-side violation aggregation from proctor_log.
-    // Client logs violations as descriptive type strings (e.g. "Tab Switch / Window Focus Lost"),
-    // NOT as the literal string "violation". Count all log entries as violations.
-    const actualViolations = Array.isArray(proctorLog) ? proctorLog.length : (typeof violationCount === 'number' ? violationCount : 0);
+    // SERVER-AUTHORITATIVE violation aggregation (P12 submission gate).
+    // The client body's violationCount/proctorLog are forgeable — a direct
+    // grader call with no proctorLog would bypass disqualification. The
+    // authoritative record is proctoring_logs: incidents are persisted
+    // server-side via the SECURITY DEFINER log_proctoring_event RPC during
+    // the exam (token-bound, rate-limited, client cannot DELETE rows).
+    // The decision below counts ONLY those rows.
+    let authoritativeAttemptId: string | null = token.attempt_id ?? null;
+    if (!authoritativeAttemptId) {
+      const { data: openAttempt } = await supabase
+        .from("assessment_attempts")
+        .select("id")
+        .eq("assessment_id", token.assessment_id)
+        .eq("candidate_id", token.candidate_id)
+        .is("completed_at", null)
+        .order("started_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      authoritativeAttemptId = openAttempt?.id ?? null;
+    }
+    let logsQuery = supabase
+      .from("proctoring_logs")
+      .select("*", { count: "exact", head: true })
+      .eq("candidate_id", token.candidate_id);
+    if (authoritativeAttemptId) {
+      logsQuery = logsQuery.eq("attempt_id", authoritativeAttemptId);
+    } else if (token.created_at) {
+      logsQuery = logsQuery.gte("created_at", token.created_at);
+    }
+    const { count: serverViolationCount } = await logsQuery;
+    // Take the MAX of the server-persisted incidents and the client-reported
+    // log. A forged client can never DEFLATE below server rows (the attack
+    // that matters); inflating only disqualifies the forger themselves. This
+    // also heals honest telemetry loss (RPC call dropped mid-exam).
+    const clientLogCount = Array.isArray(proctorLog) ? proctorLog.length : 0;
+    const actualViolations = Math.max(serverViolationCount ?? 0, clientLogCount);
     const maxViolations = assessment?.max_violations ?? 5;
 
-    // Enforce max_attempts
+    // Enforce max_attempts — counts only COMPLETED attempts. In-flight
+    // attempts (created by start_assessment_attempt at handshake) must never
+    // count, otherwise max_attempts=1 would reject every FIRST submission
+    // (live-proven outage: all 75 assessments had max_attempts=1 and zero
+    // graded attempts existed). Token single-use (`used` flag) remains the
+    // authoritative anti-retake control.
     if (assessment?.max_attempts && assessment.max_attempts > 0) {
       const { count: attemptCount } = await supabase
         .from("assessment_attempts")
         .select("*", { count: "exact", head: true })
         .eq("assessment_id", token.assessment_id)
-        .eq("candidate_id", token.candidate_id);
+        .eq("candidate_id", token.candidate_id)
+        .not("completed_at", "is", null);
       if (attemptCount && attemptCount >= assessment.max_attempts) {
         return new Response(JSON.stringify({
           error: `Maximum attempts (${assessment.max_attempts}) reached for this assessment.`,
@@ -83,10 +173,31 @@ serve(async (req) => {
     }
 
     if (actualViolations >= maxViolations) {
+      // Persist the SERVER-authoritative evidence snapshot: fetch the real
+      // proctoring_logs rows (not the client body) for the HR dashboard.
+      let evQuery = supabase
+        .from("proctoring_logs")
+        .select("violation_type, severity, timestamp, detail")
+        .eq("candidate_id", token.candidate_id)
+        .order("timestamp", { ascending: false })
+        .limit(actualViolations);
+      if (authoritativeAttemptId) {
+        evQuery = evQuery.eq("attempt_id", authoritativeAttemptId);
+      } else if (token.created_at) {
+        evQuery = evQuery.gte("created_at", token.created_at);
+      }
+      const { data: evidenceRows } = await evQuery;
+      const serverEvidence = (evidenceRows ?? []).map(r => ({
+        type: r.violation_type,
+        severity: r.severity,
+        timestamp: r.timestamp,
+        detail: r.detail
+      }));
+
       await supabase
         .from("assessment_tokens")
-        .update({ status: "Disqualified", used: true, proctor_log: proctorLog || null })
-        .eq("token", secureToken);
+        .update({ status: "Disqualified", used: true, proctor_log: serverEvidence, server_violation_count: actualViolations })
+        .eq("id", token.id);
 
       if (token.application_id) {
         await supabase
@@ -148,6 +259,7 @@ serve(async (req) => {
     }
 
     let aiEvaluatedCount = 0;
+    let aiAugmented = false;
     let aiFeedback = "";
 
     if (ambiguousAnswers.length > 0) {
@@ -221,6 +333,7 @@ where each boolean corresponds to the question in order. true = correct, false =
                     aiEvaluatedCount++;
                   }
                 }
+                aiAugmented = true;
                 break; // Success — exit retry loop
               }
             } else if (hfRes.status === 429 || hfRes.status === 503) {
@@ -246,31 +359,77 @@ where each boolean corresponds to the question in order. true = correct, false =
 
     await supabase
       .from("assessment_tokens")
-      .update({ status: "Used", used: true, proctor_log: proctorLog || null })
-      .eq("token", secureToken);
+      .update({ status: "Used", used: true, proctor_log: proctorLog || null, server_violation_count: actualViolations })
+      .eq("id", token.id);
 
-    const { data: attempt } = await supabase
+    // Authoritative attempt lifecycle: if an in-progress attempt exists
+    // (created by autosave), finalize THAT row instead of inserting a    // duplicate. Only insert when no open attempt exists.
+    const { data: openAttempt } = await supabase
       .from("assessment_attempts")
-      .insert([{
-        candidate_id: token.candidate_id,
-        assessment_id: token.assessment_id,
-        application_id: token.application_id,
-        token_id: token.id,
-        score,
-        passed,
-        total_questions: totalQuestions,
-        correct_answers: correctCount,
-        violations: actualViolations,
-        selections: candidateAnswers
-      }])
       .select("id")
-      .single();
+      .eq("assessment_id", token.assessment_id)
+      .eq("candidate_id", token.candidate_id)
+      .is("completed_at", null)
+      .order("started_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    let attempt: { id: string } | null = null;
+    if (openAttempt?.id) {
+      const { data: updated, error: updateErr } = await supabase
+        .from("assessment_attempts")
+        .update({
+          score,
+          passed,
+          total_questions: totalQuestions,
+          correct_answers: correctCount,
+          violations: actualViolations,
+          selections: candidateAnswers,
+          ai_feedback: null,
+          completed_at: new Date().toISOString()
+        })
+        .eq("id", openAttempt.id)
+        .select("id")
+        .single();
+      if (updateErr) throw updateErr;
+      attempt = updated;
+    } else {
+      const { data: inserted, error: insertErr } = await supabase
+        .from("assessment_attempts")
+        .insert([{
+          candidate_id: token.candidate_id,
+          assessment_id: token.assessment_id,
+          application_id: token.application_id,
+          token_id: token.id,
+          score,
+          passed,
+          total_questions: totalQuestions,
+          correct_answers: correctCount,
+          violations: actualViolations,
+          selections: candidateAnswers,
+          completed_at: new Date().toISOString()
+        }])
+        .select("id")
+        .single();
+      if (insertErr) throw insertErr;
+      attempt = inserted;
+    }
 
     if (attempt?.id) {
       await supabase
         .from("assessment_tokens")
         .update({ attempt_id: attempt.id })
-        .eq("token", secureToken);
+        .eq("id", token.id);
+
+      // Persist grading methodology truthfully on the attempt record.
+      await supabase
+        .from("assessment_attempts")
+        .update({
+          ai_feedback: aiAugmented
+            ? `Deterministic scoring with AI semantic validation of ${aiEvaluatedCount} ambiguous answer(s).`
+            : "Deterministic exact-match scoring."
+        })
+        .eq("id", attempt.id);
     }
 
     if (passed && token.application_id) {

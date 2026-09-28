@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import { callFreeHFModel, ModelDomainKey } from './ai-models';
+import { callFreeHFModel, ModelDomainKey, AI_UNAVAILABLE_MARKER } from './ai-models';
 
 export interface AIOptions {
   prompt: string;
@@ -20,7 +20,7 @@ export const callCorporateAI = async (opts: AIOptions): Promise<string> => {
   // In Browser Production & Development Environment:
   // Route to domain-specific free Hugging Face model with retry & caching
   try {
-    return await callFreeHFModel({
+    const aiText = await callFreeHFModel({
       modelDomain: opts.modelDomain || 'EXECUTIVE_INSIGHTS',
       prompt: opts.prompt,
       systemPrompt: opts.systemInstruction,
@@ -28,8 +28,12 @@ export const callCorporateAI = async (opts: AIOptions): Promise<string> => {
       maxTokens: opts.max_tokens ?? 2000,
       responseFormat: opts.response_format,
     });
+    return aiText;
   } catch (err) {
-    console.warn("Cloud AI router error, falling back to corporate intelligence engine:", err);
+    console.warn("Cloud AI router error — returning truthful AI_UNAVAILABLE marker:", err);
+    // Truth policy: NO fabricated output. Text callers receive an explicit
+    // offline marker; JSON callers receive a non-JSON marker so their
+    // parse fails into an honest error path.
     return generateSmartCorporateResponse(opts.prompt, opts.systemInstruction);
   }
 };
@@ -89,53 +93,11 @@ function cleanAIResponse(raw: string): string {
     .trim();
 }
 
-function generateSmartCorporateResponse(prompt: string, systemInstruction?: string): string {
-  const p = (prompt + " " + (systemInstruction || "")).toLowerCase();
-
-  // 1. Complaint & Alert Severity Triage
-  if (p.includes('severity') || p.includes('triage') || p.includes('exact one word')) {
-    if (p.includes('critical') || p.includes('crash') || p.includes('breach') || p.includes('down')) return 'CRITICAL';
-    if (p.includes('urgent') || p.includes('payroll') || p.includes('security') || p.includes('fail')) return 'HIGH';
-    if (p.includes('minor') || p.includes('typo') || p.includes('alignment') || p.includes('ui')) return 'LOW';
-    return 'MODERATE';
-  }
-
-  // 2. Daily Stand-up Work Log Polishing
-  if (p.includes('work notes') || p.includes('stand-up') || p.includes('rough notes') || p.includes('communications ai')) {
-    return `• Completed Deliverables: Processed sprint backlog items, completed unit test assertions, and refactored core backend service methods.
-• Active Workstreams: Integrating real-time WebSocket notifications and optimizing database index execution queries.
-• Blockers & Risk Assessment: Zero active blockers; technical dependencies verified across all staging environments.`;
-  }
-
-  // 3. Team & Project Agile Sprint Strategy / Roadmap
-  if (p.includes('scrum') || p.includes('sprint') || p.includes('roadmap') || p.includes('project director') || p.includes('agile')) {
-    return `EXECUTIVE AGILE ROADMAP & TASK DELEGATION MATRIX
-
-Phase 1: Architecture & Technical Foundations (Sprint 1-2)
-• Establish database migration schemas, authentication middleware, and API endpoint contracts.
-• Configure CI/CD deployment pipeline, security token handling, and automated test suites.
-
-Phase 2: Core Feature Implementation & Service Integration (Sprint 3-4)
-• Implement role-based access control (RBAC), multi-role navigation, and reactive state management.
-• Integrate real-time notification dispatches, office chat threads, and automated activity tracking.
-
-Phase 3: Quality Assurance, Security Audit & Production Launch (Sprint 5)
-• Execute end-to-end regression testing across Admin, HR, Team Lead, Employee, and Candidate roles.
-• Perform penetration security audit, optimize asset bundle size, and verify staging deployment.
-
-Recommended Team Governance:
-• Daily Standup: 15-min sync at 09:30 AM EST.
-• Task Delegation: Assign technical architecture to Lead Engineers; QA validation to Automation Suite.
-• Risk Mitigation: Maintain fallback data providers to guarantee 99.99% service availability.`;
-  }
-
-  // 4. Executive Financial & Corporate Audit Summary
-  if (p.includes('financial analyst') || p.includes('executive summary') || p.includes('payroll')) {
-    return `FWC Executive Audit Report: Operational performance parameters and resource utilization remain strictly aligned with target corporate milestones across all active departments. Monthly headcount growth and project velocity demonstrate high efficiency with optimal cost structures.
-
-Resource allocation across engineering, operations, and talent acquisition continues to meet strategic objectives. Risk parameters remain within baseline thresholds, with robust automated governance enforcing enterprise compliance.`;
-  }
-
-  // Default Structured Response
-  return `FWC Corporate AI Service: Tactical analysis completed. Workflow execution parameters, team delegations, and operational deliverables meet target enterprise standards across active modules.`;
+function generateSmartCorporateResponse(prompt: string, _systemInstruction?: string): string {
+  // TRUTH POLICY: When the AI proxy is unreachable we no longer synthesize
+  // triage verdicts, sprint plans, or executive summaries — those would be
+  // presented to users as authoritative. Callers must treat this marker as
+  // a failure (they already validate severity against an allowlist, so a
+  // marker simply degrades to their own documented default).
+  return AI_UNAVAILABLE_MARKER;
 }

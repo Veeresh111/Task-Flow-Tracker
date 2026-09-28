@@ -406,53 +406,21 @@ function cleanAIOutput(text: string): string {
 }
 
 /**
- * High-precision domain reasoning fallback engine with context intelligence.
+ * Truthful offline fallback.
+ *
+ * TRUTH POLICY: When every AI tier fails, we DO NOT fabricate scores,
+ * recommendations, or analyses. Callers that expect JSON receive the
+ * literal marker "AI_UNAVAILABLE" (their JSON.parse will fail → their
+ * catch path shows an honest failure). Text callers receive an explicit
+ * offline notice. Deterministic computation (if any) is the CALLER's
+ * responsibility and must be labeled at the UI/DB layer as rule-based.
  */
-function generateDeterministicFallback(prompt: string, systemPrompt?: string, expectsJson?: boolean): string {
-  const combined = (prompt + ' ' + (systemPrompt || '')).toLowerCase();
+export const AI_UNAVAILABLE_MARKER = 'AI_UNAVAILABLE';
 
+function generateDeterministicFallback(prompt: string, _systemPrompt?: string, expectsJson?: boolean): string {
   if (expectsJson) {
-    if (combined.includes('ats') || combined.includes('resume') || combined.includes('candidate')) {
-      return JSON.stringify({
-        score: 84,
-        name: "Verified Candidate",
-        recommendation: "Hire",
-        missing: "None",
-        skills: [
-          { name: "TypeScript", value: 92 },
-          { name: "React / Vite", value: 88 },
-          { name: "PostgreSQL / DSA", value: 85 },
-          { name: "System Architecture", value: 80 }
-        ]
-      });
-    }
-
-    if (combined.includes('standup') || combined.includes('polish') || combined.includes('notes') || combined.includes('blocker')) {
-      const hasBlocker = combined.includes('stuck') || combined.includes('block') || combined.includes('fail') || combined.includes('issue');
-      return JSON.stringify({
-        polishedText: `• Sprint Deliverables: Progressing on core modules with consistent commit cadence.\n• Active Workstreams: Executing assigned sprint tickets.\n• Blockers & Risks: ${hasBlocker ? 'Active technical blocker logged for review.' : 'Zero active blockers flagged.'}`,
-        sentiment: hasBlocker ? 'STRESS_INDICATOR' : 'POSITIVE',
-        sentimentScore: hasBlocker ? 0.35 : 0.88,
-        deliverables: ["Sprint Ticket Modules", "System Optimizations"],
-        blockers: hasBlocker ? ["Active Technical Dependency"] : []
-      });
-    }
-
-    return JSON.stringify({
-      status: "success",
-      score: 85,
-      analysis: "Corporate workflow and activity metrics evaluated successfully against enterprise benchmarks."
-    });
+    return AI_UNAVAILABLE_MARKER;
   }
 
-  // Conversational response with context awareness
-  if (combined.includes('salary') || combined.includes('pay') || combined.includes('ctc')) {
-    return "Your salary details are securely tracked in the FWC Payroll Registry. You can view your complete breakdown in the My Payroll tab or ask me for your net monthly compensation.";
-  }
-
-  if (combined.includes('task') || combined.includes('sprint') || combined.includes('work')) {
-    return "Your active sprint tasks are synchronized in real-time. Keep executing assigned deliverables to maximize your sprint completion rate and performance marks.";
-  }
-
-  return "FWC Enterprise Intelligence: Operational parameters, sprint deliverables, and system execution remain aligned with corporate standards.";
+  return `[AI Offline] The AI service is currently unavailable. No analysis was produced. Please try again later.`;
 }

@@ -9,6 +9,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Loader2, Mail, BrainCircuit, ExternalLink, ShieldCheck, Database, Search, LogOut, CheckCircle2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { callCorporateAI } from "@/lib/ai";
+import { parseAtsResult } from "@/lib/schemas/recruitment";
 
 export default function SmartInbox() {
   const { toast } = useToast();
@@ -159,16 +160,28 @@ export default function SmartInbox() {
           continue;
         }
 
+        // AI output is untrusted: validate against the ATS contract before it
+        // can reach state/render/persistence. A malformed response is logged
+        // with its schema issues and skipped — never rendered as success.
+        const check = parseAtsResult(parsed);
+        if (!check.ok) {
+          console.warn(`[SmartInbox] AI result rejected for ${msg.id}:`, check.issues);
+          continue;
+        }
+        const a = check.data;
+
         const candidateRecord = {
           id: msg.id,
           threadId: msg.threadId,
           from,
           subject,
           date,
-          candidate_name: parsed.name,
-          match_score: parsed.score,
-          missing_skills: parsed.missing,
-          verdict: parsed.verdict,
+          candidate_name: a.name ?? from,
+          match_score: a.score,
+          // String-ify missing skills: the schema allows string; if a future
+          // AI response emits an array, the schema rejects it (strict).
+          missing_skills: a.missing ?? "",
+          verdict: a.recommendation ?? "Review",
           gmail_link: `https://mail.google.com/mail/u/0/#inbox/${msg.id}`
         };
 

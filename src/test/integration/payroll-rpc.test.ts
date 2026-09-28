@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 import { supabase } from "@/lib/supabase";
 import { callPreviewPayslipBreakdown } from "@/lib/payroll";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -13,6 +13,12 @@ const runIntegration =
   (process.env as Record<string, string | undefined>).RUN_INTEGRATION_TESTS === "true"
     ? describe
     : describe.skip;
+
+beforeAll(async () => {
+  const email = process.env.TEST_ADMIN_EMAIL || "prakashmulge912@gmail.com";
+  const password = process.env.TEST_ADMIN_PASSWORD || "veeresh123";
+  await supabase.auth.signInWithPassword({ email, password });
+});
 
 runIntegration("Payroll RPC Integration — preview_payslip_breakdown", () => {
   it("returns correct breakdown for 12 LPA", async () => {
@@ -112,7 +118,6 @@ runIntegration("Payroll RPC Integration — process_monthly_payroll", () => {
     const { data, error } = await supabase.rpc("process_monthly_payroll", {
       p_month: 13,
       p_year: 2026,
-      p_generated_by: "00000000-0000-0000-0000-000000000001",
     });
     expect(error).toBeNull();
     expect(data.success).toBe(false);
@@ -123,7 +128,6 @@ runIntegration("Payroll RPC Integration — process_monthly_payroll", () => {
     const { data, error } = await supabase.rpc("process_monthly_payroll", {
       p_month: 6,
       p_year: 2026,
-      p_generated_by: "00000000-0000-0000-0000-000000000001",
     });
     if (!data || data.success === false) {
       // Either cycle doesn't exist (first call may fail if no employees)

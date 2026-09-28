@@ -30,6 +30,7 @@ dist
 # Environment Variables
 .env
 .env.*
+!.env.example
 
 # Security: development scripts with hardcoded credentials (use env vars instead)
 scripts/*.mjs
@@ -43,6 +44,14 @@ test-results/
 
 # Debug / temp files
 nav-logo-debug.png
+
+# E2E runtime token scratch files (never commit)
+.e2e_raw_token
+.e2e_token.tmp
+
+# Generated face-media for proctoring tests (large binary, regenerate via E2E_GEN_MEDIA=1)
+test-media/
+*.y4m
 flowtracker/db_inspect.cjs
 flowtracker/probe_recruitment.cjs
 recruitment_triggers_verification.mjs
