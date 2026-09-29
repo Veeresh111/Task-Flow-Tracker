@@ -169,12 +169,16 @@ Do not wrap the output in markdown block headers or backticks.`;
           parsedAIOutput = JSON.parse(cleanContent);
         }
       } catch (parseErr) {
+        // TRUTH POLICY: when the AI output is unparseable we do NOT invent
+        // promotion/attrition figures. We derive every number deterministically
+        // from the employee's REAL task-completion ratio and label the record
+        // as rule-based, so analytics never contain fabricated AI results.
         parsedAIOutput = {
-          productivity_score: Math.min(100, Math.max(60, taskCompletionRatio)),
-          ai_performance_score: Math.min(100, Math.max(60, taskCompletionRatio)),
-          promotion_probability: 85,
-          attrition_risk: 10,
-          summary: content || "Performance evaluation concluded with optimal metrics."
+          productivity_score: Math.min(100, Math.round(taskCompletionRatio)),
+          ai_performance_score: Math.min(100, Math.round(taskCompletionRatio)),
+          promotion_probability: null,
+          attrition_risk: null,
+          summary: `[Rule-Based Evaluation] Derived from real task completion ratio (${Math.round(taskCompletionRatio)}%). AI analysis was unavailable for this run.`
         };
       }
 
@@ -196,12 +200,12 @@ Do not wrap the output in markdown block headers or backticks.`;
           {
             employee_id: profile.id,
             attendance_score: attendanceScore,
-            productivity_score: Number(parsedAIOutput.productivity_score) || 80,
+            productivity_score: Number(parsedAIOutput.productivity_score) || Math.min(100, Math.round(taskCompletionRatio)),
             task_completion_score: taskCompletionRatio,
-            ai_performance_score: Number(parsedAIOutput.ai_performance_score) || taskCompletionRatio,
-            promotion_probability: Number(parsedAIOutput.promotion_probability) || 50,
-            attrition_risk: Number(parsedAIOutput.attrition_risk) || 15,
-            ai_summary: parsedAIOutput.summary || "Audit pipeline logs committed successfully.",
+            ai_performance_score: Number(parsedAIOutput.ai_performance_score) || Math.min(100, Math.round(taskCompletionRatio)),
+            promotion_probability: parsedAIOutput.promotion_probability == null ? null : Number(parsedAIOutput.promotion_probability),
+            attrition_risk: parsedAIOutput.attrition_risk == null ? null : Number(parsedAIOutput.attrition_risk),
+            ai_summary: parsedAIOutput.summary || "Performance evaluation completed.",
             updated_at: new Date().toISOString()
           }
         ])

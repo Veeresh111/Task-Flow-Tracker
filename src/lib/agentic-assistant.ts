@@ -57,6 +57,7 @@ export interface UserLiveContext {
     currentShiftStart?: string;
     shiftHoursToday: number;
     recentNotes: string[];
+    hasStaleOpenShift?: boolean;
   };
 }
 
@@ -162,7 +163,7 @@ export class AgenticAssistantEngine {
       // --- Work logs ---
       const { data: logRows } = await supabase
         .from('work_logs')
-        .select('clock_in, clock_out, notes')
+        .select('clock_in, clock_out, notes, created_at')
         .eq('user_id', userId)
         .order('created_at', { ascending: false });
 
@@ -171,17 +172,26 @@ export class AgenticAssistantEngine {
       let isClockedIn = false;
       let currentShiftStart: string | undefined = undefined;
       let shiftHoursToday = 0;
+      let hasStaleOpenShift = false;
       const recentNotes: string[] = [];
       const todayStr = new Date().toISOString().slice(0, 10);
+      const todayStartMs = new Date(todayStr + 'T00:00:00.000Z').getTime();
 
       logs.forEach(l => {
         if (l.notes && recentNotes.length < 3) recentNotes.push(l.notes);
         if (l.clock_in && !l.clock_out) {
           isClockedIn = true;
-          currentShiftStart = l.clock_in;
-          const shiftDuration = (Date.now() - new Date(l.clock_in).getTime()) / 3600000;
-          shiftHoursToday += shiftDuration;
-          totalHours += shiftDuration;
+          const start = new Date(l.clock_in).getTime();
+          if (!currentShiftStart || start > new Date(currentShiftStart).getTime()) currentShiftStart = l.clock_in;
+          const openMs = Math.max(0, Date.now() - start);
+          // SEMANTIC CORRECTNESS: "today" must only count the portion of an
+          // open shift that falls after midnight today. A stale open shift
+          // (started days ago) must NOT inflate today's hours.
+          shiftHoursToday += Math.max(0, (Date.now() - Math.max(start, todayStartMs)) / 3600000);
+          totalHours += openMs / 3600000;
+          // A shift open for more than 24h is a data-integrity problem
+          // (abandoned clock-in), not real worked time.
+          if (openMs > 24 * 3600000) hasStaleOpenShift = true;
         } else if (l.clock_in && l.clock_out) {
           const diff = (new Date(l.clock_out).getTime() - new Date(l.clock_in).getTime()) / 3600000;
           totalHours += diff;
@@ -208,6 +218,7 @@ export class AgenticAssistantEngine {
           currentShiftStart,
           shiftHoursToday: Number(shiftHoursToday.toFixed(1)),
           recentNotes,
+          hasStaleOpenShift,
         },
       };
     } catch (e) {
@@ -367,10 +378,14 @@ export class AgenticAssistantEngine {
     ) {
       const w = context.workLogs;
       const lines: string[] = ['Your shift attendance and work log status:'];
-      lines.push(`- Current state: ${w.isClockedIn ? `Clocked In (started ${new Date(w.currentShiftStart || Date.now()).toLocaleTimeString()})` : 'Currently clocked out'}`);
+      lines.push(`- Current state: ${w.isClockedIn ? `Clocked In (started ${new Date(w.currentShiftStart || Date.now()).toLocaleString('en-IN')})` : 'Currently clocked out'}`);
       lines.push(`- Hours logged today: ${w.shiftHoursToday} hrs`);
       lines.push(`- Total logged hours: ${w.totalHours} hrs`);
       lines.push(`- Reporting manager: ${context.teamLeadName}`);
+      if (w.hasStaleOpenShift) {
+        lines.push('');
+        lines.push('Data notice: an open shift with no clock-out has been running for more than 24 hours, which usually means a clock-in was left open by mistake. This shift is not counted as ordinary work time. Please close it (Clock Out) or ask HR to correct the record so your attendance data stays accurate.');
+      }
       lines.push('');
       lines.push('Remember to submit your daily standup notes before clocking out.');
       return lines.join('\n');
