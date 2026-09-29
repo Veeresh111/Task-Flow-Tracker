@@ -1,8 +1,14 @@
 /**
  * Enterprise Context-Aware Agentic AI Assistant Engine (Emo RAG)
- * 
- * Injects authentic PostgreSQL database context (payroll, tasks, work logs, profile, team lead)
- * into conversational intelligence to deliver zero-hallucination, exact responses.
+ *
+ * TRUTH POLICY (absolute):
+ *  - Every number shown comes from a real database field (payslips, profiles,
+ *    tasks, work_logs). If a value does not exist, the assistant says so —
+ *    it NEVER estimates, extrapolates, or uses placeholder defaults.
+ *  - Responses are plain text (no markdown asterisks) in a concise,
+ *    professional industry style.
+ *  - Answers are per-user and role-aware; admin/HR additionally get real
+ *    organization-level aggregates (their RLS grants them the data).
  */
 
 import { supabase } from './supabase';
@@ -14,20 +20,27 @@ export interface UserLiveContext {
   name: string;
   email: string;
   role: string;
-  department: string;
+  department: string | null;
   designation?: string;
-  performanceScore: number;
-  daysInCompany: number;
+  performanceScore: number | null;
+  daysInCompany: number | null;
   teamLeadName: string;
   payroll: {
-    baseSalary: number;
-    hra: number;
-    allowances: number;
-    deductions: number;
-    netSalary: number;
+    // Real values only. `breakdownAvailable=false` means only CTC-level data
+    // exists and component-level figures MUST NOT be shown.
+    breakdownAvailable: boolean;
+    baseSalary?: number;
+    hra?: number;
+    allowances?: number;
+    deductions?: number;
+    netSalary?: number;
+    gross?: number;
+    monthlyCtc?: number;
+    annualCtc?: number;
     status: string;
     paymentMethod: string;
     nextPayDate?: string;
+    payslipPeriod?: string;
   } | null;
   tasks: {
     total: number;
@@ -47,35 +60,38 @@ export interface UserLiveContext {
   };
 }
 
+const PAYMENT_METHOD = 'Direct Bank Transfer (NEFT/RTGS)';
+
 export class AgenticAssistantEngine {
   /**
    * Fetch complete authentic database context for an active user session.
+   * Only real fields are read; nothing is defaulted or invented.
    */
   static async fetchUserLiveContext(userId: string): Promise<UserLiveContext | null> {
     try {
-      // 1. Profile & Team Lead
       const { data: profile } = await supabase
         .from('profiles')
-        .select('*')
+        .select('id, name, email, role, department, performance_score, payroll_ctc, employment_start_date, created_at, team_lead_id')
         .eq('id', userId)
         .single();
 
       if (!profile) return null;
 
-      let teamLeadName = 'Executive Board';
+      let teamLeadName = 'not assigned';
       if (profile.team_lead_id) {
-        // B4 minimization: name resolution via the server-side directory
-        // projection instead of a direct cross-user profiles SELECT.
         const { data: dir } = await supabase
           .rpc('get_directory_profiles', { p_ids: [profile.team_lead_id] });
         const tl = dir?.[0];
-        if (tl) teamLeadName = tl.name;
+        if (tl?.name) teamLeadName = tl.name;
       }
 
-      const daysInCompany = Math.max(1, Math.floor((Date.now() - new Date(profile.created_at || Date.now()).getTime()) / 86400000));
+      const startDate = profile.employment_start_date || profile.created_at;
+      const daysInCompany = startDate
+        ? Math.max(0, Math.floor((Date.now() - new Date(startDate).getTime()) / 86400000))
+        : null;
 
-      // 2. Authentic Payslip Record from public.payslips (or salary snapshot on profile)
-      let payrollData = null;
+      // --- Payroll: real payslip first, else real profile CTC, else null ---
+      let payrollData: UserLiveContext['payroll'] = null;
       try {
         const { data: payslipRows } = await supabase
           .from('payslips')
@@ -86,49 +102,48 @@ export class AgenticAssistantEngine {
 
         if (payslipRows && payslipRows.length > 0) {
           const p = payslipRows[0];
-          const earnings = (p.earnings && typeof p.earnings === 'object') ? p.earnings : {};
+          const earnings = (p.earnings && typeof p.earnings === 'object' && !Array.isArray(p.earnings)) ? p.earnings : {};
+          const basic = Number(earnings.basic ?? earnings.BASIC ?? NaN);
+          const hra = Number(earnings.hra ?? earnings.HRA ?? NaN);
+          const special = Number(earnings.special ?? earnings.SPECIAL ?? earnings.lta ?? earnings.LTA ?? NaN);
+          const realDeductions = Number(p.pf_amount || 0) + Number(p.pt_amount || 0) + Number(p.tds_amount || 0);
           payrollData = {
-            baseSalary: Number(earnings.basic || earnings.BASIC || Math.round((p.monthly_ctc || 0) * 0.5)),
-            hra: Number(earnings.hra || earnings.HRA || Math.round((p.monthly_ctc || 0) * 0.2)),
-            allowances: Number(earnings.special || earnings.SPECIAL || earnings.lta || earnings.LTA || Math.round((p.monthly_ctc || 0) * 0.3)),
-            deductions: Number(p.pf_amount || 0) + Number(p.pt_amount || 0) + Number(p.tds_amount || 0),
+            breakdownAvailable: Number.isFinite(basic),
+            baseSalary: Number.isFinite(basic) ? basic : undefined,
+            hra: Number.isFinite(hra) ? hra : undefined,
+            allowances: Number.isFinite(special) ? special : undefined,
+            deductions: realDeductions,
             netSalary: Number(p.net || 0),
-            status: p.status === 'active' ? 'Processed / Active' : p.status,
-            paymentMethod: 'Direct Bank Transfer (NEFT/RTGS)',
-            nextPayDate: 'Last Working Day of Month'
+            gross: Number(p.gross || 0),
+            monthlyCtc: Number(p.monthly_ctc || 0),
+            annualCtc: Number(p.annual_ctc || 0),
+            status: p.status === 'active' ? 'Processed / Active' : String(p.status || 'Recorded'),
+            paymentMethod: PAYMENT_METHOD,
+            nextPayDate: 'Last working day of the month',
+            payslipPeriod: p.created_at ? new Date(p.created_at).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }) : undefined,
           };
         }
-      } catch (err) {
-        console.warn("Payslip query fallback engaged:", err);
+      } catch {
+        // payslip query failure is non-fatal; profile CTC path follows
       }
 
       if (!payrollData) {
-        // Authoritative calculation from profile salary / standard IT structure
-        const annual = Number(profile.salary || profile.annual_ctc || 780000);
-        const monthly = Math.round(annual / 12);
-        const base = Math.round(monthly * 0.5);
-        const hra = Math.round(monthly * 0.2);
-        const allowances = Math.round(monthly * 0.3);
-        const pf = Math.min(Math.round(base * 0.12), 1800);
-        const pt = 200;
-        const tds = Math.round(monthly * 0.05);
-        const totalDeductions = pf + pt + tds;
-        payrollData = {
-          baseSalary: base,
-          hra,
-          allowances,
-          deductions: totalDeductions,
-          netSalary: monthly - totalDeductions,
-          status: 'Active / On Schedule',
-          paymentMethod: 'Direct Bank Transfer (NEFT/RTGS)',
-          nextPayDate: 'Last Working Day of Month'
-        };
+        const annual = Number(profile.payroll_ctc || 0);
+        if (annual > 0) {
+          payrollData = {
+            breakdownAvailable: false, // no payslip exists — no honest component split
+            annualCtc: annual,
+            monthlyCtc: Math.round(annual / 12),
+            status: 'Payslip not generated yet',
+            paymentMethod: PAYMENT_METHOD,
+          };
+        } // else stays null → "not configured" answer
       }
 
-      // 3. Sprint Tasks
+      // --- Sprint tasks ---
       const { data: taskRows } = await supabase
         .from('tasks')
-        .select('*')
+        .select('id, title, priority, due_date, status')
         .eq('assigned_to', userId);
 
       const tasksList = taskRows || [];
@@ -144,10 +159,10 @@ export class AgenticAssistantEngine {
         .slice(0, 5)
         .map(t => ({ id: t.id, title: t.title, priority: t.priority || 'Medium', due_date: t.due_date, status: t.status }));
 
-      // 4. Work Logs & Active Clock-in State
+      // --- Work logs ---
       const { data: logRows } = await supabase
         .from('work_logs')
-        .select('*')
+        .select('clock_in, clock_out, notes')
         .eq('user_id', userId)
         .order('created_at', { ascending: false });
 
@@ -157,7 +172,6 @@ export class AgenticAssistantEngine {
       let currentShiftStart: string | undefined = undefined;
       let shiftHoursToday = 0;
       const recentNotes: string[] = [];
-
       const todayStr = new Date().toISOString().slice(0, 10);
 
       logs.forEach(l => {
@@ -171,7 +185,7 @@ export class AgenticAssistantEngine {
         } else if (l.clock_in && l.clock_out) {
           const diff = (new Date(l.clock_out).getTime() - new Date(l.clock_in).getTime()) / 3600000;
           totalHours += diff;
-          if (l.clock_in.startsWith(todayStr)) {
+          if (String(l.clock_in).startsWith(todayStr)) {
             shiftHoursToday += diff;
           }
         }
@@ -182,192 +196,238 @@ export class AgenticAssistantEngine {
         name: profile.name || 'Team Member',
         email: profile.email || '',
         role: profile.role || 'employee',
-        department: profile.department || 'Engineering',
-        designation: profile.designation || 'Software Engineer',
-        performanceScore: Number(profile.performance_score || 85),
+        department: profile.department || null,
+        performanceScore: profile.performance_score == null ? null : Number(profile.performance_score),
         daysInCompany,
         teamLeadName,
         payroll: payrollData,
-        tasks: {
-          total,
-          completed,
-          inProgress,
-          pending,
-          overdue,
-          completionRate,
-          upcoming
-        },
+        tasks: { total, completed, inProgress, pending, overdue, completionRate, upcoming },
         workLogs: {
           totalHours: Math.round(totalHours),
           isClockedIn,
           currentShiftStart,
           shiftHoursToday: Number(shiftHoursToday.toFixed(1)),
-          recentNotes
-        }
+          recentNotes,
+        },
       };
     } catch (e) {
-      console.error("Failed to gather agentic user live context:", e);
+      console.error('Failed to gather agentic user live context:', e);
+      return null;
+    }
+  }
+
+  /** Strips markdown artifacts so responses are clean plain text. */
+  private static sanitize(text: string): string {
+    return text
+      .replace(/\*\*/g, '')
+      .replace(/__(.+?)__/g, '$1')
+      .replace(/^#{1,6}\s*/gm, '')
+      .replace(/`{3}[\s\S]*?`{3}/g, m => m.replace(/`{3}/g, ''))
+      .replace(/`/g, '')
+      .trim();
+  }
+
+  private static orgPayrollIntent(q: string): boolean {
+    return /(total|company|organization|organisation|org|all employees|all staff|entire|overall).*(payroll|salary|payslip|cost|payout)|payroll.*(total|company|all employees|overview|summary)/.test(q);
+  }
+
+  /**
+   * Real organization-level payroll aggregate (admin/HR only — their RLS
+   * grants read access to all payslips; every figure below is a live SUM).
+   */
+  private static async answerOrgPayroll(role: string): Promise<string | null> {
+    if (!['admin', 'hr'].includes(role?.toLowerCase())) return null;
+    try {
+      const { data } = await supabase
+        .from('payslips')
+        .select('gross, net, status');
+      if (!data || data.length === 0) {
+        return 'No payslips have been generated in the system yet, so there is no organizational payroll total to report. Run a payroll cycle from Payroll Administration to create real records.';
+      }
+      const gross = data.reduce((s, p) => s + Number(p.gross || 0), 0);
+      const net = data.reduce((s, p) => s + Number(p.net || 0), 0);
+      return [
+        'Organization Payroll Summary (live database totals):',
+        `- Payslips issued: ${data.length}`,
+        `- Total gross payout: ${formatINR(gross)}`,
+        `- Total net payout: ${formatINR(net)}`,
+        '',
+        'Cycle-level management, generation, and audit tools are in Payroll & Finance. Figures reflect all payslip records your role is authorized to see.',
+      ].join('\n');
+    } catch {
       return null;
     }
   }
 
   /**
-   * Process a user query through the context-aware Agentic AI engine.
+   * Process a user query through the context-aware, truth-only engine.
    */
   static async answerUserQuery(userQuery: string, context: UserLiveContext | null): Promise<string> {
     const q = userQuery.trim().toLowerCase();
 
     if (!context) {
-      return "I am Emo, your FWC India Corporate Assistant. Please ensure you are logged in so I can access your secure company records.";
+      return 'I am Emo, your FWC corporate assistant. Please make sure you are logged in so I can read your secure records before answering.';
     }
 
-    // 1. SALARY & PAYROLL INTENT
-    if (
-      q.includes('salary') ||
-      q.includes('pay') ||
-      q.includes('ctc') ||
-      q.includes('compensation') ||
-      q.includes('payslip') ||
-      q.includes('earnings') ||
-      q.includes('wage')
-    ) {
-      if (!context.payroll) {
-        return `Hello ${context.name}, your payroll record is currently being calibrated by the HR & Accounts department. Please check back shortly or reach out to your HR administrator.`;
+    // ORG-level payroll (admin/HR only, real aggregates)
+    const wantsPayroll = q.includes('salary') || q.includes('pay') || q.includes('ctc') ||
+      q.includes('compensation') || q.includes('payslip') || q.includes('earnings') || q.includes('wage');
+    if (wantsPayroll && this.orgPayrollIntent(q)) {
+      const org = await this.answerOrgPayroll(context.role);
+      if (org) return org;
+    }
+
+    // 1. PERSONAL SALARY & PAYROLL — real values only
+    if (wantsPayroll) {
+      const p = context.payroll;
+      if (!p) {
+        return `Hello ${context.name}, no payroll record is configured for your profile yet, and no payslip has been generated. Please contact HR to have your compensation set up. I will not quote figures I cannot verify in the system.`;
       }
 
-      const p = context.payroll;
-      return `💼 **Your Official Payroll & Compensation Details**:
-• **Employee**: ${context.name} (${context.role.toUpperCase()} • ${context.department})
-• **Base Salary**: ${formatINR(p.baseSalary)} / month
-• **House Rent Allowance (HRA)**: ${formatINR(p.hra)}
-• **Special Allowances**: ${formatINR(p.allowances)}
-• **Deductions (PF/Tax/TDS)**: -${formatINR(p.deductions)}
-• **Net Take-Home Pay**: **${formatINR(p.netSalary)} / month**
-• **Payout Status**: ${p.status}
-• **Disbursement Channel**: ${p.paymentMethod}
-• **Next Pay Date**: ${p.nextPayDate}
+      const lines: string[] = ['Your payroll details (from official records):'];
+      lines.push(`- Employee: ${context.name}${context.department ? ` (${context.department})` : ''}`);
 
-You can download your payslip statement (CSV) anytime from the **My Payroll** portal.`;
+      if (p.breakdownAvailable) {
+        lines.push(`- Base salary: ${formatINR(p.baseSalary!)} / month`);
+        if (p.hra != null) lines.push(`- House rent allowance (HRA): ${formatINR(p.hra)}`);
+        if (p.allowances != null) lines.push(`- Special allowances: ${formatINR(p.allowances)}`);
+        lines.push(`- Deductions (PF/professional tax/TDS): ${formatINR(p.deductions ?? 0)}`);
+        if (p.gross != null) lines.push(`- Gross: ${formatINR(p.gross)}`);
+        lines.push(`- Net take-home pay: ${formatINR(p.netSalary ?? 0)} / month`);
+      } else {
+        if (p.annualCtc != null) lines.push(`- Annual CTC: ${formatINR(p.annualCtc)}`);
+        if (p.monthlyCtc != null) lines.push(`- Monthly gross: ${formatINR(p.monthlyCtc)}`);
+        lines.push('- A detailed payslip has not been generated for your profile yet, so component-level breakup (basic/HRA/allowances) and net pay are not available. These will appear here as soon as HR runs a payroll cycle for you.');
+      }
+
+      lines.push(`- Payout status: ${p.status}`);
+      lines.push(`- Disbursement channel: ${p.paymentMethod}`);
+      if (p.payslipPeriod) lines.push(`- Latest payslip period: ${p.payslipPeriod}`);
+      lines.push('');
+      lines.push('You can download your payslip statement (CSV) from the My Payroll portal.');
+      return lines.join('\n');
     }
 
-    // 2. SPRINT TASKS & WORKFLOW INTENT
+    // 2. SPRINT TASKS
     if (
-      q.includes('task') ||
-      q.includes('sprint') ||
-      q.includes('todo') ||
-      q.includes('work') ||
-      q.includes('pending') ||
-      q.includes('assigned') ||
-      q.includes('backlog')
+      q.includes('task') || q.includes('sprint') || q.includes('todo') || q.includes('work') ||
+      q.includes('pending') || q.includes('assigned') || q.includes('backlog')
     ) {
       const t = context.tasks;
-      let taskList = "";
+      const lines: string[] = ['Your current task and sprint status:'];
+      lines.push(`- Total assigned: ${t.total} tasks`);
+      lines.push(`- Completed: ${t.completed} (${t.completionRate}% completion rate)`);
+      lines.push(`- In progress: ${t.inProgress}`);
+      lines.push(`- Pending: ${t.pending}`);
+      lines.push(`- Overdue: ${t.overdue > 0 ? `${t.overdue} task(s) overdue — action needed` : 'zero overdue tasks'}`);
+
       if (t.upcoming.length > 0) {
-        taskList = "\n\n**Active Tasks in Your Queue**:\n" +
-          t.upcoming.map((item, idx) => `${idx + 1}. [${item.priority.toUpperCase()}] **${item.title}** (${item.status})`).join('\n');
+        lines.push('');
+        lines.push('Active tasks in your queue:');
+        t.upcoming.forEach((item, idx) => {
+          lines.push(`${idx + 1}. [${item.priority.toUpperCase()}] ${item.title} (${item.status})`);
+        });
       } else {
-        taskList = "\n\n🎉 You currently have zero pending sprint tasks! Excellent pipeline execution.";
+        lines.push('');
+        lines.push('You currently have zero pending sprint tasks. Excellent execution.');
       }
-
-      return `📋 **Your Current Task & Sprint Status**:
-• **Total Assigned**: ${t.total} tasks
-• **Completed**: ${t.completed} (${t.completionRate}% completion rate)
-• **In-Progress**: ${t.inProgress}
-• **Pending**: ${t.pending}
-• **Overdue**: ${t.overdue > 0 ? `⚠️ ${t.overdue} task(s) overdue` : '✅ Zero overdue tasks'}${taskList}
-
-Keep maintaining your task velocity to build positive performance marks!`;
+      return lines.join('\n');
     }
 
-    // 3. PERFORMANCE MARKS & ACTIVITY SURVEILLANCE INTENT
+    // 3. PERFORMANCE MARKS
     if (
-      q.includes('performance') ||
-      q.includes('marks') ||
-      q.includes('score') ||
-      q.includes('rating') ||
-      q.includes('surveillance') ||
-      q.includes('telemetry') ||
-      q.includes('evaluation')
+      q.includes('performance') || q.includes('marks') || q.includes('score') ||
+      q.includes('rating') || q.includes('surveillance') || q.includes('telemetry') || q.includes('evaluation')
     ) {
-      const score = context.performanceScore;
-      const ratingStars = score >= 90 ? '⭐⭐⭐⭐⭐' : score >= 80 ? '⭐⭐⭐⭐' : score >= 70 ? '⭐⭐⭐' : '⭐⭐';
-      
-      return `🎯 **Your Live Performance Marks & Activity Telemetry**:
-• **Overall Performance Score**: **${score} / 100** (${ratingStars})
-• **Task Resolution Rate**: ${context.tasks.completionRate}% (${context.tasks.completed}/${context.tasks.total} tasks)
-• **Total Logged Hours**: ${context.workLogs.totalHours} active hours
-• **Current Shift Status**: ${context.workLogs.isClockedIn ? '🟢 Active & Clocked In' : '⚪ Shift Inactive'}
-• **Evaluation Standard**: FWC Autonomous Agentic AI Surveillance
-
-**How Marks Are Fairly Calculated**:
-1. **Task Execution (35%)**: Ratio of assigned sprint tickets closed on time.
-2. **Shift Attendance (25%)**: Regular clock-in consistency and shift compliance.
-3. **Task Velocity (20%)**: Output velocity per logged hour.
-4. **Active Focus (10%)**: Engagement continuity and minimal idle lag.
-5. **Collaboration (10%)**: Standup logging and ticket responsiveness.`;
+      const lines: string[] = [];
+      if (context.performanceScore == null) {
+        lines.push('A performance score has not been recorded for your profile yet. It is computed by the performance engine from the real activity data below once sufficient history exists.');
+      } else {
+        const score = context.performanceScore;
+        lines.push(`Your live performance marks and activity telemetry:`);
+        lines.push(`- Overall performance score: ${score} / 100`);
+      }
+      lines.push(`- Task resolution rate: ${context.tasks.completionRate}% (${context.tasks.completed}/${context.tasks.total} tasks)`);
+      lines.push(`- Total logged hours: ${context.workLogs.totalHours} hrs`);
+      lines.push(`- Current shift status: ${context.workLogs.isClockedIn ? 'Active — clocked in' : 'Shift inactive (clocked out)'}`);
+      lines.push('');
+      lines.push('How marks are calculated:');
+      lines.push('1. Task Execution (35%): ratio of assigned sprint tickets closed on time.');
+      lines.push('2. Shift Attendance (25%): clock-in consistency and shift compliance.');
+      lines.push('3. Task Velocity (20%): output per logged hour.');
+      lines.push('4. Active Focus (10%): engagement continuity, minimal idle time.');
+      lines.push('5. Collaboration (10%): standup logging and ticket responsiveness.');
+      return lines.join('\n');
     }
 
-    // 4. ATTENDANCE & SHIFT CLOCK INTENT
+    // 4. ATTENDANCE & SHIFT
     if (
-      q.includes('clock') ||
-      q.includes('shift') ||
-      q.includes('attendance') ||
-      q.includes('hours') ||
-      q.includes('logged')
+      q.includes('clock') || q.includes('shift') || q.includes('attendance') ||
+      q.includes('hours') || q.includes('logged')
     ) {
       const w = context.workLogs;
-      return `⏰ **Your Shift Attendance & Work Log Status**:
-• **Current State**: ${w.isClockedIn ? `🟢 Clocked In (Started at ${new Date(w.currentShiftStart || Date.now()).toLocaleTimeString()})` : '⚪ Currently Clocked Out'}
-• **Hours Logged Today**: ${w.shiftHoursToday} hrs
-• **Total Logged Hours**: ${w.totalHours} hrs (across active shift logs)
-• **Manager / Lead**: ${context.teamLeadName}
-
-Remember to submit your AI-polished daily standup notes before clocking out for the day!`;
+      const lines: string[] = ['Your shift attendance and work log status:'];
+      lines.push(`- Current state: ${w.isClockedIn ? `Clocked In (started ${new Date(w.currentShiftStart || Date.now()).toLocaleTimeString()})` : 'Currently clocked out'}`);
+      lines.push(`- Hours logged today: ${w.shiftHoursToday} hrs`);
+      lines.push(`- Total logged hours: ${w.totalHours} hrs`);
+      lines.push(`- Reporting manager: ${context.teamLeadName}`);
+      lines.push('');
+      lines.push('Remember to submit your daily standup notes before clocking out.');
+      return lines.join('\n');
     }
 
-    // 5. MANAGER & TEAM LEAD INTENT
-    if (q.includes('manager') || q.includes('team lead') || q.includes('lead') || q.includes('boss')) {
-      return `👤 **Your Reporting Structure**:
-• **Direct Manager / Team Lead**: **${context.teamLeadName}**
-• **Your Department**: ${context.department}
-• **Your Role**: ${context.role.toUpperCase()} (${context.designation || 'Software Engineer'})
-• **Company Tenure**: ${context.daysInCompany} days at FWC India`;
+    // 5. MANAGER & REPORTING LINE
+    if (q.includes('manager') || q.includes('team lead') || q.includes('lead') || q.includes('boss') || q.includes('reporting')) {
+      const lines: string[] = ['Your reporting structure:'];
+      lines.push(`- Direct manager / team lead: ${context.teamLeadName}`);
+      if (context.department) lines.push(`- Department: ${context.department}`);
+      lines.push(`- Role: ${context.role.toUpperCase()}`);
+      if (context.daysInCompany != null) lines.push(`- Tenure: ${context.daysInCompany} days at FWC India`);
+      return lines.join('\n');
     }
 
-    // 6. GENERAL REASONING & STRATEGY (Route through 24/7 Free AI Proxy with injected context)
-    const systemPrompt = `You are Emo, an elite Corporate AI Strategist and Operations Assistant for FWC India (Bangalore HQ).
-You have secure access to the current authenticated employee's authentic enterprise database context:
-
-AUTHENTIC USER CONTEXT:
-- Name: ${context.name}
-- Role: ${context.role} (${context.department})
-- Performance Marks: ${context.performanceScore}/100
-- Salary (Net Monthly): ${context.payroll ? formatINR(context.payroll.netSalary) : 'Configured'}
-- Sprint Tasks: ${context.tasks.completed}/${context.tasks.total} completed (${context.tasks.completionRate}%)
-- Clocked-In: ${context.workLogs.isClockedIn ? 'Yes' : 'No'} (${context.workLogs.totalHours} total hours)
-- Manager: ${context.teamLeadName}
-
-RULES:
-1. Always be concise, highly professional, polite, and encouraging.
-2. When asked about specific corporate policies, tasks, salaries, or metrics, reference their real context accurately.
-3. Never disclose other employees' personal details.
-4. Format output with clean markdown bullet points for readability.`;
+    // 6. GENERAL REASONING — AI grounded strictly in real context, plain text
+    const systemPrompt = [
+      'You are Emo, a professional corporate operations assistant for FWC India (Bangalore HQ).',
+      'You answer using ONLY the authenticated user context below. If something is not in the context, say clearly that you do not have that data and suggest the relevant portal or HR.',
+      'Formatting rules: plain text only. Never use markdown asterisks, hashes, or backticks. Use short lines and hyphen bullets. Be concise, specific, and professional.',
+      '',
+      'AUTHENTIC USER CONTEXT:',
+      `- Name: ${context.name}`,
+      `- Role: ${context.role}${context.department ? ` (${context.department})` : ''}`,
+      `- Performance score: ${context.performanceScore == null ? 'not yet recorded' : context.performanceScore + '/100'}`,
+      `- Payroll: ${context.payroll ? (context.payroll.breakdownAvailable && context.payroll.netSalary != null ? `net ${formatINR(context.payroll.netSalary)}/month` : context.payroll.annualCtc != null ? `annual CTC ${formatINR(context.payroll.annualCtc)} (no payslip breakdown yet)` : 'not configured') : 'not configured'}`,
+      `- Tasks: ${context.tasks.completed}/${context.tasks.total} completed (${context.tasks.completionRate}%), ${context.tasks.overdue} overdue`,
+      `- Clock status: ${context.workLogs.isClockedIn ? 'clocked in' : 'clocked out'}; ${context.workLogs.totalHours} total hours logged`,
+      `- Manager: ${context.teamLeadName}`,
+      context.daysInCompany != null ? `- Tenure: ${context.daysInCompany} days` : '',
+      '',
+      'Never reveal other employees personal data. Never invent numbers.',
+    ].filter(Boolean).join('\n');
 
     try {
       const aiResponse = await callFreeHFModel({
         modelDomain: 'EXECUTIVE_INSIGHTS',
         prompt: userQuery,
         systemPrompt,
-        maxTokens: 500
+        maxTokens: 400,
+        useCache: false,
       });
 
-      if (aiResponse && aiResponse.trim().length > 0) {
-        return aiResponse;
+      if (aiResponse && aiResponse.trim().length > 0 && !aiResponse.includes('AI_UNAVAILABLE') && !aiResponse.includes('[AI Offline]')) {
+        return this.sanitize(aiResponse);
       }
-    } catch (e) {
-      console.warn("AI Cloud response failed, falling back to local domain handler:", e);
+    } catch {
+      // fall through to grounded summary
     }
 
-    return `Hello ${context.name}! I am Emo, your FWC Corporate Strategist. You have ${context.tasks.pending} pending tasks in ${context.department} and a strong performance rating of ${context.performanceScore}/100. How can I assist you with your deliverables or HR workflow today?`;
+    // Grounded summary fallback — real context only, never invented
+    const lines = [`Hello ${context.name}. Here is your current status:`];
+    lines.push(`- Tasks: ${context.tasks.completed}/${context.tasks.total} completed, ${context.tasks.pending} pending${context.tasks.overdue > 0 ? `, ${context.tasks.overdue} overdue` : ''}`);
+    if (context.performanceScore != null) lines.push(`- Performance score: ${context.performanceScore}/100`);
+    lines.push(`- Shift: ${context.workLogs.isClockedIn ? 'clocked in' : 'clocked out'} (${context.workLogs.totalHours} total hours)`);
+    lines.push('');
+    lines.push('Ask me about your payroll, tasks, performance, attendance, or reporting line.');
+    return lines.join('\n');
   }
 }

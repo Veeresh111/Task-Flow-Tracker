@@ -13,6 +13,7 @@ describe("Agentic AI Assistant (Emo) with Live Database RAG", () => {
     daysInCompany: 120,
     teamLeadName: "Sarah Jenkins",
     payroll: {
+      breakdownAvailable: true,
       baseSalary: 75000,
       hra: 30000,
       allowances: 7500,
