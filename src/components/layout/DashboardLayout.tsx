@@ -17,7 +17,7 @@ import { notificationService } from "@/lib/notifications";
 import { useNotifications } from "@/hooks/useNotifications";
 import { callCorporateAI } from "@/lib/ai";
 import { HFTokenModal } from "@/components/common/HFTokenModal";
-import { getHuggingFaceToken, DEFAULT_FREE_HF_TOKEN } from "@/lib/ai-models";
+import { getHuggingFaceToken, DEFAULT_FREE_HF_TOKEN, probeAIStatus } from "@/lib/ai-models";
 
 const LayoutContext = createContext(false);
 
@@ -118,6 +118,8 @@ function DashboardLayoutCore({ children, role }: { children: React.ReactNode; ro
   const [generatingReport, setGeneratingReport] = useState(false);
   const [dailyReportData, setDailyReportData] = useState<any>(null);
   const [hfModalOpen, setHfModalOpen] = useState(false);
+  const [aiOnline, setAiOnline] = useState(false);
+  const [aiProvider, setAiProvider] = useState<string | null>(null);
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -142,6 +144,21 @@ function DashboardLayoutCore({ children, role }: { children: React.ReactNode; ro
     now.setSeconds(now.getSeconds() + 1); 
     localStorage.setItem(`last_viewed_${userId}_${key}`, now.toISOString());
   };
+
+  // Real AI status probe — the header light must reflect the actual chain,
+  // not a hardcoded green dot. Re-checks when the tab regains focus.
+  useEffect(() => {
+    let cancelled = false;
+    const check = async () => {
+      const status = await probeAIStatus();
+      if (!cancelled) { setAiOnline(status.online); setAiProvider(status.provider); }
+    };
+    check();
+    const onFocus = () => { if (document.visibilityState === 'visible') check(); };
+    document.addEventListener('visibilitychange', onFocus);
+    const interval = setInterval(check, 120000);
+    return () => { cancelled = true; document.removeEventListener('visibilitychange', onFocus); clearInterval(interval); };
+  }, [userProfile?.id]);
 
   useEffect(() => {
     if (!userProfile?.id) return;
@@ -483,7 +500,10 @@ const channel = supabase.channel('global-changes')
             >
               <Sparkles className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
               <span className="hidden sm:inline">HF AI Engine</span>
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              <span
+                className={`w-2 h-2 rounded-full ${aiOnline ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`}
+                title={aiOnline ? `AI online (${aiProvider})` : 'AI offline — rule-based fallback active'}
+              />
             </button>
             <NotificationPopover userId={userProfile?.id || null} role={currentRole} />
             <button onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} className="p-2 rounded-lg text-gray-500 hover:text-gray-900 hover:bg-gray-100 dark:hover:text-gray-100 dark:hover:bg-slate-700 transition-all" title={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}>

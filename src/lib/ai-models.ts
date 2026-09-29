@@ -6,6 +6,7 @@
  */
 
 import { LRUCache } from './dsa/LRUCache';
+import { supabase } from './supabase';
 
 export interface FreeAIModelConfig {
   id: string;
@@ -196,39 +197,55 @@ export async function callFreeHFModel(opts: FreeHFInferenceOptions): Promise<str
     requestBody.response_format = { type: 'json_object' };
   }
 
-  // TIER 1: 24/7 Free High-Capacity Serverless Direct Inference (Zero Auth, Instant Response)
+  // TIER 1: Supabase Edge AI Proxy — server-side resilient chain
+  // (Pollinations → Hugging Face multi-model). Uses the user's real session;
+  // provider tokens stay server-side; immune to browser CORS/secret issues.
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+    const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+    if (supabaseUrl && supabaseAnonKey) {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 45000);
 
-    const isJson = responseFormat?.type === 'json_object';
-    const cleanPrompt = encodeURIComponent(prompt.substring(0, 3000));
-    const cleanSys = systemPrompt ? encodeURIComponent(systemPrompt.substring(0, 1000)) : '';
-    const pollinationsUrl = `https://text.pollinations.ai/${cleanPrompt}?system=${cleanSys}&model=openai${isJson ? '&json=true' : ''}`;
+        const edgeRes = await fetch(`${supabaseUrl}/functions/v1/ai-proxy`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${session.access_token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            prompt,
+            systemInstruction: systemPrompt,
+            temperature,
+            max_tokens: maxTokens
+          }),
+          signal: controller.signal
+        });
 
-    const proxyRes = await fetch(pollinationsUrl, {
-      method: 'GET',
-      signal: controller.signal
-    });
+        clearTimeout(timeoutId);
 
-    clearTimeout(timeoutId);
-
-    if (proxyRes.ok) {
-      const rawText = await proxyRes.text();
-      const cleaned = cleanAIOutput(rawText);
-      if (cleaned && cleaned.length > 5) {
-        if (useCache) aiCompletionCache.put(cacheKey, cleaned);
-        return cleaned;
+        if (edgeRes.ok) {
+          const edgeData = await edgeRes.json();
+          const cleaned = cleanAIOutput(edgeData.content || '');
+          if (cleaned) {
+            if (useCache) aiCompletionCache.put(cacheKey, cleaned);
+            return cleaned;
+          }
+        }
       }
     }
-  } catch (proxyErr) {
-    // Silently fall through to Tier 2
+  } catch {
+    // Fall through to Tier 2
   }
 
-  // TIER 2: Try Hugging Face Router & Direct Inference with Token
+  // TIER 2: Hugging Face Router & Direct Inference with Token (skipped when
+  // no token exists — an empty Bearer is a guaranteed 401, don't burn the call)
   try {
     const customToken = localStorage.getItem('hf_custom_token');
     const activeToken = customToken || token;
+    if (!activeToken) throw new Error('no-hf-token');
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 8000);
 
@@ -257,44 +274,38 @@ export async function callFreeHFModel(opts: FreeHFInferenceOptions): Promise<str
     // Silently fall through to Tier 3
   }
 
-  // TIER 3: Supabase Edge Function AI Proxy
+  // TIER 3: Keyless free inference (Pollinations, OpenAI-compatible POST).
+  // Direct browser call — no key required. The previous GET-shaped call
+  // returned 400 in browsers (URL/query encoding limits); POST is stable.
   try {
-    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-    const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-    if (supabaseUrl && supabaseAnonKey) {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
 
-      const edgeRes = await fetch(`${supabaseUrl}/functions/v1/ai-proxy`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${supabaseAnonKey}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          prompt,
-          systemInstruction: systemPrompt,
-          temperature,
-          max_tokens: maxTokens,
-          response_format: responseFormat
-        }),
-        signal: controller.signal
-      });
+    const res = await fetch('https://text.pollinations.ai/openai/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'openai',
+        messages,
+        temperature,
+        max_tokens: maxTokens
+      }),
+      signal: controller.signal
+    });
 
-      clearTimeout(timeoutId);
+    clearTimeout(timeoutId);
 
-      if (edgeRes.ok) {
-        const edgeData = await edgeRes.json();
-        const rawContent = edgeData.candidates?.[0]?.content?.parts?.[0]?.text || edgeData.choices?.[0]?.message?.content || '';
-        const cleaned = cleanAIOutput(rawContent);
-        if (cleaned) {
-          if (useCache) aiCompletionCache.put(cacheKey, cleaned);
-          return cleaned;
-        }
+    if (res.ok) {
+      const data = await res.json();
+      const rawContent = data.choices?.[0]?.message?.content || '';
+      const cleaned = cleanAIOutput(rawContent);
+      if (cleaned) {
+        if (useCache) aiCompletionCache.put(cacheKey, cleaned);
+        return cleaned;
       }
     }
-  } catch (edgeErr) {
-    // Silently fall through to Tier 4
+  } catch {
+    // Fall through to Tier 4 (honest offline fallback)
   }
 
   // TIER 4: Local Agentic Domain Reasoning Engine (Context-Aware RAG Fallback)
@@ -416,6 +427,36 @@ function cleanAIOutput(text: string): string {
  * responsibility and must be labeled at the UI/DB layer as rule-based.
  */
 export const AI_UNAVAILABLE_MARKER = 'AI_UNAVAILABLE';
+
+/**
+ * Real AI-chain status probe for UI indicators (replaces the previous
+ * hardcoded green dot — a status light must reflect reality).
+ * Pings the server-side ai-proxy with a minimal request; caches for 60s.
+ */
+export async function probeAIStatus(): Promise<{ online: boolean; provider: string | null }> {
+  try {
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+    const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+    if (!supabaseUrl || !supabaseAnonKey) return { online: false, provider: null };
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) return { online: false, provider: null };
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    const res = await fetch(`${supabaseUrl}/functions/v1/ai-proxy`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: 'ping', max_tokens: 1 }),
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+    if (!res.ok) return { online: false, provider: null };
+    const data = await res.json();
+    return { online: Boolean(data.content), provider: data.provider || 'server' };
+  } catch {
+    return { online: false, provider: null };
+  }
+}
 
 function generateDeterministicFallback(prompt: string, _systemPrompt?: string, expectsJson?: boolean): string {
   if (expectsJson) {
